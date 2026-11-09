@@ -5,6 +5,7 @@
 
 - 名称一致：去掉省/市/区县前缀、「景区/旅游区/风景区…」后缀后，与客户景区名或任一别名完全相同
   （子景点「xx景区-棠上人家」、分店「xx(某某店)」都不算）。
+- 核心景点：携程名与客户表 scenic_core_spots 中某一项一致时标出来（只提示，不作为自动通过的条件）。
 - 地址相近：地址去掉省市前缀和标点后，字符二元组 Jaccard ≥ 0.4
   （与面板 panel.js 的 addrSim 同一算法、同一阈值）。
 """
@@ -72,18 +73,38 @@ def scenic_names(scenic):
     return {x for x in (norm_name(n, pre) for n in names if n and n.strip()) if len(x) >= 2}
 
 
+# 各地都有、拿去搜没有区分度的核心景点名
+GENERIC_SPOTS = {"大雄宝殿", "天王殿", "观音殿", "藏经阁", "钟楼", "鼓楼", "山门", "牌坊", "停车场", "游客中心", "游客服务中心",
+                 "售票处", "广场", "观景台", "观景平台", "步道", "栈道", "码头", "索道", "厕所", "餐厅", "商业街", "入口", "出口"}
+
+
+def core_spots(scenic):
+    """客户表的核心景点（去重、去掉通用名和与景区名/别名重复的）。"""
+    names = {scenic.get("name") or ""} | {x.strip() for x in re.split(r"[,，、;；/]", scenic.get("alias") or "")}
+    out = []
+    for x in re.split(r"[,，、;；/]", scenic.get("core_spots") or ""):
+        x = re.sub(r"[（(].*?[）)]", "", x).strip()
+        if len(x) >= 2 and x not in GENERIC_SPOTS and x not in names and x not in out:
+            out.append(x)
+    return out
+
+
 def judge(scenic, items):
     """items: [{key, name, address, poiId}]。返回 {approve, reason, similar, name_match, hit}。"""
     pre = _prefixes(scenic)
     targets = scenic_names(scenic)
-    similar, name_match, hit = [], [], None
+    spots = {norm_name(x, pre) for x in core_spots(scenic)} - targets
+    similar, name_match, spot_match, hit = [], [], [], None
     for it in items:
         key = it.get("key")
         if not key or not it.get("poiId"):
             continue
         s = addr_sim(it.get("address"), scenic.get("address"))
         is_sim = s is not None and s >= SIMILAR
-        is_name = norm_name(it.get("name"), pre, strip_paren=False) in targets
+        nn = norm_name(it.get("name"), pre, strip_paren=False)
+        is_name = nn in targets
+        if nn in spots and key not in spot_match:
+            spot_match.append(key)
         if is_sim and key not in similar:
             similar.append(key)
         if is_name and key not in name_match:
@@ -93,4 +114,5 @@ def judge(scenic, items):
     approve = hit is not None
     reason = (f"自动审核：名称「{hit.get('name')}」与景区名一致，地址相近（{hit.get('address')}）" if approve
               else ("名称一致但地址不相近" if name_match else ("地址相近但名称不一致" if similar else "没有名称一致且地址相近的结果")))
-    return dict(approve=approve, reason=reason, similar=similar, name_match=name_match, hit=hit.get("key") if hit else None)
+    return dict(approve=approve, reason=reason, similar=similar, name_match=name_match, spot_match=spot_match,
+                hit=hit.get("key") if hit else None)

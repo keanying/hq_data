@@ -434,7 +434,7 @@ class CtripSearcher:
 class Prefs(dict):
     def __init__(self, path):
         super().__init__(reviewer="", throttle_ms=2500, sight_only=False, auto_search=True, input_selector="",
-                         panel_width=560, push_page=False, auto_address=False, auto_keep_similar=True, auto_approve=True, auto_approve_delay_ms=2000,
+                         panel_width=560, push_page=False, auto_address=False, auto_keep_similar=True, auto_approve=True, auto_approve_delay_ms=2000, search_more=True, search_core_spots=False, max_extra=8, idle_skip=True, idle_skip_sec=10,
                          filters=dict(city="", grade="", status="todo", q=""))
         self.path = path
         if path.exists():
@@ -507,6 +507,7 @@ async def setup_run(pw, args):
             if method == "detail":
                 d = db.scenic_detail(payload["scenic_id"])
                 enrich(d["candidates"], "ctrip_poi_id", "ctrip_business_id")
+                d["spots"] = match.core_spots(d["scenic"])
                 return d
             if method == "fetch_address":
                 res = await searcher.fetch_address(payload.get("url"))
@@ -651,7 +652,9 @@ async def cmd_auto(args):
                 break
             d = db.scenic_detail(s["id"])
             enrich(d["candidates"], "ctrip_poi_id", "ctrip_business_id")
-            kws = [s["name"]] + ([a.strip() for a in re.split(r"[,，、;；/]", s.get("alias") or "") if a.strip()] if args.alias else [])
+            kws = [s["name"]] + ([a.strip() for a in re.split(r"[,，、;；/]", s.get("alias") or "") if a.strip()] if not args.no_alias else [])
+            kws += match.core_spots(s) if args.spots else []
+            kws = list(dict.fromkeys(kws))[: 1 + args.max_extra]
             items, j = [], None
             try:
                 for kwd in dict.fromkeys(kws):
@@ -675,16 +678,16 @@ async def cmd_auto(args):
             keep += [dict(poiId=c["ctrip_poi_id"], name=c["ctrip_poi_name"], url=c.get("ctrip_url"), address=c.get("address"),
                           lat=c.get("lat"), lng=c.get("lng"), key=f"poi:{c['ctrip_poi_id']}")
                      for c in d["candidates"] if f"poi:{c['ctrip_poi_id']}" in j["similar"]]
-            names = []
-            if not args.dry_run:
-                seen = set()
-                for it in keep:
-                    if it["key"] in seen:
-                        continue
-                    seen.add(it["key"])
+            names, seen = [], set()
+            for it in keep:
+                if it["key"] in seen:
+                    continue
+                seen.add(it["key"])
+                names.append(it.get("name"))
+                if not args.dry_run:
                     db.set_poi(dict(scenic_id=s["id"], keep=True, poiId=it.get("poiId"), businessId=it.get("businessId"),
                                     poiName=it.get("name"), poiUri=it.get("url"), addr=it.get("address"), lat=it.get("lat"), lon=it.get("lng")))
-                    names.append(it.get("name"))
+            if not args.dry_run:
                 db.set_status(dict(scenic_id=s["id"], status="done", note=j["reason"], reviewer=args.reviewer))
             stats["approved"] += 1
             print(f"[{i}/{total}] {s['id']} {s['name']}：{'(试运行) ' if args.dry_run else ''}自动通过，保留 {len(set(k['key'] for k in keep))} 个 {'、'.join(names)}", flush=True)
@@ -741,7 +744,9 @@ def build_parser():
     p.add_argument("--city", help="城市，逗号分隔；默认 CITIES 环境变量的 7 城")
     p.add_argument("--grade", help="等级，如 5A,4A")
     p.add_argument("--q", help="景区名/ID 过滤")
-    p.add_argument("--alias", action="store_true", help="景区名没通过时，再用别名搜")
+    p.add_argument("--no-alias", action="store_true", help="景区名没通过时不再用别名搜（默认会搜）")
+    p.add_argument("--spots", action="store_true", help="别名也没通过时，再用核心景点搜（跳过大雄宝殿之类通用名）")
+    p.add_argument("--max-extra", type=int, default=8, help="每个景区除景区名外最多再搜几个词，默认 8")
     p.add_argument("--cache-only", action="store_true", help="只用已缓存的搜索结果，不开浏览器")
     p.add_argument("--dry-run", action="store_true", help="只打印判定结果，不写库")
     p.add_argument("--limit", type=int, default=0, help="最多处理多少个景区（0=不限）")
