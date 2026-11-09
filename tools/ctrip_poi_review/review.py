@@ -46,38 +46,86 @@ def _num(v):
         return None
 
 
-def _find_list(o, depth=0):
-    if not isinstance(o, dict) or depth > 4:
-        return None
-    for v in o.values():
-        if isinstance(v, list) and v and isinstance(v[0], dict) and ({"word", "name", "poiId"} & set(v[0])):
-            return v
-    for v in o.values():
-        r = _find_list(v, depth + 1)
-        if r:
-            return r
-    return None
-
-
+NAME_KEYS = ("word", "name", "poiName", "title", "displayName", "keyword", "text")
+SKIP_KEYS = {"ResponseStatus", "nlpResult", "jumpInfo", "extendInfo", "highLights", "head"}
 SIGHT_URL = re.compile(r"/sight/[^/]+/(\d+)\.html", re.I)
 
 
+def _looks_item(d):
+    return isinstance(d, dict) and any(isinstance(d.get(k), str) and d.get(k).strip() for k in NAME_KEYS)
+
+
+def _collect_lists(o, out, depth=0):
+    if depth > 6:
+        return
+    if isinstance(o, dict):
+        for k, v in o.items():
+            if k not in SKIP_KEYS:
+                _collect_lists(v, out, depth + 1)
+    elif isinstance(o, list):
+        items = [x for x in o if _looks_item(x)]
+        if items and len(items) * 2 >= len(o):
+            out.append(items)  # 认定为结果列表，不再往条目内部找
+            return
+        for v in o:
+            _collect_lists(v, out, depth + 1)
+
+
+def find_items(js):
+    """找出返回里的结果条目：优先 data[]，否则收集所有「像结果」的列表（兼容按类型分组的结构）。"""
+    if isinstance(js, dict) and isinstance(js.get("data"), list) and any(_looks_item(x) for x in js["data"]):
+        return [x for x in js["data"] if _looks_item(x)]
+    lists = []
+    _collect_lists(js, lists)
+    seen, flat = set(), []
+    for lst in lists:
+        for x in lst:
+            if id(x) not in seen:
+                seen.add(id(x))
+                flat.append(x)
+    return flat
+
+
+def parse_body(text):
+    """JSON 或 JSONP（callback({...})）。"""
+    t = (text or "").strip()
+    if not t or t[0] not in "{[" and "(" not in t[:200]:
+        return None
+    try:
+        return json.loads(t)
+    except Exception:
+        pass
+    m = re.match(r"^[\w$.\[\]'\"]+\s*\(\s*([\s\S]*)\)\s*;?\s*$", t)
+    if m:
+        try:
+            return json.loads(m.group(1))
+        except Exception:
+            return None
+    return None
+
+
 def parse_items(js):
-    """携程搜索返回：{"data":[{"id":758,"word":"上海野生动物园","type":"sight","url":".../758.html","poiId":75624,...}], "total":15}"""
-    arr = js.get("data") if isinstance(js.get("data"), list) else (_find_list(js) or [])
+    """携程搜索返回示例：{"data":[{"id":758,"word":"上海野生动物园","type":"sight","url":".../758.html","poiId":75624,...}], "total":15}"""
     out = []
-    for i, it in enumerate(arr, 1):
-        url = re.sub(r"^http://", "https://", str(it.get("url") or it.get("jumpUrl") or ""))
+    for i, it in enumerate(find_items(js), 1):
+        url = str(it.get("url") or it.get("jumpUrl") or it.get("h5Url") or it.get("pcUrl") or "")
+        url = re.sub(r"^//", "https://", re.sub(r"^http://", "https://", url))
         m = SIGHT_URL.search(url)
-        biz = m.group(1) if m else (str(it["id"]) if it.get("type") == "sight" and it.get("id") is not None else None)
-        poi = str(it["poiId"]) if it.get("poiId") not in (None, 0, "", "0") else None
+        typ = str(it.get("type") or it.get("typeName") or it.get("category") or "")
+        is_sight = typ.lower() in ("sight", "poi", "scenic", "景点") or bool(m)
+        biz = m.group(1) if m else None
+        biz = biz or next((str(it[k]) for k in ("businessId", "sightId") if it.get(k) not in (None, 0, "", "0")), None)
+        if not biz and is_sight and it.get("id") not in (None, 0, "", "0"):
+            biz = str(it["id"])
+        poi = next((str(it[k]) for k in ("poiId", "poiid", "poi_id") if it.get(k) not in (None, 0, "", "0")), None)
+        name = next((str(it[k]) for k in NAME_KEYS if isinstance(it.get(k), str) and it.get(k).strip()), "")
         out.append(dict(
-            idx=i, name=re.sub(r"<[^>]+>", "", str(it.get("word") or it.get("name") or it.get("title") or "")),
-            type=it.get("type") or "", childType=it.get("childType") or "",
+            idx=i, name=re.sub(r"<[^>]+>", "", name),
+            type=typ, childType=it.get("childType") or "",
             poiId=poi, businessId=biz, url=url,
             lat=_num(it.get("lat")), lng=_num(it.get("lon", it.get("lng"))),
             cityName=it.get("cityName") or "", districtName=it.get("districtName") or "",
-            isSight=(it.get("type") == "sight") or bool(m),
+            isSight=is_sight,
             key=f"poi:{poi}" if poi else (f"biz:{biz}" if biz else None),
             raw=it,
         ))
@@ -201,16 +249,29 @@ class CtripSearcher:
             finally:
                 self.last_at = time.monotonic()
 
+    def _score(self, js, text, kw, url):
+        """响应里必须出现完整关键词；按：命中常用接口、带结果列表、nlpResult.keyword 完全一致 加分。"""
+        if kw not in text and json.dumps(kw)[1:-1] not in text and kw not in json.dumps(js, ensure_ascii=False):
+            return -1, 0
+        n = len(find_items(js))
+        sc = (100 if any(p in url for p in self.patterns) else 0) + (50 + min(n, 20) if n else 0)
+        if isinstance(js, dict) and (js.get("nlpResult") or {}).get("keyword") == kw:
+            sc += 30
+        return sc, n
+
     async def _search(self, kw):
         page = self.page
         sel = await self._input()
         captured = []
 
         def on_resp(resp):
-            if any(p in resp.url for p in self.patterns):
+            rt = resp.request.resource_type
+            u = resp.url.lower()
+            if rt in ("xhr", "fetch") or (rt == "script" and re.search(r"callback=|jsonp|cb=", u)) or any(p in resp.url for p in self.patterns):
                 captured.append(resp)
 
         page.on("response", on_resp)
+        entries, best = [], None
         try:
             inp = page.locator(sel).first
             await inp.scroll_into_view_if_needed()
@@ -223,24 +284,30 @@ class CtripSearcher:
                 if (await inp.input_value()).strip() == kw:
                     break
                 captured.clear()  # 输入被打断（比如中途点了别处），清空重输一次
-            best, fallback, checked = None, None, set()
-            deadline = time.monotonic() + self.timeout_s
-            while time.monotonic() < deadline and best is None:
-                for resp in reversed(captured):
-                    if id(resp) in checked:
-                        continue
-                    checked.add(id(resp))
+            typed_at, grace_at, done = time.monotonic(), None, 0
+            while time.monotonic() < typed_at + self.timeout_s:
+                while done < len(captured):
+                    resp = captured[done]
+                    done += 1
                     try:
-                        js = await resp.json()
+                        text = await resp.text()
                     except Exception:
                         continue
-                    fallback = fallback or js
-                    if self._matches(js, resp.request.post_data, kw):
-                        best = js
+                    js = parse_body(text)
+                    entry = dict(url=resp.url, status=resp.status, type=resp.request.resource_type, size=len(text))
+                    if js is not None:
+                        sc, n = self._score(js, text, kw, resp.url)
+                        entry.update(score=sc, items=n)
+                        if sc >= 0 and (best is None or sc >= best[0]):
+                            best = (sc, n, js, resp.url)
+                    entry["body"] = text[:4000]
+                    entries.append(entry)
+                if best and best[1] and time.monotonic() - typed_at > 1.0:
+                    grace_at = grace_at or time.monotonic()
+                    if time.monotonic() - grace_at > 0.6:  # 拿到带结果的返回后再等一小会儿，取最新的
                         break
-                if best is None:
-                    await asyncio.sleep(0.2)
-            await page.wait_for_timeout(400)  # 等下拉框渲染完
+                await asyncio.sleep(0.15)
+            await page.wait_for_timeout(300)  # 等下拉框渲染完
             dom = await page.evaluate(JS_DOM_DROPDOWN, sel)
         finally:
             page.remove_listener("response", on_resp)
@@ -248,13 +315,30 @@ class CtripSearcher:
                 await page.evaluate("() => document.activeElement && document.activeElement.blur()")
             except Exception:
                 pass
-        js = best or fallback
+        self._dump(kw, entries, best, dom)
+        js = best[2] if best else None
         items = parse_items(js) if js else []
-        capture = "network" if best else ("network?" if fallback else "dom")
+        capture = "network" if items else ("network?" if best else "dom")
         if not items and dom:
             items = dom_to_items(dom)
-        return dict(keyword=kw, capture=capture, total=(js or {}).get("total"), items=items, dom=dom,
+        if best:
+            print(f"[hq] 「{kw}」采用 {best[3][:120]} → {len(items)} 条", flush=True)
+        else:
+            print(f"[hq] 「{kw}」没找到含关键词的接口返回（收到 {len(entries)} 个响应），只读到下拉框文字；详情见 debug/last_search.json", flush=True)
+        total = js.get("total") if isinstance(js, dict) else None
+        return dict(keyword=kw, capture=capture, total=total, items=items, dom=dom, source_url=best[3] if best else None,
                     searched_at=time.strftime("%Y-%m-%d %H:%M:%S"))
+
+    def _dump(self, kw, entries, best, dom):
+        """把这次搜索收到的响应写到 debug/last_search.json，方便排查。"""
+        try:
+            d = HERE / "debug"
+            d.mkdir(exist_ok=True)
+            (d / "last_search.json").write_text(json.dumps(dict(
+                keyword=kw, page_url=self.page.url, chosen=best[3] if best else None, dom=dom,
+                responses=sorted(entries, key=lambda e: -e.get("score", -9))), ensure_ascii=False, indent=1), encoding="utf-8")
+        except Exception as e:
+            print(f"[hq] 写 debug 文件失败：{e}", flush=True)
 
     async def _type(self, inp, kw):
         page = self.page
@@ -266,18 +350,6 @@ class CtripSearcher:
                 await inp.focus()
             await page.keyboard.type(ch)
             await asyncio.sleep(random.uniform(0.08, 0.22))
-
-    @staticmethod
-    def _matches(js, post_data, kw):
-        nlp = (js.get("nlpResult") or {}).get("keyword") if isinstance(js, dict) else None
-        if nlp is not None:
-            return nlp == kw
-        if post_data:
-            try:
-                return kw in json.dumps(json.loads(post_data), ensure_ascii=False)
-            except Exception:
-                return kw in post_data
-        return False
 
 
 # ---------------------------------------------------------------- 偏好设置
@@ -316,7 +388,8 @@ def check_db():
 async def launch(pw, args):
     profile = Path(args.profile).resolve()
     profile.mkdir(parents=True, exist_ok=True)
-    kw = dict(headless=args.headless, locale="zh-CN", timezone_id="Asia/Shanghai")
+    kw = dict(headless=args.headless, locale="zh-CN", timezone_id="Asia/Shanghai",
+              chromium_sandbox=sys.platform in ("win32", "darwin"))  # 去掉 Windows/Mac 上的 --no-sandbox 提示条
     if args.channel:
         kw["channel"] = args.channel
     if args.executable_path:
@@ -366,10 +439,11 @@ async def setup_run(pw, args):
                 kwd = payload["keyword"].strip()
                 if not payload.get("force"):
                     hit = db.cache_get(kwd)
-                    if hit and hit.get("result"):
+                    if hit and hit.get("result") and hit["result"].get("capture") != "dom":
                         return dict(hit["result"], cached=True, searched_at=hit["searched_at"])
                 res = await searcher.search(kwd)
-                db.cache_put(kwd, res)
+                if res["capture"] != "dom":  # 只读到下拉文字（没有ID）的不缓存，下次重新搜
+                    db.cache_put(kwd, res)
                 return res
             if method == "export":
                 out = HERE / f"scenic_ctrip_poi_mapping_{time.strftime('%Y%m%d_%H%M%S')}.csv"
@@ -416,11 +490,14 @@ async def cmd_prefetch(args):
                         break
                     kws = [s["name"]] + ([a.strip() for a in re.split(r"[,，、;；/]", s.get("alias") or "") if a.strip()] if args.alias else [])
                     for kwd in dict.fromkeys(kws):
-                        if not args.refresh and db.cache_get(kwd):
+                        hit = None if args.refresh else db.cache_get(kwd)
+                        if hit and (hit.get("result") or {}).get("capture") != "dom":
                             skipped += 1
                             continue
                         try:
                             res = await searcher.search(kwd)
+                            if res["capture"] == "dom":
+                                raise RuntimeError("没读到接口返回（只有下拉框文字），见 debug/last_search.json")
                             db.cache_put(kwd, res)
                             done += 1
                             streak = 0

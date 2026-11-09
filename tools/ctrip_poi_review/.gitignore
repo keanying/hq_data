@@ -1,3 +1,4 @@
 .pw-profile/
 scenic_ctrip_poi_mapping*.csv
 __pycache__/
+debug/
