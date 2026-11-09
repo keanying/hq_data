@@ -2,7 +2,7 @@
 
 用法：
     python import_candidates.py scenic_ctrip_candidate.csv
-连接配置与 server.py 相同（MYSQL_HOST/PORT/USER/PASSWORD/DB，CANDIDATE_TABLE）。
+连接配置与 review.py 相同（MYSQL_HOST/PORT/USER/PASSWORD/DB，CANDIDATE_TABLE）。
 会先清空候选表再导入（核对结果在另一张表，不受影响）。
 """
 import csv
@@ -10,12 +10,12 @@ import sys
 
 import pymysql
 
-import server
+import db
 
 COLS = ["scenic_id", "scenic_name", "city_name", "relation_type", "confidence", "match_evidence", "triage_result",
         "ctrip_poi_id", "ctrip_business_id", "ctrip_poi_name", "ctrip_district_name", "dist_to_anchor_m",
         "image_qty", "ctrip_url", "also_in_scenic_ids"]
-T = server.CANDIDATE_TABLE
+T = db.CANDIDATE_TABLE
 DDL = f"""CREATE TABLE IF NOT EXISTS {T} (
   scenic_id VARCHAR(64) NOT NULL, scenic_name VARCHAR(255), city_name VARCHAR(64),
   relation_type VARCHAR(64), confidence VARCHAR(8), match_evidence VARCHAR(255), triage_result VARCHAR(16),
@@ -33,7 +33,7 @@ def main(path):
     if missing:
         sys.exit(f"CSV 缺少列: {missing}")
     data = [[(r[c] if r[c] != "" else None) for c in COLS] for r in rows]
-    conn = pymysql.connect(**{**server.DB, "autocommit": False})
+    conn = pymysql.connect(**{**db.DB, "autocommit": False})
     with conn.cursor() as cur:
         cur.execute(DDL)
         cur.execute(f"DELETE FROM {T}")

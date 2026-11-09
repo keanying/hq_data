@@ -1,4 +1,4 @@
--- 携程 POI 人工核对工具用到的表（server.py 启动时会自动 CREATE IF NOT EXISTS，这里供 DBA 预建/审阅）
+-- 携程 POI 人工核对工具用到的表（review.py 启动时会自动 CREATE IF NOT EXISTS，这里供 DBA 预建/审阅）
 -- 客户景区表（只读）：pft_ai_dim_prd_scenic_base_yr_f，字段映射见 README
 
 CREATE TABLE IF NOT EXISTS scenic_ctrip_poi_review (
@@ -13,7 +13,7 @@ CREATE TABLE IF NOT EXISTS scenic_ctrip_poi_review (
   ctrip_district_name VARCHAR(64) NULL,
   ctrip_lat DOUBLE NULL, ctrip_lng DOUBLE NULL,
   ctrip_url VARCHAR(512) NULL,
-  source VARCHAR(16) NOT NULL COMMENT 'search=携程实时搜索 candidate=离线候选',
+  source VARCHAR(16) NOT NULL COMMENT 'search=携程页面搜索 dom=下拉DOM candidate=离线候选',
   keyword VARCHAR(255) NULL COMMENT '搜索关键词',
   decision VARCHAR(8) NOT NULL COMMENT 'keep=保留 drop=不留',
   raw_json TEXT NULL COMMENT '携程返回的原始条目',
@@ -31,6 +31,14 @@ CREATE TABLE IF NOT EXISTS scenic_ctrip_review_status (
   reviewer VARCHAR(64) NULL,
   updated_at DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
 ) DEFAULT CHARSET=utf8mb4 COMMENT='景区核对进度';
+
+CREATE TABLE IF NOT EXISTS scenic_ctrip_search_cache (
+  keyword VARCHAR(255) PRIMARY KEY COMMENT '搜索关键词',
+  item_qty INT NULL,
+  capture VARCHAR(16) NULL COMMENT 'network=页面自身请求的返回 dom=下拉DOM',
+  result_json MEDIUMTEXT NULL COMMENT '解析后的结果列表',
+  searched_at DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
+) DEFAULT CHARSET=utf8mb4 COMMENT='携程页面搜索结果缓存（预抓取/实时搜索都会写）';
 
 -- 可选：离线规则匹配的候选，由 import_candidates.py 导入
 CREATE TABLE IF NOT EXISTS scenic_ctrip_candidate (
