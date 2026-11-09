@@ -677,7 +677,7 @@ async def cmd_auto(args):
                 if args.verbose:
                     print(f"[{i}/{total}] {s['id']} {s['name']}：留给人工（{j['reason'] if j else '无缓存'}）", flush=True)
                 continue
-            want = set(j["similar"]) | set(j.get("name_keep") or [])
+            want = (set(j["similar"]) | set(j.get("name_keep") or [])) - set(j.get("ambiguous") or []) - set(j.get("elsewhere") or [])
             keep = [it for it in items if it.get("key") in want]
             keep += [dict(poiId=c["ctrip_poi_id"], name=c["ctrip_poi_name"], url=c.get("ctrip_url"), address=c.get("address"),
                           lat=c.get("lat"), lng=c.get("lng"), key=f"poi:{c['ctrip_poi_id']}")

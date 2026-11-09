@@ -1,7 +1,8 @@
 """名称 / 地址比对与自动审核判定（面板和 `review.py auto` 共用）。
 
 规则：至少有一条携程 POI「名称一致」，且「地址相近」或「同省市区」→ 自动审核通过；
-保留：所有「地址相近」的 POI，以及与景区同省市区的「名称一致」POI 和「景区名-xx」子景点（name_keep）。
+保留：所有「地址相近」的 POI，以及与景区同省市区的「名称一致」POI 和子景点（name_keep）；
+多个同名 POI 又不在一处时拿不准，不自动保留、不自动通过，留给人。
 
 - 名称一致：去掉省/市/区县前缀、「景区/旅游区/风景区…」后缀后，与客户景区名或任一别名完全相同
   （子景点「xx景区-棠上人家」、分店「xx(某某店)」都不算）。
@@ -158,19 +159,37 @@ def same_area(it, scenic, near=False):
     return city_ok and dist_ok
 
 
+SAME_PLACE_M = 2000  # 多个同名 POI 之间相距 2km 内视为同一处
+
+
+def _same_place(a, b):
+    """两条携程结果是不是同一处：地址相近、门牌相同，或坐标 2km 内。"""
+    da, db = door(a.get("address")), door(b.get("address"))
+    if da and da == db:
+        return True
+    s = addr_sim(a.get("address"), b.get("address"))
+    if s is not None and s >= SIMILAR:
+        return True
+    dm = distance_m(a.get("lat"), a.get("lng"), b.get("lat"), b.get("lng"))
+    return dm is not None and dm <= SAME_PLACE_M
+
+
 def judge(scenic, items):
-    """items: [{key, name, address, poiId, city, district}]。
-    返回 {approve, reason, similar, name_match, sub_match, spot_match, name_keep, hit}：
-    - name_match：名称一致；sub_match：「景区名-xx / 景区名·xx」子景点（前半段与景区名/别名一致）
-    - name_keep：名称一致或子景点，且同省市区 → 自动保留
+    """items: [{key, name, address, poiId, city, district, lat, lng}]。
+    返回 {approve, reason, similar, name_match, sub_match, spot_match, name_keep, door_match, ambiguous, hit}：
+    - name_match：名称一致
+    - sub_match：子景点——「景区名-xx / 景区名·xx」，或名字里直接带景区名/别名（如「颐和园博物馆」）
     - door_match：路名+门牌号一致（算作地址相近）
-    - approve：至少一条名称一致，且（地址相近/门牌一致 或 同省市区；区县判断不了时同城且 3km 内也算）"""
+    - name_keep：名称一致或子景点，且同省市区 → 自动保留
+    - ambiguous：名称一致的有多个、彼此不在一处，又没有能定下来的强证据 → 拿不准，不自动保留、不自动通过，留给人
+    - elsewhere：已有门牌一致/地址相近的那一个，其余只是同区的同名 POI → 不保留，仅提示
+    - approve：有名称一致且（地址相近/门牌一致 或 同省市区）的，且不存在 ambiguous"""
     pre = _prefixes(scenic)
     targets = scenic_names(scenic)
     spots = {norm_name(x, pre) for x in core_spots(scenic)} - targets
     similar, name_match, sub_match, spot_match, name_keep, door_match = [], [], [], [], [], []
+    qualified = []  # 名称一致且（地址相近/门牌一致/同省市区）的
     sdoor = door(scenic.get("address"))
-    hit, hit_how = None, ""
     for it in items:
         key = it.get("key")
         if not key or not it.get("poiId"):
@@ -185,7 +204,9 @@ def judge(scenic, items):
         nn = norm_name(name, pre, strip_paren=False)
         is_name = nn in targets
         parts = re.split(r"\s*[-·•—–]\s*", name, maxsplit=1)
-        is_sub = not is_name and len(parts) == 2 and len(parts[1]) >= 1 and norm_name(parts[0], pre) in targets
+        is_sub = not is_name and (
+            (len(parts) == 2 and len(parts[1]) >= 1 and norm_name(parts[0], pre) in targets)
+            or any(len(t) >= 2 and t in nn for t in targets))
         area = is_door or same_area(it, scenic, near=dm is not None and dm <= NEAR_M)  # 门牌一致自然同一处
         if nn in spots and key not in spot_match:
             spot_match.append(key)
@@ -197,12 +218,30 @@ def judge(scenic, items):
             sub_match.append(key)
         if (is_name or is_sub) and area and key not in name_keep:  # 同一景区（本身或子景点）且同省市区 → 保留
             name_keep.append(key)
-        if is_name and (is_sim or area) and (hit is None or (is_sim and hit_how != "地址相近")):
-            hit, hit_how = it, ("门牌一致" if is_door else "地址相近" if is_sim else "同省市区")
+        if is_name and (is_sim or area) and all(q[0].get("key") != key for q in qualified):
+            qualified.append((it, "门牌一致" if is_door else "地址相近" if is_sim else "同省市区"))
+    # 多个同名的：
+    #  - 有「门牌一致/地址相近」的强证据、且这些强证据彼此在一处 → 以它们为准；只是同区的其他同名 POI 不保留，标 elsewhere
+    #  - 强证据彼此不在一处，或者只有「同省市区」的弱证据又不在一处 → 拿不准（ambiguous），不自动保留、不自动通过，交给人
+    ambiguous, elsewhere = [], []
+    strong = [q for q in qualified if q[1] != "同省市区"]
+    base = strong or qualified
+    if len({str(q[0].get("poiId")) for q in base}) >= 2 and not all(_same_place(base[0][0], q[0]) for q in base[1:]):
+        ambiguous = [q[0]["key"] for q in qualified]
+    elif strong:
+        elsewhere = [q[0]["key"] for q in qualified if q[1] == "同省市区" and not _same_place(strong[0][0], q[0])]
+    drop = set(ambiguous) | set(elsewhere)
+    name_keep = [k for k in name_keep if k not in drop]
+    hit, hit_how = None, ""
+    if qualified and not ambiguous:
+        order = {"门牌一致": 0, "地址相近": 1, "同省市区": 2}
+        hit, hit_how = min(qualified, key=lambda q: order[q[1]])
     approve = hit is not None
     if approve:
         reason = (f"自动审核：名称「{hit.get('name')}」与景区名一致，{hit_how}"
                   f"（{hit.get('address') or hit.get('district') or hit.get('city') or ''}）")
+    elif ambiguous:
+        reason = f"有 {len(ambiguous)} 个同名 POI 且不在一处，拿不准，请人工选择"
     elif name_match:
         reason = "名称一致但不在同一区县、地址也不相近"
     elif similar:
@@ -210,4 +249,5 @@ def judge(scenic, items):
     else:
         reason = "没有名称一致的结果"
     return dict(approve=approve, reason=reason, similar=similar, name_match=name_match, sub_match=sub_match,
-                spot_match=spot_match, name_keep=name_keep, door_match=door_match, hit=hit.get("key") if hit else None)
+                spot_match=spot_match, name_keep=name_keep, door_match=door_match, ambiguous=ambiguous, elsewhere=elsewhere,
+                hit=hit.get("key") if hit else None)

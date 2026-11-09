@@ -296,7 +296,7 @@
     // 多个关键词的搜索结果合并去重；每条记下是哪个词搜到的。判定取并集（任一词能通过即通过）
     function mergeSearches() {
       const items = [], seen = new Set();
-      const J = { approve: false, reason: '', similar: [], name_match: [], sub_match: [], spot_match: [], name_keep: [], door_match: [] };
+      const J = { approve: false, reason: '', similar: [], name_match: [], sub_match: [], spot_match: [], name_keep: [], door_match: [], ambiguous: [], elsewhere: [] };
       for (const { kw, res } of S.searches) {
         for (const it of res.items || []) {
           const k = it.key || 'n:' + it.name;
@@ -307,9 +307,15 @@
         if (j) {
           if (j.approve && !J.approve) { J.approve = true; J.reason = j.reason; }
           if (!J.approve) J.reason = j.reason;
-          for (const f of ['similar', 'name_match', 'sub_match', 'spot_match', 'name_keep', 'door_match']) for (const k of j[f] || []) if (!J[f].includes(k)) J[f].push(k);
+          for (const f of ['similar', 'name_match', 'sub_match', 'spot_match', 'name_keep', 'door_match', 'ambiguous', 'elsewhere']) for (const k of j[f] || []) if (!J[f].includes(k)) J[f].push(k);
         }
       }
+      if (J.ambiguous.length) {  // 多个关键词合起来也拿不准：不自动通过，同名的交给人
+        J.approve = false;
+        J.reason = `有 ${J.ambiguous.length} 个同名 POI 且不在一处，拿不准，请人工选择`;
+        J.name_keep = J.name_keep.filter((k) => !J.ambiguous.includes(k));
+      }
+      J.name_keep = J.name_keep.filter((k) => !J.elsewhere.includes(k));
       S.merged = { items, judge: S.searches.some((x) => x.res.judge) ? J : null };
     }
     // 依次搜：景区名 → 别名 / 城市+名称 → 核心景点；能自动通过就停（每个词也有缓存）
@@ -415,8 +421,8 @@
       const s = S.detail.scenic, sid = s.id;
       const items = [...shown().sights, ...S.detail.candidates.map((c) => Object.assign(candAsItem(c), { address: c.address }))];
       const MJ = (S.merged && S.merged.judge) || {};
-      const nameKeep = new Set(MJ.name_keep || []), pySim = new Set(MJ.similar || []);
-      const todo = items.filter((it) => it.key && S.decisions[it.key] !== 'keep' && !S.manualOff.has(it.key)
+      const nameKeep = new Set(MJ.name_keep || []), pySim = new Set(MJ.similar || []), amb = new Set([...(MJ.ambiguous || []), ...(MJ.elsewhere || [])]);
+      const todo = items.filter((it) => it.key && S.decisions[it.key] !== 'keep' && !S.manualOff.has(it.key) && !amb.has(it.key)
         && ((it.address && (addrSim(it.address, s.address) ?? 0) >= SIMILAR) || pySim.has(it.key) || nameKeep.has(it.key)));
       const seen = new Set();
       let n = 0;
@@ -572,7 +578,7 @@
       for (const c of S.detail.candidates) { candByPoi[c.ctrip_poi_id] = c; if (c.ctrip_business_id) candByBiz[c.ctrip_business_id] = c; }
       const dec = (key) => S.decisions[key] || '';
       const MJ = (S.merged && S.merged.judge) || {};
-      const nameMatch = new Set(MJ.name_match || []), spotMatch = new Set(MJ.spot_match || []), subMatch = new Set(MJ.sub_match || []);
+      const nameMatch = new Set(MJ.name_match || []), spotMatch = new Set(MJ.spot_match || []), subMatch = new Set(MJ.sub_match || []), amb = new Set(MJ.ambiguous || []), elsew = new Set(MJ.elsewhere || []);
       const { sights, others, list } = shown();
       const capLabel = S.res ? ({ network: '下拉框结果', 'network?': '接口有返回但没解析出条目', dom: '只读到下拉框文字（没有ID，不能保存）' }[S.res.capture] || S.res.capture) : '';
       const capHint = S.res && S.res.capture !== 'network' && !S.loading
@@ -586,7 +592,7 @@
           <div class="idx">${r.n}</div>
           <div>
             <div class="l1">${r.url ? `<a href="${esc(r.url)}" target="_blank" rel="noopener" title="在新标签页打开携程页面">${esc(r.name)}</a>` : `<b>${esc(r.name)}</b>`}
-              ${/^shop/i.test(r.type || '') ? '' : `<span class="tag ${poi ? 'sight' : ''}">${esc(r.type || '?')}</span>`}${S.autoKept && S.autoKept.has(r.key) && dec(r.key) === 'keep' ? '<span class="tag good" title="地址相近，或名称一致/子景点且同省市区，自动保留">自动</span>' : ''}${nameMatch.has(r.key) ? '<span class="tag good" title="去掉省市区前缀和景区等后缀后与景区名/别名一致">名称一致</span>' : ''}${spotMatch.has(r.key) ? '<span class="tag sight" title="与客户表核心景点一致">核心景点</span>' : ''}${subMatch.has(r.key) ? '<span class="tag good" title="「景区名-xx」形式的子景点">子景点</span>' : ''}${r.level ? `<span class="tag ${r.level === '5A' ? 'g5' : ''}">${esc(r.level)}</span>` : ''}${candTag(c)}</div>
+              ${/^shop/i.test(r.type || '') ? '' : `<span class="tag ${poi ? 'sight' : ''}">${esc(r.type || '?')}</span>`}${S.autoKept && S.autoKept.has(r.key) && dec(r.key) === 'keep' ? '<span class="tag good" title="地址相近，或名称一致/子景点且同省市区，自动保留">自动</span>' : ''}${nameMatch.has(r.key) ? '<span class="tag good" title="去掉省市区前缀和景区等后缀后与景区名/别名一致">名称一致</span>' : ''}${spotMatch.has(r.key) ? '<span class="tag sight" title="与客户表核心景点一致">核心景点</span>' : ''}${subMatch.has(r.key) ? '<span class="tag good" title="「景区名-xx」或名字里带景区名的子景点">子景点</span>' : ''}${amb.has(r.key) ? '<span class="tag warn" title="有多个同名 POI 且不在一处，请人工确认">同名多个</span>' : ''}${elsew.has(r.key) ? '<span class="tag warn" title="同名，但不在客户地址那一处，未自动保留">同名·别处</span>' : ''}${r.level ? `<span class="tag ${r.level === '5A' ? 'g5' : ''}">${esc(r.level)}</span>` : ''}${candTag(c)}</div>
             ${poi ? addrLine(r, s, `data-fetch="${r.n}"`) : ''}
             <div class="meta">
               ${[r.cityName, r.districtName].filter(Boolean).length ? `<span>${esc([...new Set([r.cityName, r.districtName].filter(Boolean))].join(' / '))}</span>` : ''}
@@ -617,7 +623,7 @@
           <div class="idx c">${String.fromCharCode(97 + (i % 26))}</div>
           <div>
             <div class="l1">${c.ctrip_url ? `<a href="${esc(c.ctrip_url)}" target="_blank" rel="noopener">${esc(c.ctrip_poi_name)}</a>` : `<b>${esc(c.ctrip_poi_name)}</b>`}
-              ${c.level ? `<span class="tag ${c.level === '5A' ? 'g5' : ''}">${esc(c.level)}</span>` : ''}${S.autoKept && S.autoKept.has(key) && dec(key) === 'keep' ? '<span class="tag good" title="地址相近，或名称一致/子景点且同省市区，自动保留">自动</span>' : ''}${nameMatch.has(key) ? '<span class="tag good">名称一致</span>' : ''}${spotMatch.has(key) ? '<span class="tag sight">核心景点</span>' : ''}${subMatch.has(key) ? '<span class="tag good">子景点</span>' : ''}<span class="tag">${esc(c.relation_type)}</span><span class="tag">${esc(c.confidence)}</span>
+              ${c.level ? `<span class="tag ${c.level === '5A' ? 'g5' : ''}">${esc(c.level)}</span>` : ''}${S.autoKept && S.autoKept.has(key) && dec(key) === 'keep' ? '<span class="tag good" title="地址相近，或名称一致/子景点且同省市区，自动保留">自动</span>' : ''}${nameMatch.has(key) ? '<span class="tag good">名称一致</span>' : ''}${spotMatch.has(key) ? '<span class="tag sight">核心景点</span>' : ''}${subMatch.has(key) ? '<span class="tag good">子景点</span>' : ''}${amb.has(key) ? '<span class="tag warn">同名多个</span>' : ''}${elsew.has(key) ? '<span class="tag warn">同名·别处</span>' : ''}<span class="tag">${esc(c.relation_type)}</span><span class="tag">${esc(c.confidence)}</span>
               ${c.triage_result ? `<span class="tag ${c.triage_result === '自动删除' ? 'warn' : c.triage_result === '自动保留' ? 'good' : ''}">${esc(c.triage_result)}</span>` : ''}
               ${searched.has(String(c.ctrip_poi_id)) ? '<span class="tag sight">搜索结果中也有</span>' : ''}</div>
             ${addrLine(c, s, `data-cfetch="${i}"`)}
