@@ -424,7 +424,7 @@ class CtripSearcher:
 class Prefs(dict):
     def __init__(self, path):
         super().__init__(reviewer="", throttle_ms=2500, sight_only=False, auto_search=True, input_selector="",
-                         panel_width=560, push_page=False, auto_address=False,
+                         panel_width=560, push_page=False, auto_address=False, auto_keep_similar=True,
                          filters=dict(city="", grade="", status="todo", q=""))
         self.path = path
         if path.exists():

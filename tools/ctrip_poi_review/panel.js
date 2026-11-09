@@ -140,6 +140,7 @@
     <label>两次搜索最小间隔（毫秒，实际会随机加 0–40%）</label><input type="number" id="s-throttle" min="500" step="100">
     <label><input type="checkbox" id="s-auto"> 打开景区时自动搜索景区名</label>
     <label><input type="checkbox" id="s-push"> 打开面板时把携程页面往左挤（页面较窄时可能出现横向滚动条）</label>
+    <label><input type="checkbox" id="s-autokeep"> 「地址相近」的结果自动保留（未审核的景区；手动取消过的不再自动选）</label>
     <label><input type="checkbox" id="s-autoaddr"> 搜索后自动补全缺失地址（会逐个打开详情页，较慢）</label>
     <label>携程搜索框</label>
     <div style="display:flex;gap:6px;align-items:center"><button id="s-locate">定位搜索框</button><span class="muted" id="s-sel"></span></div>
@@ -212,6 +213,7 @@
       S.detail = await call('detail', { scenic_id: sid });
       syncKept();
       S.res = null; S.keyword = ''; S.rawOpen = {}; S.domOpen = false; S.othersOpen = false;
+      S.manualOff = new Set(); S.autoKept = new Set();
       $('#note').value = (S.detail.status && S.detail.status.note) || '';
       render();
       if (prefs.auto_search) await doSearch(S.detail.scenic.name, false);
@@ -259,13 +261,22 @@
       } catch (e) {
         S.res = null; toast(e.message, true);
       } finally { S.loading = false; render(); }
-      if (prefs.auto_address && S.res && S.detail && S.detail.scenic.id === sid) await fillAddresses();
+      if (!S.res || !S.detail || S.detail.scenic.id !== sid) return;
+      await autoSelect();
+      if (prefs.auto_address) await fillAddresses();
     }
 
     // ---------------------------------------------------------------- decisions
     function syncKept() {
       S.decisions = {};
       for (const k of S.detail.kept || []) S.decisions['poi:' + k.poiId] = 'keep';
+    }
+    async function savePoi(item, keep) {
+      const r = await call('poi', { scenic_id: S.detail.scenic.id, keep, poiId: item.poiId || null, businessId: item.businessId || null,
+        poiName: item.name, poiUri: item.url || null, addr: item.address || null, lat: item.lat ?? null, lon: item.lng ?? null });
+      if (!item.poiId && r.poiId) { item.poiId = r.poiId; item.key = 'poi:' + r.poiId; }
+      S.detail.kept = r.kept; syncKept();
+      return r;
     }
     // decision: 'keep' = 切换保留，'drop' = 取消保留。结果直接写客户景区表的 ctrip_poi_info
     async function setDecision(item, decision) {
@@ -275,11 +286,27 @@
       const keep = decision === 'keep' ? S.decisions[key] !== 'keep' : false;
       if (!keep && S.decisions[key] !== 'keep') return;
       try {
-        const r = await call('poi', { scenic_id: S.detail.scenic.id, keep, poiId: item.poiId || null, businessId: item.businessId || null,
-          poiName: item.name, poiUri: item.url || null, addr: item.address || null, lat: item.lat ?? null, lon: item.lng ?? null });
-        if (!item.poiId && r.poiId) { item.poiId = r.poiId; item.key = 'poi:' + r.poiId; }
-        S.detail.kept = r.kept; syncKept(); render();
+        await savePoi(item, keep);
+        if (keep) S.manualOff.delete(key); else { S.manualOff.add(key); S.autoKept.delete(key); } // 手动取消的不再自动选
+        render();
       } catch (e) { toast('保存失败：' + e.message, true); }
+    }
+    // 「地址相近」的 POI 自动保留（未审核的景区才做；手动取消过的不再选）
+    const SIMILAR = 0.4;
+    async function autoSelect() {
+      if (!prefs.auto_keep_similar || !S.detail || Number(S.detail.scenic.approval) === 1) return;
+      const s = S.detail.scenic, sid = s.id;
+      const items = [...shown().sights, ...S.detail.candidates.map((c) => Object.assign(candAsItem(c), { address: c.address }))];
+      const todo = items.filter((it) => it.key && it.address && S.decisions[it.key] !== 'keep' && !S.manualOff.has(it.key)
+        && (addrSim(it.address, s.address) ?? 0) >= SIMILAR);
+      const seen = new Set();
+      let n = 0;
+      for (const it of todo) {
+        if (!S.detail || S.detail.scenic.id !== sid || seen.has(it.key)) continue;
+        seen.add(it.key);
+        try { await savePoi(it, true); S.autoKept.add(it.key); n++; } catch (e) { toast('自动保留失败：' + e.message, true); }
+      }
+      if (n) { render(); toast(`地址相近，已自动保留 ${n} 条`); }
     }
     function candAsItem(c) {
       return {
@@ -327,6 +354,7 @@
         }
       } catch (e) { it.addrError = e.message; if (!quiet) toast(e.message, true); }
       finally { it.addrLoading = false; render(); }
+      if (!quiet) await autoSelect();
     }
     async function fillAddresses() {
       const todo = [...shown().sights, ...((S.detail && S.detail.candidates) || [])].filter((x) => !x.address && (x.url || x.ctrip_url) && !x.addrError);
@@ -340,6 +368,7 @@
         await fetchAddr(x, true);
       }
       toast('地址补全完成');
+      await autoSelect();
     }
 
     // ---------------------------------------------------------------- render
@@ -403,7 +432,7 @@
           <div class="idx">${r.n}</div>
           <div>
             <div class="l1">${r.url ? `<a href="${esc(r.url)}" target="_blank" rel="noopener" title="在新标签页打开携程页面">${esc(r.name)}</a>` : `<b>${esc(r.name)}</b>`}
-              <span class="tag ${poi ? 'sight' : ''}">${esc(r.type || '?')}</span>${r.level ? `<span class="tag ${r.level === '5A' ? 'g5' : ''}">${esc(r.level)}</span>` : ''}${candTag(c)}</div>
+              <span class="tag ${poi ? 'sight' : ''}">${esc(r.type || '?')}</span>${S.autoKept && S.autoKept.has(r.key) && dec(r.key) === 'keep' ? '<span class="tag good" title="地址相近，自动保留">自动</span>' : ''}${r.level ? `<span class="tag ${r.level === '5A' ? 'g5' : ''}">${esc(r.level)}</span>` : ''}${candTag(c)}</div>
             ${poi ? addrLine(r, s, `data-fetch="${r.n}"`) : ''}
             <div class="meta">
               ${[r.cityName, r.districtName].filter(Boolean).length ? `<span>${esc([...new Set([r.cityName, r.districtName].filter(Boolean))].join(' / '))}</span>` : ''}
@@ -433,7 +462,7 @@
           <div class="idx c">${String.fromCharCode(97 + (i % 26))}</div>
           <div>
             <div class="l1">${c.ctrip_url ? `<a href="${esc(c.ctrip_url)}" target="_blank" rel="noopener">${esc(c.ctrip_poi_name)}</a>` : `<b>${esc(c.ctrip_poi_name)}</b>`}
-              ${c.level ? `<span class="tag ${c.level === '5A' ? 'g5' : ''}">${esc(c.level)}</span>` : ''}<span class="tag">${esc(c.relation_type)}</span><span class="tag">${esc(c.confidence)}</span>
+              ${c.level ? `<span class="tag ${c.level === '5A' ? 'g5' : ''}">${esc(c.level)}</span>` : ''}${S.autoKept && S.autoKept.has(key) && dec(key) === 'keep' ? '<span class="tag good" title="地址相近，自动保留">自动</span>' : ''}<span class="tag">${esc(c.relation_type)}</span><span class="tag">${esc(c.confidence)}</span>
               ${c.triage_result ? `<span class="tag ${c.triage_result === '自动删除' ? 'warn' : c.triage_result === '自动保留' ? 'good' : ''}">${esc(c.triage_result)}</span>` : ''}
               ${searched.has(String(c.ctrip_poi_id)) ? '<span class="tag sight">搜索结果中也有</span>' : ''}</div>
             ${addrLine(c, s, `data-cfetch="${i}"`)}
@@ -511,7 +540,7 @@
         else if (t.id === 'export') { const r = await call('export'); toast('已导出：' + r.path); }
         else if (t.id === 's-save') {
           await savePrefs({ reviewer: $('#s-reviewer').value.trim(), throttle_ms: Number($('#s-throttle').value || 2500), auto_search: $('#s-auto').checked,
-            push_page: $('#s-push').checked, auto_address: $('#s-autoaddr').checked });
+            push_page: $('#s-push').checked, auto_address: $('#s-autoaddr').checked, auto_keep_similar: $('#s-autokeep').checked });
           applyLayout(); $('#s-state').textContent = '✓ 已保存';
         }
         else if (t.id === 's-locate') {
@@ -564,7 +593,7 @@
 
     function fillSettings() {
       $('#s-reviewer').value = prefs.reviewer || ''; $('#s-throttle').value = prefs.throttle_ms || 2500; $('#s-auto').checked = !!prefs.auto_search;
-      $('#s-push').checked = !!prefs.push_page; $('#s-autoaddr').checked = !!prefs.auto_address;
+      $('#s-push').checked = !!prefs.push_page; $('#s-autokeep').checked = prefs.auto_keep_similar !== false; $('#s-autoaddr').checked = !!prefs.auto_address;
       $('#s-sel').textContent = prefs.input_selector ? '当前：' + prefs.input_selector : '未指定（自动识别）';
       const f = prefs.filters || {};
       $('#f-grade').value = f.grade || ''; $('#f-status').value = f.status || 'todo'; $('#f-q').value = f.q || '';
