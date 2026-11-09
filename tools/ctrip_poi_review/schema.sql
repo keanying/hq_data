@@ -1,4 +1,4 @@
--- 携程 POI 人工核对工具用到的表（review.py 启动时会自动 CREATE IF NOT EXISTS，这里供 DBA 预建/审阅）
+-- 携程 POI 人工核对工具用到的表（review.py 启动时会自动 CREATE IF NOT EXISTS，并把排序规则对齐客户景区表；这里供 DBA 预建/审阅）
 -- 客户景区表（只读）：pft_ai_dim_prd_scenic_base_yr_f，字段映射见 README
 
 CREATE TABLE IF NOT EXISTS scenic_ctrip_poi_review (
@@ -39,6 +39,25 @@ CREATE TABLE IF NOT EXISTS scenic_ctrip_search_cache (
   result_json MEDIUMTEXT NULL COMMENT '解析后的结果列表',
   searched_at DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
 ) DEFAULT CHARSET=utf8mb4 COMMENT='携程页面搜索结果缓存（预抓取/实时搜索都会写）';
+
+CREATE TABLE IF NOT EXISTS ctrip_poi_address_cache (
+  ctrip_key VARCHAR(128) PRIMARY KEY COMMENT 'poi:<poiId> 或 biz:<businessId>',
+  ctrip_poi_id VARCHAR(32) NULL, ctrip_business_id VARCHAR(32) NULL,
+  ctrip_poi_name VARCHAR(255) NULL,
+  address VARCHAR(500) NULL COMMENT '携程详情页上的地址',
+  page_url VARCHAR(512) NULL,
+  fetched_at DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  KEY idx_poi (ctrip_poi_id), KEY idx_biz (ctrip_business_id)
+) DEFAULT CHARSET=utf8mb4 COMMENT='携程 POI 地址缓存（打开详情页读取）';
+
+-- 可选：携程景区主档，由 import_ctrip_master.py 导入，用于显示地址/等级
+CREATE TABLE IF NOT EXISTS ctrip_attraction_master (
+  ctrip_poi_id VARCHAR(32) PRIMARY KEY, ctrip_business_id VARCHAR(32) NULL,
+  attraction_name VARCHAR(255) NULL, city_name VARCHAR(64) NULL, district_name VARCHAR(64) NULL,
+  business_area_name VARCHAR(255) NULL, attraction_address VARCHAR(500) NULL, poi_type VARCHAR(64) NULL,
+  attraction_level VARCHAR(8) NULL, gcj02_lng DOUBLE NULL, gcj02_lat DOUBLE NULL, ctrip_url VARCHAR(512) NULL,
+  KEY idx_biz (ctrip_business_id)
+) DEFAULT CHARSET=utf8mb4 COMMENT='携程景区主档（来自交付数据 dim.dim_prd_attraction_df，用于补地址）';
 
 -- 可选：离线规则匹配的候选，由 import_candidates.py 导入
 CREATE TABLE IF NOT EXISTS scenic_ctrip_candidate (
