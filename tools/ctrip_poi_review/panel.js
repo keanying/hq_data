@@ -121,6 +121,10 @@
   .settings.open { display: block; }
   .settings label { display: block; margin: 6px 0 2px; font-weight: 600; }
   .kbd { font-family: Menlo, Consolas, monospace; background: #eaeef2; border-radius: 4px; padding: 0 4px; font-size: 11px; }
+  .auto-banner { border: 1px solid #1a7f37; background: #dafbe1; color: #116329; border-radius: 8px; padding: 8px 10px; margin: 6px 0 8px; display: flex; gap: 8px; align-items: center; }
+  .auto-banner .txt { flex: 1; font-size: 12px; line-height: 1.5; }
+  .auto-banner b { font-size: 13px; }
+  .judge-note { font-size: 12px; color: #57606a; margin: 2px 0 6px; }
   .help { font-size: 11px; color: #57606a; margin-top: 6px; line-height: 1.6; }
 </style>
 <button class="fab" id="fab">POI核对</button>
@@ -140,6 +144,7 @@
     <label>两次搜索最小间隔（毫秒，实际会随机加 0–40%）</label><input type="number" id="s-throttle" min="500" step="100">
     <label><input type="checkbox" id="s-auto"> 打开景区时自动搜索景区名</label>
     <label><input type="checkbox" id="s-push"> 打开面板时把携程页面往左挤（页面较窄时可能出现横向滚动条）</label>
+    <label><input type="checkbox" id="s-autoapprove"> 名称一致且地址相近时自动审核通过（倒计时可按 Esc 取消）</label>
     <label><input type="checkbox" id="s-autokeep"> 「地址相近」的结果自动保留（未审核的景区；手动取消过的不再自动选）</label>
     <label><input type="checkbox" id="s-autoaddr"> 搜索后自动补全缺失地址（会逐个打开详情页，较慢）</label>
     <label>携程搜索框</label>
@@ -151,7 +156,7 @@
   <div class="filters">
     <select id="f-city"></select>
     <select id="f-grade" title="景区等级"><option value="">全部等级</option><option>5A</option><option>4A</option><option>5A,4A</option><option>3A</option><option>2A</option><option>1A</option></select>
-    <select id="f-status" title="审核状态"><option value="todo">待核对</option><option value="done">已审核</option><option value="skip">已跳过</option><option value="all">全部</option></select>
+    <select id="f-status" title="审核状态"><option value="todo">待核对</option><option value="done">已审核</option><option value="skip">已跳过</option><option value="auto">自动通过</option><option value="all">全部</option></select>
     <input type="text" id="f-q" placeholder="景区名 / ID">
     <button id="f-apply">筛选</button>
     <button id="export" title="导出 CSV 到工具目录">导出</button>
@@ -213,13 +218,13 @@
       S.detail = await call('detail', { scenic_id: sid });
       syncKept();
       S.res = null; S.keyword = ''; S.rawOpen = {}; S.domOpen = false; S.othersOpen = false;
-      S.manualOff = new Set(); S.autoKept = new Set();
+      S.manualOff = new Set(); S.autoKept = new Set(); cancelAutoApprove(true);
       $('#note').value = (S.detail.status && S.detail.status.note) || '';
       render();
       if (prefs.auto_search) await doSearch(S.detail.scenic.name, false);
     }
     function renderProgress() {
-      const st = { todo: '待核对', done: '已审核', skip: '已跳过', all: '全部' }[(prefs.filters || {}).status] || '';
+      const st = { todo: '待核对', done: '已审核', skip: '已跳过', auto: '自动通过', all: '全部' }[(prefs.filters || {}).status] || '';
       $('#progress').textContent = S.detail ? `${st} 第 ${S.i + 1} / ${S.total}` : `${st} 共 ${S.total}`;
       const city = (prefs.filters || {}).city;
       const rows = (S.cities || []).filter((c) => !city || city.split(',').includes(c.city));
@@ -253,9 +258,10 @@
     async function doSearch(kw, force) {
       kw = (kw || '').trim(); if (!kw) return;
       const sid = S.detail && S.detail.scenic.id;
+      cancelAutoApprove(true); // 换关键词重搜时，之前的自动审核倒计时作废
       S.keyword = kw; S.loading = true; render();
       try {
-        const r = await call('search', { keyword: kw, force: !!force });
+        const r = await call('search', { keyword: kw, force: !!force, scenic_id: sid });
         if (!S.detail || S.detail.scenic.id !== sid || S.keyword !== kw) return; // 已切走
         S.res = r;
       } catch (e) {
@@ -263,7 +269,8 @@
       } finally { S.loading = false; render(); }
       if (!S.res || !S.detail || S.detail.scenic.id !== sid) return;
       await autoSelect();
-      if (prefs.auto_address) await fillAddresses();
+      maybeAutoApprove();
+      if (prefs.auto_address && !S.autoApprove) await fillAddresses();
     }
 
     // ---------------------------------------------------------------- decisions
@@ -285,6 +292,7 @@
       if (!key) { toast('该条没有 poiId，无法保存（通常是酒店、目的地等非 POI 结果）', true); return; }
       const keep = decision === 'keep' ? S.decisions[key] !== 'keep' : false;
       if (!keep && S.decisions[key] !== 'keep') return;
+      cancelAutoApprove(true); // 手动调整了就不自动通过
       try {
         await savePoi(item, keep);
         if (keep) S.manualOff.delete(key); else { S.manualOff.add(key); S.autoKept.delete(key); } // 手动取消的不再自动选
@@ -308,6 +316,36 @@
       }
       if (n) { render(); toast(`地址相近，已自动保留 ${n} 条`); }
     }
+    // 名称一致 + 地址相近 → 倒计时后自动审核通过（判定在 Python 端 match.py，和 `review.py auto` 同一规则）
+    function cancelAutoApprove(silent) {
+      if (!S.autoApprove) return;
+      clearTimeout(S.autoApprove.timer); clearInterval(S.autoApprove.tick);
+      S.autoApprove = null;
+      if (!silent) { toast('已取消自动审核'); render(); }
+    }
+    function maybeAutoApprove() {
+      const j = S.res && S.res.judge;
+      if (!prefs.auto_approve || !j || !j.approve || !S.detail || Number(S.detail.scenic.approval) === 1) return;
+      cancelAutoApprove(true);
+      const sid = S.detail.scenic.id, delay = Number(prefs.auto_approve_delay_ms) || 2000;
+      const A = { sid, reason: j.reason, left: Math.ceil(delay / 1000) };
+      A.tick = setInterval(() => { A.left = Math.max(0, A.left - 1); const el = $('#auto-left'); if (el) el.textContent = A.left; }, 1000);
+      A.timer = setTimeout(async () => {
+        if (S.autoApprove !== A || !S.detail || S.detail.scenic.id !== sid) return;
+        clearInterval(A.tick);
+        // 地址相近的都保留（自动保留关掉或刚被取消时补上；手动取消过的不动）
+        const pool = [...shown().sights, ...S.detail.candidates.map((c) => Object.assign(candAsItem(c), { address: c.address }))];
+        for (const key of j.similar) {
+          if (S.decisions[key] === 'keep' || S.manualOff.has(key)) continue;
+          const it = pool.find((x) => x.key === key);
+          if (it) { try { await savePoi(it, true); S.autoKept.add(key); } catch (e) { /* 写失败不影响通过 */ } }
+        }
+        S.autoApprove = null;
+        await finish('done', j.reason);
+      }, delay);
+      S.autoApprove = A;
+      render();
+    }
     function candAsItem(c) {
       return {
         key: 'poi:' + c.ctrip_poi_id, poiId: c.ctrip_poi_id, businessId: c.ctrip_business_id || null, name: c.ctrip_poi_name,
@@ -328,10 +366,11 @@
       }
       toast(`已保留 ${n} 条`);
     }
-    async function finish(status) {
+    async function finish(status, note) {
       if (!S.detail) return;
+      cancelAutoApprove(true);
       try {
-        await call('status', { scenic_id: S.detail.scenic.id, status, note: $('#note').value || null, reviewer: prefs.reviewer || null });
+        await call('status', { scenic_id: S.detail.scenic.id, status, note: note || $('#note').value || null, reviewer: prefs.reviewer || null });
         toast(status === 'done' ? '已审核（approval=1）' : '已跳过');
         refreshCities();
         if ((prefs.filters || {}).status === 'todo') { S.list.splice(S.i, 1); S.total = Math.max(0, S.total - 1); S.i -= 1; }
@@ -419,6 +458,7 @@
       const candByPoi = {}, candByBiz = {};
       for (const c of S.detail.candidates) { candByPoi[c.ctrip_poi_id] = c; if (c.ctrip_business_id) candByBiz[c.ctrip_business_id] = c; }
       const dec = (key) => S.decisions[key] || '';
+      const nameMatch = new Set((S.res && S.res.judge && S.res.judge.name_match) || []);
       const { sights, others, list } = shown();
       const capLabel = S.res ? ({ network: '下拉框结果', 'network?': '接口有返回但没解析出条目', dom: '只读到下拉框文字（没有ID，不能保存）' }[S.res.capture] || S.res.capture) : '';
       const capHint = S.res && S.res.capture !== 'network' && !S.loading
@@ -432,7 +472,7 @@
           <div class="idx">${r.n}</div>
           <div>
             <div class="l1">${r.url ? `<a href="${esc(r.url)}" target="_blank" rel="noopener" title="在新标签页打开携程页面">${esc(r.name)}</a>` : `<b>${esc(r.name)}</b>`}
-              <span class="tag ${poi ? 'sight' : ''}">${esc(r.type || '?')}</span>${S.autoKept && S.autoKept.has(r.key) && dec(r.key) === 'keep' ? '<span class="tag good" title="地址相近，自动保留">自动</span>' : ''}${r.level ? `<span class="tag ${r.level === '5A' ? 'g5' : ''}">${esc(r.level)}</span>` : ''}${candTag(c)}</div>
+              <span class="tag ${poi ? 'sight' : ''}">${esc(r.type || '?')}</span>${S.autoKept && S.autoKept.has(r.key) && dec(r.key) === 'keep' ? '<span class="tag good" title="地址相近，自动保留">自动</span>' : ''}${nameMatch.has(r.key) ? '<span class="tag good" title="去掉省市区前缀和景区等后缀后与景区名/别名一致">名称一致</span>' : ''}${r.level ? `<span class="tag ${r.level === '5A' ? 'g5' : ''}">${esc(r.level)}</span>` : ''}${candTag(c)}</div>
             ${poi ? addrLine(r, s, `data-fetch="${r.n}"`) : ''}
             <div class="meta">
               ${[r.cityName, r.districtName].filter(Boolean).length ? `<span>${esc([...new Set([r.cityName, r.districtName].filter(Boolean))].join(' / '))}</span>` : ''}
@@ -462,7 +502,7 @@
           <div class="idx c">${String.fromCharCode(97 + (i % 26))}</div>
           <div>
             <div class="l1">${c.ctrip_url ? `<a href="${esc(c.ctrip_url)}" target="_blank" rel="noopener">${esc(c.ctrip_poi_name)}</a>` : `<b>${esc(c.ctrip_poi_name)}</b>`}
-              ${c.level ? `<span class="tag ${c.level === '5A' ? 'g5' : ''}">${esc(c.level)}</span>` : ''}${S.autoKept && S.autoKept.has(key) && dec(key) === 'keep' ? '<span class="tag good" title="地址相近，自动保留">自动</span>' : ''}<span class="tag">${esc(c.relation_type)}</span><span class="tag">${esc(c.confidence)}</span>
+              ${c.level ? `<span class="tag ${c.level === '5A' ? 'g5' : ''}">${esc(c.level)}</span>` : ''}${S.autoKept && S.autoKept.has(key) && dec(key) === 'keep' ? '<span class="tag good" title="地址相近，自动保留">自动</span>' : ''}${nameMatch.has(key) ? '<span class="tag good">名称一致</span>' : ''}<span class="tag">${esc(c.relation_type)}</span><span class="tag">${esc(c.confidence)}</span>
               ${c.triage_result ? `<span class="tag ${c.triage_result === '自动删除' ? 'warn' : c.triage_result === '自动保留' ? 'good' : ''}">${esc(c.triage_result)}</span>` : ''}
               ${searched.has(String(c.ctrip_poi_id)) ? '<span class="tag sight">搜索结果中也有</span>' : ''}</div>
             ${addrLine(c, s, `data-cfetch="${i}"`)}
@@ -506,6 +546,8 @@
         <div class="sec"><b>携程搜索</b>${S.keyword ? `<span class="muted">「${esc(S.keyword)}」${capLabel ? ' · ' + esc(capLabel) : ''}${S.res && S.res.cached ? ' · 缓存 ' + esc(S.res.searched_at) : ''}</span>
           <button id="re-search" title="在携程页面重新输入搜索 (R)">重新搜索</button>` : ''}
           ${missingAddr ? `<button id="fill-addr" title="逐个打开携程详情页读取地址">补全地址（${missingAddr}）</button>` : ''}</div>
+        ${S.autoApprove ? `<div class="auto-banner"><div class="txt"><b>✓ 名称一致且地址相近</b>，<span id="auto-left">${S.autoApprove.left}</span> 秒后自动审核通过并进入下一个<br>${esc(S.autoApprove.reason)}</div><button id="cancel-auto">取消（Esc）</button></div>`
+          : (S.res && S.res.judge && !S.loading && Number(s.approval) !== 1 ? `<div class="judge-note">自动审核：${esc(S.res.judge.approve ? '可通过（已取消或未开启）' : S.res.judge.reason)}</div>` : '')}
         ${capHint}${resHtml}
         ${dom.length ? `<div class="muted"><button class="link" id="dom-toggle">${S.domOpen ? '收起' : '查看'}下拉框原文（${dom.length}）</button></div>
           ${S.domOpen ? '<pre style="grid-column:auto">' + esc(dom.map((d) => d.text + (d.href ? '  ' + d.href : '')).join('\n')) + '</pre>' : ''}` : ''}
@@ -540,7 +582,7 @@
         else if (t.id === 'export') { const r = await call('export'); toast('已导出：' + r.path); }
         else if (t.id === 's-save') {
           await savePrefs({ reviewer: $('#s-reviewer').value.trim(), throttle_ms: Number($('#s-throttle').value || 2500), auto_search: $('#s-auto').checked,
-            push_page: $('#s-push').checked, auto_address: $('#s-autoaddr').checked, auto_keep_similar: $('#s-autokeep').checked });
+            push_page: $('#s-push').checked, auto_address: $('#s-autoaddr').checked, auto_keep_similar: $('#s-autokeep').checked, auto_approve: $('#s-autoapprove').checked });
           applyLayout(); $('#s-state').textContent = '✓ 已保存';
         }
         else if (t.id === 's-locate') {
@@ -552,6 +594,7 @@
         else if (t.id === 'kw-go') await doSearch($('#kw').value, false);
         else if (t.id === 're-search') await doSearch(S.keyword, true);
         else if (t.id === 'dom-toggle') { S.domOpen = !S.domOpen; render(); }
+        else if (t.id === 'cancel-auto') cancelAutoApprove();
         else if (t.id === 'others-toggle') { S.othersOpen = !S.othersOpen; render(); }
         else if (t.id === 'fill-addr') await fillAddresses();
         else if (ds.fetch) await fetchAddr(byN(ds.fetch));
@@ -575,6 +618,7 @@
       if ($('#panel').classList.contains('hidden') || !ev.isTrusted) return;
       const path = ev.composedPath ? ev.composedPath() : [ev.target];
       const inField = path.some((el) => el && (el.tagName === 'INPUT' || el.tagName === 'TEXTAREA' || el.tagName === 'SELECT' || el.isContentEditable));
+      if (ev.key === 'Escape' && S.autoApprove) { ev.preventDefault(); cancelAutoApprove(); return; }
       if (ev.key === 'Escape' && !inField) { $('#close').click(); return; }
       if (inField || ev.ctrlKey || ev.metaKey || ev.altKey || S.loading) return;
       const m = ev.code && ev.code.match(/^Digit([1-9])$/);
@@ -593,7 +637,7 @@
 
     function fillSettings() {
       $('#s-reviewer').value = prefs.reviewer || ''; $('#s-throttle').value = prefs.throttle_ms || 2500; $('#s-auto').checked = !!prefs.auto_search;
-      $('#s-push').checked = !!prefs.push_page; $('#s-autokeep').checked = prefs.auto_keep_similar !== false; $('#s-autoaddr').checked = !!prefs.auto_address;
+      $('#s-push').checked = !!prefs.push_page; $('#s-autokeep').checked = prefs.auto_keep_similar !== false; $('#s-autoapprove').checked = prefs.auto_approve !== false; $('#s-autoaddr').checked = !!prefs.auto_address;
       $('#s-sel').textContent = prefs.input_selector ? '当前：' + prefs.input_selector : '未指定（自动识别）';
       const f = prefs.filters || {};
       $('#f-grade').value = f.grade || ''; $('#f-status').value = f.status || 'todo'; $('#f-q').value = f.q || '';

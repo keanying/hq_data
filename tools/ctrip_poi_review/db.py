@@ -353,6 +353,8 @@ def _filters(f):
         where.append(APPROVED)
     elif st == "skip":
         where.append(f"NOT {APPROVED} AND st.status = 'skip'")
+    elif st == "auto":  # 自动审核通过的（备注以「自动审核」开头），供抽查
+        where.append(f"{APPROVED} AND st.note LIKE %s"); params.append("自动审核%")
     if f.get("q"):
         where.append(f"(s.{C['name']} LIKE %s OR s.{C['alias']} LIKE %s OR s.{C['id']} = %s)")
         params += [f"%{f['q']}%", f"%{f['q']}%", f["q"]]
