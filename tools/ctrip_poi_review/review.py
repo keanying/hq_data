@@ -49,6 +49,8 @@ def _num(v):
 NAME_KEYS = ("word", "name", "poiName", "title", "displayName", "keyword", "text")
 SKIP_KEYS = {"ResponseStatus", "nlpResult", "jumpInfo", "extendInfo", "highLights", "head"}
 SIGHT_URL = re.compile(r"/sight/[^/]+/(\d+)\.html", re.I)
+POI_TYPES = {"sight", "shop", "shopping", "play", "entertainment", "restaurant", "food", "poi", "scenic",
+             "景点", "购物", "玩乐", "娱乐", "美食"}
 
 
 def _looks_item(d):
@@ -109,7 +111,8 @@ def parse_items(js):
     out = []
     for i, it in enumerate(find_items(js), 1):
         url = str(it.get("url") or it.get("jumpUrl") or it.get("h5Url") or it.get("pcUrl") or "")
-        url = re.sub(r"^//", "https://", re.sub(r"^http://", "https://", url))
+        url = re.sub(r"^//", "https://", url)
+        url = re.sub(r"^http://(?=([a-z0-9-]+\.)*ctrip\.com)", "https://", url)
         m = SIGHT_URL.search(url)
         typ = str(it.get("type") or it.get("typeName") or it.get("category") or "")
         is_sight = typ.lower() in ("sight", "poi", "scenic", "景点") or bool(m)
@@ -126,6 +129,7 @@ def parse_items(js):
             lat=_num(it.get("lat")), lng=_num(it.get("lon", it.get("lng"))),
             cityName=it.get("cityName") or "", districtName=it.get("districtName") or "",
             isSight=is_sight,
+            isPoi=bool(poi) or is_sight or typ.lower() in POI_TYPES,  # 景点/购物/玩乐等都算 POI，参与核对
             key=f"poi:{poi}" if poi else (f"biz:{biz}" if biz else None),
             raw=it,
         ))
@@ -203,12 +207,48 @@ JS_DOM_DROPDOWN = """(sel) => {
 }"""
 
 
+JS_DETAIL_ADDRESS = """() => {
+  const t = (document.body && document.body.innerText) || '';
+  const m = t.match(/(?:^|\\n)\\s*地址\\s*[:：]?\\s*\\n?\\s*([^\\n]{4,120})/);
+  return { address: m ? m[1].trim() : null, title: document.title };
+}"""
+
+ADDR_KEYS = ("address", "addr", "poiAddress", "locationName", "location")
+
+
+def item_address(it):
+    raw = it.get("raw") or {}
+    for k in ADDR_KEYS:
+        v = raw.get(k)
+        if isinstance(v, str) and len(v.strip()) >= 4:
+            return v.strip()
+    return None
+
+
+def enrich(items, poi_key="poiId", biz_key="businessId"):
+    """给结果补地址/等级：搜索返回里自带的优先，其次携程主档，再次详情页地址缓存。"""
+    info = db.lookup_addresses([it.get(poi_key) for it in items], [it.get(biz_key) for it in items])
+    for it in items:
+        a = item_address(it) if "raw" in it else None
+        hit = info.get(f"poi:{it.get(poi_key)}") or info.get(f"biz:{it.get(biz_key)}") or {}
+        it["address"] = a or hit.get("address")
+        it["addressSource"] = "搜索结果" if a else hit.get("source")
+        it["level"] = hit.get("level")
+        if not it.get(poi_key) and hit.get("poiId"):
+            it[poi_key] = hit["poiId"]
+            if "key" in it:
+                it["key"] = f"poi:{hit['poiId']}"
+    return items
+
+
 # ---------------------------------------------------------------- 搜索（模拟人工输入）
 class CtripSearcher:
     def __init__(self, page, prefs, start_url, patterns, timeout_s=10.0):
         self.page, self.prefs, self.start_url, self.patterns, self.timeout_s = page, prefs, start_url, patterns, timeout_s
         self.lock = asyncio.Lock()
         self.last_at = 0.0
+        self.addr_lock = asyncio.Lock()
+        self.addr_last = 0.0
 
     async def _input(self):
         page = self.page
@@ -248,6 +288,32 @@ class CtripSearcher:
                 return await self._search(kw)
             finally:
                 self.last_at = time.monotonic()
+
+    async def fetch_address(self, url):
+        """在后台新标签页打开携程详情页，读出页面上「地址」一栏。"""
+        if not url or not url.startswith("http"):
+            raise ValueError("这条结果没有详情页链接")
+        async with self.addr_lock:
+            wait = self.addr_last + random.uniform(1.5, 2.5) - time.monotonic()
+            if wait > 0:
+                await asyncio.sleep(wait)
+            p = await self.page.context.new_page()
+            try:
+                await p.goto(url, wait_until="domcontentloaded", timeout=25000)
+                res = None
+                for _ in range(10):  # 页面是前端渲染的，地址可能晚一点出来
+                    await p.wait_for_timeout(500)
+                    res = await p.evaluate(JS_DETAIL_ADDRESS)
+                    if res.get("address"):
+                        break
+                return res
+            finally:
+                self.addr_last = time.monotonic()
+                await p.close()
+                try:
+                    await self.page.bring_to_front()
+                except Exception:
+                    pass
 
     def _score(self, js, text, kw, url):
         """响应里必须出现完整关键词；按：命中常用接口、带结果列表、nlpResult.keyword 完全一致 加分。"""
@@ -356,6 +422,7 @@ class CtripSearcher:
 class Prefs(dict):
     def __init__(self, path):
         super().__init__(reviewer="", throttle_ms=2500, sight_only=False, auto_search=True, input_selector="",
+                         panel_width=600, push_page=True, auto_address=False,
                          filters=dict(city="", grade="", status="todo", q=""))
         self.path = path
         if path.exists():
@@ -422,7 +489,15 @@ async def setup_run(pw, args):
             if method == "list":
                 return db.scenic_list(payload.get("filters") or {}, payload.get("offset", 0), payload.get("limit", 200))
             if method == "detail":
-                return db.scenic_detail(payload["scenic_id"])
+                d = db.scenic_detail(payload["scenic_id"])
+                enrich(d["candidates"], "ctrip_poi_id", "ctrip_business_id")
+                return d
+            if method == "fetch_address":
+                res = await searcher.fetch_address(payload.get("url"))
+                if not res or not res.get("address"):
+                    raise ValueError(f"详情页里没找到地址（页面标题：{(res or {}).get('title')}；可能要登录或验证）")
+                db.addr_put(payload.get("poiId"), payload.get("businessId"), payload.get("name"), res["address"], payload.get("url"))
+                return dict(address=res["address"], addressSource="详情页")
             if method == "decision":
                 return db.set_decision(payload)
             if method == "status":
@@ -440,10 +515,13 @@ async def setup_run(pw, args):
                 if not payload.get("force"):
                     hit = db.cache_get(kwd)
                     if hit and hit.get("result") and hit["result"].get("capture") != "dom":
-                        return dict(hit["result"], cached=True, searched_at=hit["searched_at"])
+                        res = dict(hit["result"], cached=True, searched_at=hit["searched_at"])
+                        enrich(res["items"])
+                        return res
                 res = await searcher.search(kwd)
                 if res["capture"] != "dom":  # 只读到下拉文字（没有ID）的不缓存，下次重新搜
                     db.cache_put(kwd, res)
+                enrich(res["items"])
                 return res
             if method == "export":
                 out = HERE / f"scenic_ctrip_poi_mapping_{time.strftime('%Y%m%d_%H%M%S')}.csv"

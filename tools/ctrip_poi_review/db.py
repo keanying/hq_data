@@ -34,6 +34,8 @@ CANDIDATE_TABLE = ident(ENV("CANDIDATE_TABLE", "scenic_ctrip_candidate"))
 REVIEW_TABLE = ident(ENV("REVIEW_TABLE", "scenic_ctrip_poi_review"))
 STATUS_TABLE = ident(ENV("STATUS_TABLE", "scenic_ctrip_review_status"))
 CACHE_TABLE = ident(ENV("CACHE_TABLE", "scenic_ctrip_search_cache"))
+MASTER_TABLE = ident(ENV("CTRIP_MASTER_TABLE", "ctrip_attraction_master"))
+ADDR_TABLE = ident(ENV("ADDR_TABLE", "ctrip_poi_address_cache"))
 COLS = {
     "id": "scenic_id", "name": "scenic_name", "alias": "scenic_alias",
     "province": "province_name", "city": "city_name", "district": "district_name",
@@ -82,7 +84,23 @@ DDL = [
   result_json MEDIUMTEXT NULL COMMENT '解析后的结果列表',
   searched_at DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
 ) DEFAULT CHARSET=utf8mb4 COMMENT='携程页面搜索结果缓存（预抓取/实时搜索都会写）'""",
+    f"""CREATE TABLE IF NOT EXISTS {ADDR_TABLE} (
+  ctrip_key VARCHAR(128) PRIMARY KEY COMMENT 'poi:<poiId> 或 biz:<businessId>',
+  ctrip_poi_id VARCHAR(32) NULL, ctrip_business_id VARCHAR(32) NULL,
+  ctrip_poi_name VARCHAR(255) NULL,
+  address VARCHAR(500) NULL COMMENT '携程详情页上的地址',
+  page_url VARCHAR(512) NULL,
+  fetched_at DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  KEY idx_poi (ctrip_poi_id), KEY idx_biz (ctrip_business_id)
+) DEFAULT CHARSET=utf8mb4 COMMENT='携程 POI 地址缓存（打开详情页读取）'""",
 ]
+MASTER_DDL = f"""CREATE TABLE IF NOT EXISTS {MASTER_TABLE} (
+  ctrip_poi_id VARCHAR(32) PRIMARY KEY, ctrip_business_id VARCHAR(32) NULL,
+  attraction_name VARCHAR(255) NULL, city_name VARCHAR(64) NULL, district_name VARCHAR(64) NULL,
+  business_area_name VARCHAR(255) NULL, attraction_address VARCHAR(500) NULL, poi_type VARCHAR(64) NULL,
+  attraction_level VARCHAR(8) NULL, gcj02_lng DOUBLE NULL, gcj02_lat DOUBLE NULL, ctrip_url VARCHAR(512) NULL,
+  KEY idx_biz (ctrip_business_id)
+) DEFAULT CHARSET=utf8mb4 COMMENT='携程景区主档（来自交付数据 dim.dim_prd_attraction_df，用于补地址）'"""
 
 
 _NAME = re.compile(r"^[A-Za-z0-9_]+$")
@@ -150,7 +168,8 @@ def init_db():
         clause = charset_clause(cur)
         for ddl in DDL:
             cur.execute(ddl.replace("DEFAULT CHARSET=utf8mb4", clause))
-        for t, col in ((REVIEW_TABLE, "scenic_id"), (STATUS_TABLE, "scenic_id"), (CANDIDATE_TABLE, "scenic_id"), (CACHE_TABLE, "keyword")):
+        for t, col in ((REVIEW_TABLE, "scenic_id"), (STATUS_TABLE, "scenic_id"), (CANDIDATE_TABLE, "scenic_id"),
+                       (CACHE_TABLE, "keyword"), (ADDR_TABLE, "ctrip_key")):
             align_collation(cur, t, col)
 
 
@@ -355,3 +374,52 @@ def export_rows():
                         WHERE r.decision='keep' GROUP BY r.scenic_id, s.{C['name']}, s.{C['city']}, st.status
                         ORDER BY s.{C['city']}, r.scenic_id""")
         return list(cur.fetchall())
+
+
+def lookup_addresses(poi_ids, biz_ids):
+    """按 poiId / 景点ID 查地址：先查携程主档（交付数据），再查详情页地址缓存。返回 {ctrip_key: {...}}。"""
+    poi_ids = sorted({str(x) for x in poi_ids if x})
+    biz_ids = sorted({str(x) for x in biz_ids if x})
+    out = {}
+    if not poi_ids and not biz_ids:
+        return out
+    with cursor() as cur:
+        if table_exists(cur, MASTER_TABLE):
+            conds, params = [], []
+            if poi_ids:
+                conds.append(f"ctrip_poi_id IN ({','.join(['%s'] * len(poi_ids))})"); params += poi_ids
+            if biz_ids:
+                conds.append(f"ctrip_business_id IN ({','.join(['%s'] * len(biz_ids))})"); params += biz_ids
+            cur.execute(f"""SELECT ctrip_poi_id, ctrip_business_id, attraction_name, district_name, attraction_address, attraction_level
+                            FROM {MASTER_TABLE} WHERE {' OR '.join(conds)}""", params)
+            for r in cur.fetchall():
+                info = dict(address=r["attraction_address"], level=r["attraction_level"], district=r["district_name"],
+                            poiId=r["ctrip_poi_id"], businessId=r["ctrip_business_id"], source="主档")
+                out[f"poi:{r['ctrip_poi_id']}"] = info
+                if r["ctrip_business_id"]:
+                    out.setdefault(f"biz:{r['ctrip_business_id']}", info)
+        keys = [f"poi:{x}" for x in poi_ids] + [f"biz:{x}" for x in biz_ids]
+        keys = [k for k in keys if k not in out or not out[k].get("address")]
+        if keys:
+            cur.execute(f"""SELECT ctrip_key, ctrip_poi_id, ctrip_business_id, address, fetched_at FROM {ADDR_TABLE}
+                            WHERE ctrip_key IN ({','.join(['%s'] * len(keys))})""", keys)
+            for r in cur.fetchall():
+                prev = out.get(r["ctrip_key"], {})
+                out[r["ctrip_key"]] = dict(prev, address=r["address"], source="详情页",
+                                          poiId=prev.get("poiId") or r["ctrip_poi_id"], businessId=prev.get("businessId") or r["ctrip_business_id"])
+    return out
+
+
+def addr_put(poi_id, biz_id, name, address, page_url):
+    rows = []
+    if poi_id:
+        rows.append(f"poi:{poi_id}")
+    if biz_id:
+        rows.append(f"biz:{biz_id}")
+    with cursor() as cur:
+        for key in rows:
+            cur.execute(f"""INSERT INTO {ADDR_TABLE} (ctrip_key, ctrip_poi_id, ctrip_business_id, ctrip_poi_name, address, page_url)
+                            VALUES (%s,%s,%s,%s,%s,%s) ON DUPLICATE KEY UPDATE address=VALUES(address), page_url=VALUES(page_url),
+                            ctrip_poi_id=COALESCE(VALUES(ctrip_poi_id), ctrip_poi_id), ctrip_business_id=COALESCE(VALUES(ctrip_business_id), ctrip_business_id),
+                            ctrip_poi_name=COALESCE(VALUES(ctrip_poi_name), ctrip_poi_name), fetched_at=CURRENT_TIMESTAMP""",
+                        (key, poi_id or None, biz_id or None, name or None, address, page_url or None))
