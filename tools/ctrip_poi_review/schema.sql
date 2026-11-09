@@ -3,7 +3,7 @@
 
 -- 结果直接写在客户景区表上（review.py 启动时没有会自动加）：
 ALTER TABLE pft_ai_dim_prd_scenic_base_yr_f
-  ADD COLUMN ctrip_poi_info LONGTEXT NULL COMMENT '携程POI列表 JSON：[{"poiId":123,"poiName":"名字","poiUri":"链接"}]；空=未核对，[]=核对过无匹配',
+  ADD COLUMN ctrip_poi_info LONGTEXT NULL COMMENT '携程POI列表 JSON：[{"poiId":123,"poiName":"名字","poiUri":"链接","addr":"地址","lat":30.86,"lon":121.59}]（GCJ02）；空=未核对，[]=核对过无匹配',
   ADD COLUMN approval TINYINT NOT NULL DEFAULT 0 COMMENT '审核状态：1-已审核 0-未审核';
 
 CREATE TABLE IF NOT EXISTS scenic_ctrip_review_status (

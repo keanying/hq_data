@@ -161,13 +161,16 @@ def init_db():
     n = migrate_review_table()
     if n:
         print(f"已把旧表 {REVIEW_TABLE} 里 {n} 个景区的「保留」结果迁移到 {SCENIC_TABLE}.{POI_INFO}", flush=True)
+    n = backfill_poi_info()
+    if n:
+        print(f"已给 {n} 个景区的 {POI_INFO} 补齐 addr/lat/lon", flush=True)
 
 
 def ensure_poi_info_column():
     """客户景区表上没有结果字段就加：ctrip_poi_info（LONGTEXT，JSON 数组）、approval（审核状态 1/0）。"""
     schema, table = _scenic_schema_table()
     specs = [
-        (POI_INFO_NAME, f"{POI_INFO} LONGTEXT NULL COMMENT '携程POI列表 JSON：[{{\"poiId\":123,\"poiName\":\"名字\",\"poiUri\":\"链接\"}}]；空=未核对，[]=核对过无匹配'"),
+        (POI_INFO_NAME, f"{POI_INFO} LONGTEXT NULL COMMENT '携程POI列表 JSON：[{{\"poiId\":123,\"poiName\":\"名字\",\"poiUri\":\"链接\",\"addr\":\"地址\",\"lat\":30.86,\"lon\":121.59}}]（GCJ02）；空=未核对，[]=核对过无匹配'"),
         (APPROVAL_NAME, f"{APPROVAL} TINYINT NOT NULL DEFAULT 0 COMMENT '审核状态：1-已审核 0-未审核'"),
     ]
     added = []
@@ -197,9 +200,59 @@ def _parse_info(text):
         return []
 
 
-def _poi_obj(poi_id, name, uri):
+def _num(v):
+    try:
+        f = float(v)
+        return round(f, 7) if f == f else None
+    except (TypeError, ValueError):
+        return None
+
+
+def _poi_obj(poi_id, name, uri, addr=None, lat=None, lon=None):
+    """ctrip_poi_info 里的一项。坐标为携程返回的 GCJ02（与携程主档一致）。"""
     pid = str(poi_id).strip()
-    return {"poiId": int(pid) if pid.isdigit() else pid, "poiName": name or "", "poiUri": uri or ""}
+    return {"poiId": int(pid) if pid.isdigit() else pid, "poiName": name or "", "poiUri": uri or "",
+            "addr": addr or "", "lat": _num(lat), "lon": _num(lon)}
+
+
+def _fill_missing(objs):
+    """addr / lat / lon 缺的，用携程主档、详情页地址缓存补。返回补了几项。"""
+    need = [o for o in objs if not o.get("addr") or o.get("lat") is None or o.get("lon") is None]
+    if not need:
+        return 0
+    info = lookup_addresses([o["poiId"] for o in need], [])
+    n = 0
+    for o in need:
+        h = info.get(f"poi:{o['poiId']}") or {}
+        changed = False
+        if not o.get("addr") and h.get("address"):
+            o["addr"] = h["address"]; changed = True
+        if o.get("lat") is None and h.get("lat") is not None and o.get("lon") is None and h.get("lng") is not None:
+            o["lat"], o["lon"] = _num(h["lat"]), _num(h["lng"]); changed = True
+        n += changed
+    return n
+
+
+def _normalize(lst):
+    """旧数据统一成 poiId/poiName/poiUri/addr/lat/lon 六个键。"""
+    return [_poi_obj(x.get("poiId"), x.get("poiName"), x.get("poiUri"), x.get("addr"), x.get("lat"), x.get("lon")) for x in lst]
+
+
+def backfill_poi_info():
+    """已有的 ctrip_poi_info 补齐 addr/lat/lon（来自携程主档、详情页地址缓存）。"""
+    with cursor() as cur:
+        cur.execute(f"SELECT {C['id']} AS sid, {POI_INFO} AS v FROM {SCENIC_TABLE} WHERE {POI_INFO} IS NOT NULL AND {POI_INFO} <> '[]'")
+        rows = list(cur.fetchall())
+    changed = 0
+    for r in rows:
+        old = _parse_info(r["v"])
+        lst = _normalize(old)
+        n = _fill_missing(lst)
+        if n or any(set(x) != set(y) for x, y in zip(old, lst)):
+            with cursor() as cur:
+                cur.execute(f"UPDATE {SCENIC_TABLE} SET {POI_INFO}=%s WHERE {C['id']}=%s", (json.dumps(lst, ensure_ascii=False), r["sid"]))
+            changed += 1
+    return changed
 
 
 def migrate_review_table():
@@ -213,6 +266,8 @@ def migrate_review_table():
         by = {}
         for r in cur.fetchall():
             by.setdefault(r["scenic_id"], []).append(_poi_obj(r["ctrip_poi_id"], r["ctrip_poi_name"], r["ctrip_url"]))
+        for lst in by.values():
+            _fill_missing(lst)
         for sid, lst in by.items():
             cur.execute(f"UPDATE {SCENIC_TABLE} SET {POI_INFO}=%s WHERE {C['id']}=%s AND {POI_INFO} IS NULL",
                         (json.dumps(lst, ensure_ascii=False), sid))
@@ -263,12 +318,22 @@ def health():
 
 
 def cities():
+    """各城市景区数 / 已审核数；设置了 CITIES 时只返回这些城市（按 CITIES 的顺序）。"""
+    where, params = "", []
+    if DEFAULT_CITIES:
+        where = f"WHERE s.{C['city']} IN ({','.join(['%s'] * len(DEFAULT_CITIES))})"
+        params = DEFAULT_CITIES
     with cursor() as cur:
         cur.execute(f"""SELECT s.{C['province']} province, s.{C['city']} city, COUNT(*) n,
-                        CAST(SUM({APPROVED}) AS SIGNED) reviewed
+                        CAST(SUM({APPROVED}) AS SIGNED) reviewed,
+                        CAST(SUM(NOT {APPROVED} AND st.status = 'skip') AS SIGNED) skipped
                         FROM {SCENIC_TABLE} s LEFT JOIN {STATUS_TABLE} st ON st.scenic_id = s.{C['id']}
-                        GROUP BY 1,2 ORDER BY n DESC""")
-        return list(cur.fetchall())
+                        {where} GROUP BY 1,2 ORDER BY n DESC""", params)
+        rows = list(cur.fetchall())
+    if DEFAULT_CITIES:
+        order = {c: i for i, c in enumerate(DEFAULT_CITIES)}
+        rows.sort(key=lambda r: order.get(r["city"], 99))
+    return rows
 
 
 def _filters(f):
@@ -355,9 +420,18 @@ def set_poi(d):
             row = cur.fetchone()
             if row is None:
                 raise KeyError(f"景区不存在: {sid}")
-            lst = [x for x in _parse_info(row["v"]) if str(x.get("poiId")) != str(poi)]
-            if d.get("keep"):
-                lst.append(_poi_obj(poi, d.get("poiName"), d.get("poiUri")))
+            lst = _normalize(_parse_info(row["v"]))
+            idx = next((i for i, x in enumerate(lst) if str(x["poiId"]) == str(poi)), None)
+            if not d.get("keep"):
+                if idx is not None:
+                    lst.pop(idx)
+            else:
+                new = _poi_obj(poi, d.get("poiName"), d.get("poiUri"), d.get("addr"), d.get("lat"), d.get("lon"))
+                if idx is None:
+                    lst.append(new)
+                else:  # 已保留的再保存一次 = 更新（只用新值覆盖非空字段，位置不变）
+                    lst[idx].update({k: v for k, v in new.items() if v not in (None, "")})
+                _fill_missing(lst)
             cur.execute(f"UPDATE {SCENIC_TABLE} SET {POI_INFO}=%s WHERE {C['id']}=%s", (json.dumps(lst, ensure_ascii=False), sid))
         conn.commit()
         return dict(ok=True, kept=lst, poiId=str(poi))
@@ -439,10 +513,11 @@ def lookup_addresses(poi_ids, biz_ids):
                 conds.append(f"ctrip_poi_id IN ({','.join(['%s'] * len(poi_ids))})"); params += poi_ids
             if biz_ids:
                 conds.append(f"ctrip_business_id IN ({','.join(['%s'] * len(biz_ids))})"); params += biz_ids
-            cur.execute(f"""SELECT ctrip_poi_id, ctrip_business_id, attraction_name, district_name, attraction_address, attraction_level
-                            FROM {MASTER_TABLE} WHERE {' OR '.join(conds)}""", params)
+            cur.execute(f"""SELECT ctrip_poi_id, ctrip_business_id, attraction_name, district_name, attraction_address, attraction_level,
+                            gcj02_lat, gcj02_lng FROM {MASTER_TABLE} WHERE {' OR '.join(conds)}""", params)
             for r in cur.fetchall():
                 info = dict(address=r["attraction_address"], level=r["attraction_level"], district=r["district_name"],
+                            lat=r["gcj02_lat"], lng=r["gcj02_lng"],
                             poiId=r["ctrip_poi_id"], businessId=r["ctrip_business_id"], source="主档")
                 out[f"poi:{r['ctrip_poi_id']}"] = info
                 if r["ctrip_business_id"]:

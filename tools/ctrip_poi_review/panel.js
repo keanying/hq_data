@@ -56,11 +56,12 @@
   * { box-sizing: border-box; font-family: -apple-system, "PingFang SC", "Microsoft YaHei", Arial, sans-serif; }
   .fab.err { background: #cf222e; }
   .fab { position: fixed; right: 16px; bottom: 16px; z-index: 2147483646; background: #0b6bcb; color: #fff; border: 0; border-radius: 20px; padding: 9px 14px; font-size: 13px; cursor: pointer; box-shadow: 0 2px 8px rgba(0,0,0,.25); }
-  .panel { position: fixed; top: 0; right: 0; width: 600px; height: 100vh; z-index: 2147483647; background: #fff; border-left: 1px solid #d0d7de; box-shadow: -4px 0 16px rgba(0,0,0,.10); display: flex; flex-direction: column; font-size: 13px; color: #1f2328; }
+  .panel { position: fixed; top: 0; right: 0; width: 560px; overflow: hidden; height: 100vh; z-index: 2147483647; background: #fff; border-left: 1px solid #d0d7de; box-shadow: -4px 0 16px rgba(0,0,0,.10); display: flex; flex-direction: column; font-size: 13px; color: #1f2328; }
   .panel.hidden { display: none; }
   .grip { position: absolute; left: -4px; top: 0; bottom: 0; width: 8px; cursor: ew-resize; z-index: 2; }
   .grip:hover, .grip.on { background: rgba(9,105,218,.25); }
-  header { display: flex; align-items: center; gap: 6px; padding: 8px 12px; background: #f6f8fa; border-bottom: 1px solid #d0d7de; }
+  header { display: flex; align-items: center; gap: 6px; padding: 8px 12px 4px; background: #f6f8fa; }
+  header + .settings, .prog { background: #f6f8fa; }
   header b { font-size: 14px; }
   header .grow { flex: 1; color: #57606a; font-size: 12px; }
   button { font-size: 12px; padding: 3px 8px; border: 1px solid #d0d7de; border-radius: 6px; background: #fff; cursor: pointer; color: #1f2328; white-space: nowrap; }
@@ -71,9 +72,16 @@
   button.link { border: 0; background: none; color: #0969da; padding: 0 2px; }
   button.link:hover { text-decoration: underline; background: none; }
   button:disabled { opacity: .4; cursor: not-allowed; }
-  .filters { display: flex; gap: 6px; padding: 6px 12px; border-bottom: 1px solid #eaeef2; flex-wrap: wrap; align-items: center; }
+  .filters { display: grid; grid-template-columns: minmax(0, 1.3fr) minmax(0, .9fr) minmax(0, .9fr) minmax(0, 1.4fr) auto auto; gap: 6px; padding: 8px 12px; border-bottom: 1px solid #eaeef2; align-items: center; }
+  .filters select, .filters input { width: 100%; min-width: 0; }
+  .prog { display: flex; align-items: center; gap: 8px; padding: 6px 12px 8px; border-bottom: 1px solid #eaeef2; font-size: 12px; color: #57606a; }
+  .prog .bar { flex: 1; height: 6px; background: #eaeef2; border-radius: 3px; overflow: hidden; }
+  .prog .bar i { display: block; height: 100%; background: #1f883d; border-radius: 3px; transition: width .3s; }
+  .prog b { color: #1f2328; }
   select, input[type=text], input[type=number] { font-size: 12px; padding: 4px 6px; border: 1px solid #d0d7de; border-radius: 6px; }
-  .body { flex: 1; overflow: auto; padding: 10px 12px 80px; }
+  .body { flex: 1; overflow-y: auto; overflow-x: hidden; padding: 10px 12px 80px; }
+  .row > div, .kv > div, .card, .tools, .sec { min-width: 0; }
+  .addr span, .meta span, .kv > div { overflow-wrap: anywhere; }
   .card { border: 1px solid #d0d7de; border-radius: 8px; padding: 10px 12px; margin-bottom: 10px; background: #fbfcfd; }
   .ttl { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; margin-bottom: 6px; }
   .ttl h3 { margin: 0; font-size: 16px; }
@@ -91,7 +99,7 @@
   .sec { margin: 12px 0 6px; display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
   .sec b { font-size: 13px; }
   .row { border: 1px solid #eaeef2; border-radius: 8px; padding: 8px 10px; margin-bottom: 6px; display: grid; grid-template-columns: 22px 1fr auto; gap: 4px 8px; align-items: start; background: #fff; }
-  .row.keep { border-color: #1a7f37; background: #f6fff8; } .row.drop { border-color: #cf222e; background: #fffafa; opacity: .7; }
+  .row.keep { border-color: #1a7f37; border-left: 4px solid #1f883d; padding-left: 7px; background: #f6fff8; }
   .row.dim { opacity: .55; }
   .idx { font-weight: 700; color: #0969da; text-align: center; line-height: 20px; }
   .idx.c { color: #8c959f; }
@@ -104,7 +112,8 @@
   .meta { margin-top: 3px; font-size: 12px; color: #57606a; display: flex; gap: 4px 10px; flex-wrap: wrap; align-items: center; }
   .acts { display: flex; gap: 4px; }
   pre { grid-column: 2 / 4; white-space: pre-wrap; word-break: break-all; font-size: 11px; background: #f6f8fa; padding: 6px; border-radius: 6px; margin: 4px 0 0; max-height: 220px; overflow: auto; }
-  footer { position: absolute; bottom: 0; left: 0; right: 0; background: #fff; border-top: 1px solid #d0d7de; padding: 8px 12px; display: flex; gap: 6px; align-items: center; }
+  footer { position: absolute; bottom: 0; left: 0; right: 0; background: #f6f8fa; border-top: 1px solid #d0d7de; padding: 8px 12px; display: flex; gap: 6px; align-items: center; }
+  footer button { padding: 5px 12px; font-size: 13px; }
   footer input { flex: 1; }
   .toast { position: absolute; left: 12px; right: 12px; bottom: 54px; background: #24292f; color: #fff; padding: 6px 10px; border-radius: 6px; font-size: 12px; display: none; }
   .toast.err { background: #a40e26; }
@@ -125,25 +134,26 @@
     <button id="gear" title="设置">⚙</button>
     <button id="close" title="收起 (Esc)">✕</button>
   </header>
+  <div class="prog" title="当前城市范围内 approval=1 的景区数"><div class="bar"><i id="prog-bar" style="width:0"></i></div><span id="prog-text"></span></div>
   <div class="settings" id="settings">
     <label>核对人</label><input type="text" id="s-reviewer" style="width:100%" placeholder="写入 reviewer 字段">
     <label>两次搜索最小间隔（毫秒，实际会随机加 0–40%）</label><input type="number" id="s-throttle" min="500" step="100">
     <label><input type="checkbox" id="s-auto"> 打开景区时自动搜索景区名</label>
-    <label><input type="checkbox" id="s-push"> 打开面板时把携程页面往左挤（不遮挡搜索框和下拉框）</label>
+    <label><input type="checkbox" id="s-push"> 打开面板时把携程页面往左挤（页面较窄时可能出现横向滚动条）</label>
     <label><input type="checkbox" id="s-autoaddr"> 搜索后自动补全缺失地址（会逐个打开详情页，较慢）</label>
     <label>携程搜索框</label>
     <div style="display:flex;gap:6px;align-items:center"><button id="s-locate">定位搜索框</button><span class="muted" id="s-sel"></span></div>
     <div style="margin-top:8px;display:flex;gap:6px;align-items:center"><button class="primary" id="s-save">保存</button><span class="muted" id="s-state"></span></div>
     <div class="help">搜索方式：程序点击携程页面的搜索框并逐字输入，读取下拉框结果（页面自己发出的请求），不直接调接口。<br>
-      快捷键：<span class="kbd">1</span>–<span class="kbd">9</span> 保留第 n 条（再按取消），<span class="kbd">Shift</span>+数字 取消保留，<span class="kbd">Enter</span> 完成并下一个，<span class="kbd">S</span> 跳过，<span class="kbd">←</span>/<span class="kbd">→</span> 翻景区，<span class="kbd">R</span> 重新搜索，<span class="kbd">/</span> 自定义关键词，<span class="kbd">Esc</span> 收起。</div>
+      快捷键：<span class="kbd">1</span>–<span class="kbd">9</span> 保留第 n 条（再按取消），<span class="kbd">Shift</span>+数字 取消保留，<span class="kbd">Enter</span> 审核完成并下一个，<span class="kbd">S</span> 跳过，<span class="kbd">←</span>/<span class="kbd">→</span> 翻景区，<span class="kbd">R</span> 重新搜索，<span class="kbd">/</span> 自定义关键词，<span class="kbd">Esc</span> 收起。</div>
   </div>
   <div class="filters">
     <select id="f-city"></select>
-    <select id="f-grade"><option value="">全部等级</option><option>5A</option><option>4A</option><option>5A,4A</option><option>3A</option><option>2A</option><option>1A</option></select>
-    <select id="f-status"><option value="todo">待核对</option><option value="done">已审核</option><option value="skip">已跳过</option><option value="all">全部</option></select>
-    <input type="text" id="f-q" placeholder="景区名/ID" style="width:110px">
+    <select id="f-grade" title="景区等级"><option value="">全部等级</option><option>5A</option><option>4A</option><option>5A,4A</option><option>3A</option><option>2A</option><option>1A</option></select>
+    <select id="f-status" title="审核状态"><option value="todo">待核对</option><option value="done">已审核</option><option value="skip">已跳过</option><option value="all">全部</option></select>
+    <input type="text" id="f-q" placeholder="景区名 / ID">
     <button id="f-apply">筛选</button>
-    <button id="export" title="导出最终映射 CSV 到工具目录">导出</button>
+    <button id="export" title="导出 CSV 到工具目录">导出</button>
   </div>
   <div class="body" id="body"><div class="muted">加载中…</div></div>
   <div class="toast" id="toast"></div>
@@ -161,12 +171,12 @@
       clearTimeout(toastTimer); toastTimer = setTimeout(() => (t.style.display = 'none'), err ? 6000 : 1800);
     }
     const savePrefs = async (p) => { prefs = await call('prefs', p); };
-    const panelWidth = () => Math.min(Math.max(Number(prefs.panel_width) || 600, 420), Math.max(480, window.innerWidth - 360));
+    const panelWidth = () => Math.min(Math.max(Number(prefs.panel_width) || 560, 440), Math.max(480, window.innerWidth - 360));
     function applyLayout() {
       const open = !$('#panel').classList.contains('hidden');
       const w = panelWidth();
       $('#panel').style.width = w + 'px';
-      document.documentElement.style.setProperty('margin-right', open && prefs.push_page !== false ? w + 'px' : '', 'important');
+      document.documentElement.style.setProperty('margin-right', open && prefs.push_page ? w + 'px' : '', 'important');
     }
     (() => { // 拖动左边缘调整宽度
       let drag = null;
@@ -209,6 +219,23 @@
     function renderProgress() {
       const st = { todo: '待核对', done: '已审核', skip: '已跳过', all: '全部' }[(prefs.filters || {}).status] || '';
       $('#progress').textContent = S.detail ? `${st} 第 ${S.i + 1} / ${S.total}` : `${st} 共 ${S.total}`;
+      const city = (prefs.filters || {}).city;
+      const rows = (S.cities || []).filter((c) => !city || city.split(',').includes(c.city));
+      const n = rows.reduce((a, c) => a + Number(c.n || 0), 0), ok = rows.reduce((a, c) => a + Number(c.reviewed || 0), 0);
+      const sk = rows.reduce((a, c) => a + Number(c.skipped || 0), 0);
+      $('#prog-bar').style.width = n ? (ok / n * 100).toFixed(1) + '%' : '0';
+      $('#prog-text').innerHTML = `${esc(city || '全部城市')} 已审核 <b>${ok}</b> / ${n}${n ? `（${(ok / n * 100).toFixed(1)}%）` : ''}${sk ? ` · 跳过 ${sk}` : ''}`;
+    }
+    function fillCities() {
+      const sel = $('#f-city'), cur = (prefs.filters || {}).city || '';
+      const tot = (S.cities || []).reduce((a, c) => a + Number(c.n || 0), 0), ok = (S.cities || []).reduce((a, c) => a + Number(c.reviewed || 0), 0);
+      sel.innerHTML = `<option value="">全部城市 ${ok}/${tot}</option>` +
+        (S.cities || []).filter((c) => c.city).map((c) => `<option value="${esc(c.city)}">${esc(c.city.replace(/市$/, ''))} ${c.reviewed || 0}/${c.n}</option>`).join('');
+      sel.value = cur;
+      sel.title = '城市（已审核/景区数）';
+    }
+    async function refreshCities() {
+      try { S.cities = await call('cities'); fillCities(); renderProgress(); } catch (e) { /* 进度刷新失败不影响核对 */ }
     }
 
     // ---------------------------------------------------------------- search
@@ -249,7 +276,7 @@
       if (!keep && S.decisions[key] !== 'keep') return;
       try {
         const r = await call('poi', { scenic_id: S.detail.scenic.id, keep, poiId: item.poiId || null, businessId: item.businessId || null,
-          poiName: item.name, poiUri: item.url || null });
+          poiName: item.name, poiUri: item.url || null, addr: item.address || null, lat: item.lat ?? null, lon: item.lng ?? null });
         if (!item.poiId && r.poiId) { item.poiId = r.poiId; item.key = 'poi:' + r.poiId; }
         S.detail.kept = r.kept; syncKept(); render();
       } catch (e) { toast('保存失败：' + e.message, true); }
@@ -257,7 +284,8 @@
     function candAsItem(c) {
       return {
         key: 'poi:' + c.ctrip_poi_id, poiId: c.ctrip_poi_id, businessId: c.ctrip_business_id || null, name: c.ctrip_poi_name,
-        type: 'sight', cityName: c.city_name, districtName: c.ctrip_district_name, lat: null, lng: null, url: c.ctrip_url,
+        type: 'sight', cityName: c.city_name, districtName: c.ctrip_district_name, lat: c.lat ?? null, lng: c.lng ?? null, url: c.ctrip_url,
+        address: c.address || null,
         raw: { from: 'offline_candidate', relation_type: c.relation_type, confidence: c.confidence, match_evidence: c.match_evidence },
       };
     }
@@ -278,6 +306,7 @@
       try {
         await call('status', { scenic_id: S.detail.scenic.id, status, note: $('#note').value || null, reviewer: prefs.reviewer || null });
         toast(status === 'done' ? '已审核（approval=1）' : '已跳过');
+        refreshCities();
         if ((prefs.filters || {}).status === 'todo') { S.list.splice(S.i, 1); S.total = Math.max(0, S.total - 1); S.i -= 1; }
         await go(1);
       } catch (e) { toast('保存失败：' + e.message, true); }
@@ -290,6 +319,12 @@
       try {
         const r = await call('fetch_address', { url: it.url, poiId: it.poiId || it.ctrip_poi_id, businessId: it.businessId || it.ctrip_business_id, name: it.name || it.ctrip_poi_name });
         it.address = r.address; it.addressSource = r.addressSource;
+        const item = it.ctrip_poi_id ? candAsItem(it) : it;
+        if (item.key && S.decisions[item.key] === 'keep') { // 已保留的，把新查到的地址写进 ctrip_poi_info
+          const rr = await call('poi', { scenic_id: S.detail.scenic.id, keep: true, poiId: item.poiId, poiName: item.name, poiUri: item.url || null,
+            addr: r.address, lat: item.lat ?? null, lon: item.lng ?? null });
+          S.detail.kept = rr.kept; syncKept();
+        }
       } catch (e) { it.addrError = e.message; if (!quiet) toast(e.message, true); }
       finally { it.addrLoading = false; render(); }
     }
@@ -529,7 +564,7 @@
 
     function fillSettings() {
       $('#s-reviewer').value = prefs.reviewer || ''; $('#s-throttle').value = prefs.throttle_ms || 2500; $('#s-auto').checked = !!prefs.auto_search;
-      $('#s-push').checked = prefs.push_page !== false; $('#s-autoaddr').checked = !!prefs.auto_address;
+      $('#s-push').checked = !!prefs.push_page; $('#s-autoaddr').checked = !!prefs.auto_address;
       $('#s-sel').textContent = prefs.input_selector ? '当前：' + prefs.input_selector : '未指定（自动识别）';
       const f = prefs.filters || {};
       $('#f-grade').value = f.grade || ''; $('#f-status').value = f.status || 'todo'; $('#f-q').value = f.q || '';
@@ -537,10 +572,8 @@
     async function start() {
       fillSettings();
       try {
-        const sel = $('#f-city');
-        sel.innerHTML = `<option value="">默认城市（${esc((hello.health.cities || []).join('、') || '全部')}）</option>` +
-          hello.cities.filter((c) => c.city).map((c) => `<option value="${esc(c.city)}">${esc(c.city)}（${c.reviewed || 0}/${c.n}）</option>`).join('');
-        sel.value = (prefs.filters || {}).city || '';
+        S.cities = S.cities || hello.cities;
+        fillCities();
         await loadList(true);
         S.detail = null;
         if (S.list.length) await go(1); else render();

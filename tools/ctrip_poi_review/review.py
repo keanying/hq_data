@@ -234,6 +234,8 @@ def enrich(items, poi_key="poiId", biz_key="businessId"):
         it["address"] = a or hit.get("address")
         it["addressSource"] = "搜索结果" if a else hit.get("source")
         it["level"] = hit.get("level")
+        if it.get("lat") is None and hit.get("lat") is not None:
+            it["lat"], it["lng"] = hit["lat"], hit.get("lng")
         if not it.get(poi_key) and hit.get("poiId"):
             it[poi_key] = hit["poiId"]
             if "key" in it:
@@ -422,7 +424,7 @@ class CtripSearcher:
 class Prefs(dict):
     def __init__(self, path):
         super().__init__(reviewer="", throttle_ms=2500, sight_only=False, auto_search=True, input_selector="",
-                         panel_width=600, push_page=True, auto_address=False,
+                         panel_width=560, push_page=False, auto_address=False,
                          filters=dict(city="", grade="", status="todo", q=""))
         self.path = path
         if path.exists():
@@ -504,6 +506,8 @@ async def setup_run(pw, args):
                 return dict(address=res["address"], addressSource="详情页")
             if method == "poi":
                 return db.set_poi(payload)
+            if method == "cities":
+                return db.cities()
             if method == "status":
                 return db.set_status(payload)
             if method == "prefs":
