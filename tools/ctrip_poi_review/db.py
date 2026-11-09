@@ -371,9 +371,11 @@ def scenic_list(f, offset=0, limit=200):
     with cursor() as cur:
         cur.execute(f"SELECT COUNT(*) n {base}", params)
         total = cur.fetchone()["n"]
+        # 城市按 CITIES 的顺序依次排（一个城市跑完再下一个），城市内 5A→4A→…
+        city_order, city_params = (f"FIELD(s.{C['city']}, {','.join(['%s'] * len(DEFAULT_CITIES))}), ", list(DEFAULT_CITIES)) if DEFAULT_CITIES else ("", [])
         cur.execute(f"""SELECT {_select()}, COALESCE(s.{APPROVAL}, 0) approval, st.status, st.note
-                        {base} ORDER BY s.{C['city']}, {GRADE_ORDER}, s.{C['id']} LIMIT %s OFFSET %s""",
-                    params + [int(limit), int(offset)])
+                        {base} ORDER BY {city_order}s.{C['city']}, {GRADE_ORDER}, s.{C['id']} LIMIT %s OFFSET %s""",
+                    params + city_params + [int(limit), int(offset)])
         return dict(total=total, offset=offset, items=list(cur.fetchall()))
 
 
