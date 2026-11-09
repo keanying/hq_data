@@ -303,6 +303,12 @@ def check_db():
         raise SystemExit(1)
     db.init_db()
     h = db.health()
+    try:  # 关联查询也跑一遍，排序规则/权限之类的问题在启动时就暴露
+        db.cities()
+        db.scenic_list({}, 0, 1)
+    except Exception as e:
+        print(f"MySQL 自检没通过：关联查询出错 {type(e).__name__}: {e}", file=sys.stderr)
+        raise SystemExit(1)
     print(f"MySQL 正常：客户景区表 {db.SCENIC_TABLE} 共 {h['scenic_rows']} 行；默认城市 {','.join(h['cities']) or '全部'}；"
           f"离线候选表{'已导入' if h['candidate_table'] else '未导入（可选）'}", flush=True)
 
