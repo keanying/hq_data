@@ -53,7 +53,7 @@ Windows PowerShell 用 `$env:MYSQL_HOST="127.0.0.1"` 这样逐个设置。
 | `MYSQL_HOST` / `MYSQL_PORT` / `MYSQL_USER` / `MYSQL_PASSWORD` / `MYSQL_DB` | `127.0.0.1` / `3306` / `root` / 空 / `hq` | MySQL 连接 |
 | `SCENIC_TABLE` | `pft_ai_dim_prd_scenic_base_yr_f` | 客户景区表（只读），可写 `库.表` |
 | `SCENIC_COLS` | 见下 | 字段名不同时用 JSON 覆盖，如 `{"name":"scenic_nm"}` |
-| `CITIES` | `北京市,上海市,广州市,深圳市,杭州市,成都市,西安市` | 默认只核对这些城市；设为空字符串 = 全部 |
+| `CITIES` | `北京市,上海市,广州市,深圳市,杭州市,成都市,西安市` | 默认只核对这些城市；`CITIES=ALL`（或运行时加 `--all-cities`）= 全国 |
 | `POI_INFO_COL` / `APPROVAL_COL` | `ctrip_poi_info` / `approval` | 客户景区表上存结果 / 审核状态的字段名，没有会自动新增 |
 | `STATUS_TABLE` / `CACHE_TABLE` / `ADDR_TABLE` | `scenic_ctrip_review_status` / `scenic_ctrip_search_cache` / `ctrip_poi_address_cache` | 跳过与备注 / 搜索缓存 / 地址缓存，首次运行自动建表 |
 | `REVIEW_TABLE` | `scenic_ctrip_poi_review` | 旧版的结果明细表；存在时启动会把其中「保留」的记录迁移到 `ctrip_poi_info`（只迁字段为空的景区），之后不再使用 |
@@ -117,6 +117,8 @@ python review.py run --channel chrome
   10 秒内有人点击（面板或携程页面）、按键、滚动面板或点「我来处理」即视为接管，这个景区不再自动跳过；
   无人接管则记为跳过（`approval` 仍为 0，备注「无人接管，自动跳过：原因」）并进入下一个，之后在筛选「已跳过」里集中处理。
   已审核的、以及在「已跳过」里复看的景区不会自动跳过；⚙ 里可关闭或改秒数。这样面板可以无人值守地跑：能过的自动过，过不了的跳过留给人。
+- **全国模式**：`run` / `auto` / `prefetch` 加 `--all-cities`（或设 `CITIES=ALL`），核对客户表全国所有景区（约 1.7 万），
+  城市下拉按省分组，待核对按省→市依次跑。携程主档和离线候选只覆盖 7 城，其他城市的地址/坐标来自携程搜索结果或「查地址」。
 - **城市依次跑完**：待核对列表按 `CITIES` 的顺序（北京→上海→广州→深圳→杭州→成都→西安）排，城市内 5A→4A→…；选「全部城市」时一个城市跑完自动接下一个；
   选了单个城市时，这个城市的待核对跑完会自动切到下一个还有待核对景区的城市（提示「北京市 已跑完，切到 上海市」）。`review.py auto` 也按这个顺序跑。
 - 顶部进度条显示当前城市范围内已审核（`approval=1`）的比例；城市下拉只列 `CITIES` 里的城市，带「已审核/景区数」。
