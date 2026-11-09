@@ -203,9 +203,10 @@
 
     // ---------------------------------------------------------------- navigation
     async function loadList(reset) {
-      const f = prefs.filters || {};
+      const f = prefs.filters || {}, gen = S.gen;
       const offset = reset || f.status === 'todo' ? 0 : S.list.length;
       const r = await call('list', { filters: f, offset, limit: 200 });
+      if (gen !== S.gen) throw new Error('__stale__'); // 期间换了筛选条件，这次结果作废
       S.total = r.total;
       if (reset) { S.list = r.items; S.i = -1; } else {
         const seen = new Set(S.list.map((x) => x.id));
@@ -216,15 +217,39 @@
     async function go(delta) {
       let j = S.i + delta;
       if (j >= S.list.length) {
-        const added = await loadList(false);
-        if (!added || j >= S.list.length) { toast('当前筛选下没有更多景区了'); renderProgress(); return; }
+        let added = 0;
+        try { added = await loadList(false); } catch (e) { if (e.message === '__stale__') return; throw e; }
+        if (!added || j >= S.list.length) {
+          if (await nextCity()) return;
+          toast('当前筛选下没有更多景区了'); renderProgress(); return;
+        }
       }
       if (j < 0) j = 0;
+      const prevCity = S.detail && S.detail.scenic.city;
       S.i = j;
       await openScenic(S.list[j].id);
+      if (delta > 0 && prevCity && S.detail && S.detail.scenic.city !== prevCity) toast(`${prevCity} 已跑完，开始 ${S.detail.scenic.city}`);
+    }
+    // 选了单个城市、且看的是「待核对」：这个城市跑完后自动切到下一个还有待核对景区的城市（按 CITIES 顺序）
+    async function nextCity() {
+      const f = prefs.filters || {};
+      if ((f.status || 'todo') !== 'todo' || !f.city || f.city.includes(',') || f.q) return false;
+      await refreshCities();
+      const cs = S.cities || [];
+      const i = cs.findIndex((c) => c.city === f.city);
+      const left = (c) => Number(c.n || 0) - Number(c.reviewed || 0) - Number(c.skipped || 0);
+      const next = [...cs.slice(i + 1), ...cs.slice(0, Math.max(i, 0))].find((c) => left(c) > 0);
+      if (!next) { toast('所有城市都跑完了'); return false; }
+      toast(`${f.city} 已跑完，切到 ${next.city}`);
+      await savePrefs({ filters: Object.assign({}, f, { city: next.city }) });
+      await start();
+      return true;
     }
     async function openScenic(sid) {
-      S.detail = await call('detail', { scenic_id: sid });
+      const gen = S.gen;
+      const d = await call('detail', { scenic_id: sid });
+      if (gen !== S.gen) return; // 期间换了筛选条件
+      S.detail = d;
       syncKept();
       S.res = null; S.keyword = ''; S.rawOpen = {}; S.domOpen = false; S.othersOpen = false;
       S.searches = []; S.merged = null; stopSequence();
@@ -241,7 +266,8 @@
       const n = rows.reduce((a, c) => a + Number(c.n || 0), 0), ok = rows.reduce((a, c) => a + Number(c.reviewed || 0), 0);
       const sk = rows.reduce((a, c) => a + Number(c.skipped || 0), 0);
       $('#prog-bar').style.width = n ? (ok / n * 100).toFixed(1) + '%' : '0';
-      $('#prog-text').innerHTML = `${esc(city || '全部城市')} 已审核 <b>${ok}</b> / ${n}${n ? `（${(ok / n * 100).toFixed(1)}%）` : ''}${sk ? ` · 跳过 ${sk}` : ''}`;
+      const cur = !city && S.detail ? ` · 当前 ${esc(S.detail.scenic.city || '')}` : '';
+      $('#prog-text').innerHTML = `${esc(city || '全部城市')}${cur} 已审核 <b>${ok}</b> / ${n}${n ? `（${(ok / n * 100).toFixed(1)}%）` : ''}${sk ? ` · 跳过 ${sk}` : ''}`;
     }
     function fillCities() {
       const sel = $('#f-city'), cur = (prefs.filters || {}).city || '';
@@ -749,13 +775,20 @@
     }
     async function start() {
       fillSettings();
+      S.gen = (S.gen || 0) + 1;
+      const gen = S.gen;
+      stopSequence(); cancelAutoApprove(true); cancelIdleSkip(true);
       try {
         S.cities = S.cities || hello.cities;
         fillCities();
         await loadList(true);
+        if (gen !== S.gen) return;
         S.detail = null;
         if (S.list.length) await go(1); else render();
-      } catch (e) { $('#body').innerHTML = `<div class="muted">${esc(e.message)}</div>`; toast(e.message, true); }
+      } catch (e) {
+        if (e.message === '__stale__' || gen !== S.gen) return;
+        $('#body').innerHTML = `<div class="muted">${esc(e.message)}</div>`; toast(e.message, true);
+      }
     }
 
     return {
