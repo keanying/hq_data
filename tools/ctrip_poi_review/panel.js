@@ -256,7 +256,9 @@
       const dec = (key) => S.decisions[key] || '';
       const chips = keywordChips(s).map((k) => `<button class="chip ${k === S.keyword ? 'active' : ''}" data-kw="${esc(k)}">${esc(k)}</button>`).join('');
       const items = results();
-      const capLabel = S.res ? ({ network: '下拉框结果', 'network?': '下拉框结果（关键词未完全匹配）', dom: '下拉框 DOM' }[S.res.capture] || S.res.capture) : '';
+      const capLabel = S.res ? ({ network: '下拉框结果', 'network?': '接口有返回但没解析出条目', dom: '只读到下拉框文字（没有ID，不能保存）' }[S.res.capture] || S.res.capture) : '';
+      const capHint = S.res && S.res.capture !== 'network' && !S.loading
+        ? '<div class="muted" style="color:#9a6700;margin:2px 0 6px">没读到携程接口返回。按 R 重新搜索；仍不行请把 tools/ctrip_poi_review/debug/last_search.json 发给开发排查。</div>' : '';
       const resHtml = S.loading ? '<div class="muted">正在携程页面输入并等待下拉结果…</div>' : items.length ? items.map((r) => {
         const c = (r.poiId && candByPoi[r.poiId]) || (r.businessId && candByBiz[r.businessId]);
         const d = haversine(slat, slng, r.lat, r.lng);
@@ -321,7 +323,7 @@
         </div>
         <div class="sec">携程搜索 ${S.keyword ? `<span class="muted">「${esc(S.keyword)}」${capLabel ? ' · ' + esc(capLabel) : ''}${S.res && S.res.total != null ? ' · total=' + esc(S.res.total) : ''}${S.res && S.res.cached ? ' · 缓存 ' + esc(S.res.searched_at) : ''}</span>
           <button id="re-search" title="在携程页面重新输入搜索 (R)">重新搜索</button>` : ''}</div>
-        ${resHtml}
+        ${capHint}${resHtml}
         ${dom.length ? `<div class="sec"><button id="dom-toggle">${S.domOpen ? '收起' : '查看'}下拉框原文（${dom.length}）</button></div>
           ${S.domOpen ? '<pre>' + esc(dom.map((d) => d.text + (d.href ? '  ' + d.href : '')).join('\n')) + '</pre>' : ''}` : ''}
         <div class="sec">离线候选（${S.detail.candidates.length}）
