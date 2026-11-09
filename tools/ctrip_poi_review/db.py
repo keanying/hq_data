@@ -11,11 +11,11 @@ import pymysql
 
 ENV = os.environ.get
 DB = dict(
-    host=ENV("MYSQL_HOST", "127.0.0.1"),
+    host=ENV("MYSQL_HOST", "192.168.110.113"),
     port=int(ENV("MYSQL_PORT", "3306")),
-    user=ENV("MYSQL_USER", "root"),
-    password=ENV("MYSQL_PASSWORD", ""),
-    database=ENV("MYSQL_DB", "hq"),
+    user=ENV("MYSQL_USER", "opinionhub"),
+    password=ENV("MYSQL_PASSWORD", "8drfEYnxAdcW5aP3"),
+    database=ENV("MYSQL_DB", "opinionhub"),
     charset="utf8mb4",
     cursorclass=pymysql.cursors.DictCursor,
     autocommit=True,
