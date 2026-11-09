@@ -150,11 +150,11 @@
     <label>两次搜索最小间隔（毫秒，实际会随机加 0–40%）</label><input type="number" id="s-throttle" min="500" step="100">
     <label><input type="checkbox" id="s-auto"> 打开景区时自动搜索景区名</label>
     <label><input type="checkbox" id="s-push"> 打开面板时把携程页面往左挤（页面较窄时可能出现横向滚动条）</label>
-    <label><input type="checkbox" id="s-autoapprove"> 名称一致且地址相近时自动审核通过（倒计时可按 Esc 取消）</label>
+    <label><input type="checkbox" id="s-autoapprove"> 名称一致且（地址相近或同省市区）时自动审核通过（倒计时可按 Esc 取消）</label>
     <label><input type="checkbox" id="s-more"> 景区名没搜到「名称一致且地址相近」时，自动接着搜别名 / 城市+名称</label>
     <label style="padding-left:18px"><input type="checkbox" id="s-spots"> 还不行再搜核心景点（默认不搜，只用来比对；跳过大雄宝殿等通用名；每个景区最多再搜 8 个词）</label>
     <label><input type="checkbox" id="s-idle"> 需要人工审核时，<input type="number" id="s-idle-sec" min="3" step="1" style="width:56px"> 秒内无人操作就跳过并进入下一个</label>
-    <label><input type="checkbox" id="s-autokeep"> 「地址相近」的结果自动保留（未审核的景区；手动取消过的不再自动选）</label>
+    <label><input type="checkbox" id="s-autokeep"> 「地址相近」或「名称一致 / 景区名-xx 子景点且同省市区」的结果自动保留（未审核的景区；手动取消过的不再自动选）</label>
     <label><input type="checkbox" id="s-autoaddr"> 搜索后自动补全缺失地址（会逐个打开详情页，较慢）</label>
     <label>携程搜索框</label>
     <div style="display:flex;gap:6px;align-items:center"><button id="s-locate">定位搜索框</button><span class="muted" id="s-sel"></span></div>
@@ -296,7 +296,7 @@
     // 多个关键词的搜索结果合并去重；每条记下是哪个词搜到的。判定取并集（任一词能通过即通过）
     function mergeSearches() {
       const items = [], seen = new Set();
-      const J = { approve: false, reason: '', similar: [], name_match: [], spot_match: [] };
+      const J = { approve: false, reason: '', similar: [], name_match: [], sub_match: [], spot_match: [], name_keep: [], door_match: [] };
       for (const { kw, res } of S.searches) {
         for (const it of res.items || []) {
           const k = it.key || 'n:' + it.name;
@@ -307,7 +307,7 @@
         if (j) {
           if (j.approve && !J.approve) { J.approve = true; J.reason = j.reason; }
           if (!J.approve) J.reason = j.reason;
-          for (const f of ['similar', 'name_match', 'spot_match']) for (const k of j[f] || []) if (!J[f].includes(k)) J[f].push(k);
+          for (const f of ['similar', 'name_match', 'sub_match', 'spot_match', 'name_keep', 'door_match']) for (const k of j[f] || []) if (!J[f].includes(k)) J[f].push(k);
         }
       }
       S.merged = { items, judge: S.searches.some((x) => x.res.judge) ? J : null };
@@ -414,8 +414,10 @@
       if (!prefs.auto_keep_similar || !S.detail || Number(S.detail.scenic.approval) === 1) return;
       const s = S.detail.scenic, sid = s.id;
       const items = [...shown().sights, ...S.detail.candidates.map((c) => Object.assign(candAsItem(c), { address: c.address }))];
-      const todo = items.filter((it) => it.key && it.address && S.decisions[it.key] !== 'keep' && !S.manualOff.has(it.key)
-        && (addrSim(it.address, s.address) ?? 0) >= SIMILAR);
+      const MJ = (S.merged && S.merged.judge) || {};
+      const nameKeep = new Set(MJ.name_keep || []), pySim = new Set(MJ.similar || []);
+      const todo = items.filter((it) => it.key && S.decisions[it.key] !== 'keep' && !S.manualOff.has(it.key)
+        && ((it.address && (addrSim(it.address, s.address) ?? 0) >= SIMILAR) || pySim.has(it.key) || nameKeep.has(it.key)));
       const seen = new Set();
       let n = 0;
       for (const it of todo) {
@@ -423,7 +425,7 @@
         seen.add(it.key);
         try { await savePoi(it, true); S.autoKept.add(it.key); n++; } catch (e) { toast('自动保留失败：' + e.message, true); }
       }
-      if (n) { render(); toast(`地址相近，已自动保留 ${n} 条`); }
+      if (n) { render(); toast(`地址相近 / 名称一致（同省市区），已自动保留 ${n} 条`); }
     }
     // 名称一致 + 地址相近 → 倒计时后自动审核通过（判定在 Python 端 match.py，和 `review.py auto` 同一规则）
     function cancelAutoApprove(silent) {
@@ -444,7 +446,7 @@
         clearInterval(A.tick);
         // 地址相近的都保留（自动保留关掉或刚被取消时补上；手动取消过的不动）
         const pool = [...shown().sights, ...S.detail.candidates.map((c) => Object.assign(candAsItem(c), { address: c.address }))];
-        for (const key of j.similar) {
+        for (const key of [...j.similar, ...(j.name_keep || []).filter((k) => !j.similar.includes(k))]) {
           if (S.decisions[key] === 'keep' || S.manualOff.has(key)) continue;
           const it = pool.find((x) => x.key === key);
           if (it) { try { await savePoi(it, true); S.autoKept.add(key); } catch (e) { /* 写失败不影响通过 */ } }
@@ -546,7 +548,9 @@
     }
     function addrLine(it, s, fetchAttr) {
       if (it.address) {
-        return `<div class="addr"><span class="pin">📍</span><span>${esc(it.address)}</span>${addrBadges(it.address, s)}<span class="src">${esc(it.addressSource || '')}</span></div>`;
+        const k = it.key || (it.ctrip_poi_id ? 'poi:' + it.ctrip_poi_id : null);
+        const doorTag = k && S.merged && S.merged.judge && (S.merged.judge.door_match || []).includes(k) ? '<span class="tag good" title="路名+门牌号与客户地址一致">门牌一致</span>' : '';
+        return `<div class="addr"><span class="pin">📍</span><span>${esc(it.address)}</span>${doorTag}${addrBadges(it.address, s)}<span class="src">${esc(it.addressSource || '')}</span></div>`;
       }
       if (it.addrLoading) return '<div class="addr none">📍 正在打开详情页读取地址…</div>';
       const url = it.url || it.ctrip_url;
@@ -568,7 +572,7 @@
       for (const c of S.detail.candidates) { candByPoi[c.ctrip_poi_id] = c; if (c.ctrip_business_id) candByBiz[c.ctrip_business_id] = c; }
       const dec = (key) => S.decisions[key] || '';
       const MJ = (S.merged && S.merged.judge) || {};
-      const nameMatch = new Set(MJ.name_match || []), spotMatch = new Set(MJ.spot_match || []);
+      const nameMatch = new Set(MJ.name_match || []), spotMatch = new Set(MJ.spot_match || []), subMatch = new Set(MJ.sub_match || []);
       const { sights, others, list } = shown();
       const capLabel = S.res ? ({ network: '下拉框结果', 'network?': '接口有返回但没解析出条目', dom: '只读到下拉框文字（没有ID，不能保存）' }[S.res.capture] || S.res.capture) : '';
       const capHint = S.res && S.res.capture !== 'network' && !S.loading
@@ -582,7 +586,7 @@
           <div class="idx">${r.n}</div>
           <div>
             <div class="l1">${r.url ? `<a href="${esc(r.url)}" target="_blank" rel="noopener" title="在新标签页打开携程页面">${esc(r.name)}</a>` : `<b>${esc(r.name)}</b>`}
-              ${/^shop/i.test(r.type || '') ? '' : `<span class="tag ${poi ? 'sight' : ''}">${esc(r.type || '?')}</span>`}${S.autoKept && S.autoKept.has(r.key) && dec(r.key) === 'keep' ? '<span class="tag good" title="地址相近，自动保留">自动</span>' : ''}${nameMatch.has(r.key) ? '<span class="tag good" title="去掉省市区前缀和景区等后缀后与景区名/别名一致">名称一致</span>' : ''}${spotMatch.has(r.key) ? '<span class="tag sight" title="与客户表核心景点一致">核心景点</span>' : ''}${r.level ? `<span class="tag ${r.level === '5A' ? 'g5' : ''}">${esc(r.level)}</span>` : ''}${candTag(c)}</div>
+              ${/^shop/i.test(r.type || '') ? '' : `<span class="tag ${poi ? 'sight' : ''}">${esc(r.type || '?')}</span>`}${S.autoKept && S.autoKept.has(r.key) && dec(r.key) === 'keep' ? '<span class="tag good" title="地址相近，或名称一致/子景点且同省市区，自动保留">自动</span>' : ''}${nameMatch.has(r.key) ? '<span class="tag good" title="去掉省市区前缀和景区等后缀后与景区名/别名一致">名称一致</span>' : ''}${spotMatch.has(r.key) ? '<span class="tag sight" title="与客户表核心景点一致">核心景点</span>' : ''}${subMatch.has(r.key) ? '<span class="tag good" title="「景区名-xx」形式的子景点">子景点</span>' : ''}${r.level ? `<span class="tag ${r.level === '5A' ? 'g5' : ''}">${esc(r.level)}</span>` : ''}${candTag(c)}</div>
             ${poi ? addrLine(r, s, `data-fetch="${r.n}"`) : ''}
             <div class="meta">
               ${[r.cityName, r.districtName].filter(Boolean).length ? `<span>${esc([...new Set([r.cityName, r.districtName].filter(Boolean))].join(' / '))}</span>` : ''}
@@ -613,7 +617,7 @@
           <div class="idx c">${String.fromCharCode(97 + (i % 26))}</div>
           <div>
             <div class="l1">${c.ctrip_url ? `<a href="${esc(c.ctrip_url)}" target="_blank" rel="noopener">${esc(c.ctrip_poi_name)}</a>` : `<b>${esc(c.ctrip_poi_name)}</b>`}
-              ${c.level ? `<span class="tag ${c.level === '5A' ? 'g5' : ''}">${esc(c.level)}</span>` : ''}${S.autoKept && S.autoKept.has(key) && dec(key) === 'keep' ? '<span class="tag good" title="地址相近，自动保留">自动</span>' : ''}${nameMatch.has(key) ? '<span class="tag good">名称一致</span>' : ''}${spotMatch.has(key) ? '<span class="tag sight">核心景点</span>' : ''}<span class="tag">${esc(c.relation_type)}</span><span class="tag">${esc(c.confidence)}</span>
+              ${c.level ? `<span class="tag ${c.level === '5A' ? 'g5' : ''}">${esc(c.level)}</span>` : ''}${S.autoKept && S.autoKept.has(key) && dec(key) === 'keep' ? '<span class="tag good" title="地址相近，或名称一致/子景点且同省市区，自动保留">自动</span>' : ''}${nameMatch.has(key) ? '<span class="tag good">名称一致</span>' : ''}${spotMatch.has(key) ? '<span class="tag sight">核心景点</span>' : ''}${subMatch.has(key) ? '<span class="tag good">子景点</span>' : ''}<span class="tag">${esc(c.relation_type)}</span><span class="tag">${esc(c.confidence)}</span>
               ${c.triage_result ? `<span class="tag ${c.triage_result === '自动删除' ? 'warn' : c.triage_result === '自动保留' ? 'good' : ''}">${esc(c.triage_result)}</span>` : ''}
               ${searched.has(String(c.ctrip_poi_id)) ? '<span class="tag sight">搜索结果中也有</span>' : ''}</div>
             ${addrLine(c, s, `data-cfetch="${i}"`)}
@@ -665,7 +669,7 @@
           <button id="re-search" title="在携程页面重新输入搜索 (R)">重新搜索</button>` : ''}
           ${missingAddr ? `<button id="fill-addr" title="逐个打开携程详情页读取地址">补全地址（${missingAddr}）</button>` : ''}</div>
         ${S.idle ? `<div class="idle-banner"><div class="txt"><b>需要人工审核</b>：${esc(S.idle.reason)}<br><span id="idle-left">${S.idle.left}</span> 秒内无人操作将跳过并进入下一个（之后可在「已跳过」里处理）</div><button id="take-over">我来处理</button></div>` : ''}
-        ${S.autoApprove ? `<div class="auto-banner"><div class="txt"><b>✓ 名称一致且地址相近</b>，<span id="auto-left">${S.autoApprove.left}</span> 秒后自动审核通过并进入下一个<br>${esc(S.autoApprove.reason)}</div><button id="cancel-auto">取消（Esc）</button></div>`
+        ${S.autoApprove ? `<div class="auto-banner"><div class="txt"><b>✓ 名称一致（地址相近 / 门牌一致 / 同省市区）</b>，<span id="auto-left">${S.autoApprove.left}</span> 秒后自动审核通过并进入下一个<br>${esc(S.autoApprove.reason)}</div><button id="cancel-auto">取消（Esc）</button></div>`
           : (MJ.reason && !S.loading && !S.seq && !S.idle && Number(s.approval) !== 1 ? `<div class="judge-note">自动审核：${esc(MJ.approve ? '可通过（已取消或未开启）' : MJ.reason + (S.searches.length > 1 ? `（已搜 ${S.searches.length} 个词）` : ''))}</div>` : '')}
         ${capHint}${resHtml}
         ${dom.length ? `<div class="muted"><button class="link" id="dom-toggle">${S.domOpen ? '收起' : '查看'}下拉框原文（${dom.length}）</button></div>

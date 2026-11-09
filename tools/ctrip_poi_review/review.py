@@ -236,6 +236,7 @@ def enrich(items, poi_key="poiId", biz_key="businessId"):
         it["address"] = a or hit.get("address")
         it["addressSource"] = "搜索结果" if a else hit.get("source")
         it["level"] = hit.get("level")
+        it["district"] = it.get("district") or hit.get("district")  # 携程主档的区县，用于「同省市区」判断
         if it.get("lat") is None and hit.get("lat") is not None:
             it["lat"], it["lng"] = hit["lat"], hit.get("lng")
         if not it.get(poi_key) and hit.get("poiId"):
@@ -247,8 +248,10 @@ def enrich(items, poi_key="poiId", biz_key="businessId"):
 
 def judge_scenic(detail, items):
     """detail = db.scenic_detail()（候选已 enrich）；items = 已 enrich 的搜索结果。"""
-    pool = [dict(key=it.get("key"), poiId=it.get("poiId"), name=it.get("name"), address=it.get("address")) for it in items]
-    pool += [dict(key=f"poi:{c['ctrip_poi_id']}", poiId=c["ctrip_poi_id"], name=c.get("ctrip_poi_name"), address=c.get("address"))
+    pool = [dict(key=it.get("key"), poiId=it.get("poiId"), name=it.get("name"), address=it.get("address"),
+                 city=it.get("cityName"), district=it.get("district"), lat=it.get("lat"), lng=it.get("lng")) for it in items]
+    pool += [dict(key=f"poi:{c['ctrip_poi_id']}", poiId=c["ctrip_poi_id"], name=c.get("ctrip_poi_name"), address=c.get("address"),
+                  city=c.get("city_name"), district=c.get("district") or c.get("ctrip_district_name"), lat=c.get("lat"), lng=c.get("lng"))
              for c in detail.get("candidates") or []]
     return match.judge(detail["scenic"], pool)
 
@@ -674,10 +677,11 @@ async def cmd_auto(args):
                 if args.verbose:
                     print(f"[{i}/{total}] {s['id']} {s['name']}：留给人工（{j['reason'] if j else '无缓存'}）", flush=True)
                 continue
-            keep = [it for it in items if it.get("key") in j["similar"]]
+            want = set(j["similar"]) | set(j.get("name_keep") or [])
+            keep = [it for it in items if it.get("key") in want]
             keep += [dict(poiId=c["ctrip_poi_id"], name=c["ctrip_poi_name"], url=c.get("ctrip_url"), address=c.get("address"),
                           lat=c.get("lat"), lng=c.get("lng"), key=f"poi:{c['ctrip_poi_id']}")
-                     for c in d["candidates"] if f"poi:{c['ctrip_poi_id']}" in j["similar"]]
+                     for c in d["candidates"] if f"poi:{c['ctrip_poi_id']}" in want]
             names, seen = [], set()
             for it in keep:
                 if it["key"] in seen:
