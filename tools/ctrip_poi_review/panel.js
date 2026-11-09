@@ -472,7 +472,7 @@
           <div class="idx">${r.n}</div>
           <div>
             <div class="l1">${r.url ? `<a href="${esc(r.url)}" target="_blank" rel="noopener" title="在新标签页打开携程页面">${esc(r.name)}</a>` : `<b>${esc(r.name)}</b>`}
-              <span class="tag ${poi ? 'sight' : ''}">${esc(r.type || '?')}</span>${S.autoKept && S.autoKept.has(r.key) && dec(r.key) === 'keep' ? '<span class="tag good" title="地址相近，自动保留">自动</span>' : ''}${nameMatch.has(r.key) ? '<span class="tag good" title="去掉省市区前缀和景区等后缀后与景区名/别名一致">名称一致</span>' : ''}${r.level ? `<span class="tag ${r.level === '5A' ? 'g5' : ''}">${esc(r.level)}</span>` : ''}${candTag(c)}</div>
+              ${/^shop/i.test(r.type || '') ? '' : `<span class="tag ${poi ? 'sight' : ''}">${esc(r.type || '?')}</span>`}${S.autoKept && S.autoKept.has(r.key) && dec(r.key) === 'keep' ? '<span class="tag good" title="地址相近，自动保留">自动</span>' : ''}${nameMatch.has(r.key) ? '<span class="tag good" title="去掉省市区前缀和景区等后缀后与景区名/别名一致">名称一致</span>' : ''}${r.level ? `<span class="tag ${r.level === '5A' ? 'g5' : ''}">${esc(r.level)}</span>` : ''}${candTag(c)}</div>
             ${poi ? addrLine(r, s, `data-fetch="${r.n}"`) : ''}
             <div class="meta">
               ${[r.cityName, r.districtName].filter(Boolean).length ? `<span>${esc([...new Set([r.cityName, r.districtName].filter(Boolean))].join(' / '))}</span>` : ''}
