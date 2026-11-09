@@ -135,12 +135,12 @@
     <div style="display:flex;gap:6px;align-items:center"><button id="s-locate">定位搜索框</button><span class="muted" id="s-sel"></span></div>
     <div style="margin-top:8px;display:flex;gap:6px;align-items:center"><button class="primary" id="s-save">保存</button><span class="muted" id="s-state"></span></div>
     <div class="help">搜索方式：程序点击携程页面的搜索框并逐字输入，读取下拉框结果（页面自己发出的请求），不直接调接口。<br>
-      快捷键：<span class="kbd">1</span>–<span class="kbd">9</span> 保留第 n 条（再按取消），<span class="kbd">Shift</span>+数字 不留，<span class="kbd">Enter</span> 完成并下一个，<span class="kbd">S</span> 跳过，<span class="kbd">←</span>/<span class="kbd">→</span> 翻景区，<span class="kbd">R</span> 重新搜索，<span class="kbd">/</span> 自定义关键词，<span class="kbd">Esc</span> 收起。</div>
+      快捷键：<span class="kbd">1</span>–<span class="kbd">9</span> 保留第 n 条（再按取消），<span class="kbd">Shift</span>+数字 取消保留，<span class="kbd">Enter</span> 完成并下一个，<span class="kbd">S</span> 跳过，<span class="kbd">←</span>/<span class="kbd">→</span> 翻景区，<span class="kbd">R</span> 重新搜索，<span class="kbd">/</span> 自定义关键词，<span class="kbd">Esc</span> 收起。</div>
   </div>
   <div class="filters">
     <select id="f-city"></select>
     <select id="f-grade"><option value="">全部等级</option><option>5A</option><option>4A</option><option>5A,4A</option><option>3A</option><option>2A</option><option>1A</option></select>
-    <select id="f-status"><option value="todo">待核对</option><option value="done">已完成</option><option value="skip">已跳过</option><option value="all">全部</option></select>
+    <select id="f-status"><option value="todo">待核对</option><option value="done">已审核</option><option value="skip">已跳过</option><option value="all">全部</option></select>
     <input type="text" id="f-q" placeholder="景区名/ID" style="width:110px">
     <button id="f-apply">筛选</button>
     <button id="export" title="导出最终映射 CSV 到工具目录">导出</button>
@@ -150,7 +150,7 @@
   <footer>
     <input type="text" id="note" placeholder="景区备注（可选）">
     <button id="skip" title="跳过 (S)">跳过</button>
-    <button class="primary" id="done" title="完成并下一个 (Enter)">完成 ↵</button>
+    <button class="primary" id="done" title="审核完成（approval=1）并下一个 (Enter)">审核完成 ↵</button>
   </footer>
 </div>`;
     const $ = (sel) => root.querySelector(sel);
@@ -200,15 +200,14 @@
     }
     async function openScenic(sid) {
       S.detail = await call('detail', { scenic_id: sid });
-      S.decisions = {};
-      for (const d of S.detail.decisions) S.decisions[d.ctrip_key] = d.decision;
+      syncKept();
       S.res = null; S.keyword = ''; S.rawOpen = {}; S.domOpen = false; S.othersOpen = false;
       $('#note').value = (S.detail.status && S.detail.status.note) || '';
       render();
       if (prefs.auto_search) await doSearch(S.detail.scenic.name, false);
     }
     function renderProgress() {
-      const st = { todo: '待核对', done: '已完成', skip: '已跳过', all: '全部' }[(prefs.filters || {}).status] || '';
+      const st = { todo: '待核对', done: '已审核', skip: '已跳过', all: '全部' }[(prefs.filters || {}).status] || '';
       $('#progress').textContent = S.detail ? `${st} 第 ${S.i + 1} / ${S.total}` : `${st} 共 ${S.total}`;
     }
 
@@ -237,25 +236,22 @@
     }
 
     // ---------------------------------------------------------------- decisions
-    async function setDecision(item, decision, source) {
+    function syncKept() {
+      S.decisions = {};
+      for (const k of S.detail.kept || []) S.decisions['poi:' + k.poiId] = 'keep';
+    }
+    // decision: 'keep' = 切换保留，'drop' = 取消保留。结果直接写客户景区表的 ctrip_poi_info
+    async function setDecision(item, decision) {
       if (!item) return;
-      const s = S.detail.scenic, key = item.key;
-      if (!key) { toast('该条没有 poiId/景点ID，无法保存（通常是酒店、目的地等非景点结果）', true); return; }
-      const next = S.decisions[key] === decision ? null : decision;
+      const key = item.key || (item.poiId ? 'poi:' + item.poiId : null);
+      if (!key) { toast('该条没有 poiId，无法保存（通常是酒店、目的地等非 POI 结果）', true); return; }
+      const keep = decision === 'keep' ? S.decisions[key] !== 'keep' : false;
+      if (!keep && S.decisions[key] !== 'keep') return;
       try {
-        const r = await call('decision', {
-          scenic_id: s.id, decision: next, source, keyword: S.keyword || null, reviewer: prefs.reviewer || null,
-          ctrip_poi_id: item.poiId, ctrip_business_id: item.businessId, ctrip_poi_name: item.name, ctrip_type: item.type,
-          ctrip_city_name: item.cityName, ctrip_district_name: item.districtName, ctrip_lat: item.lat, ctrip_lng: item.lng,
-          ctrip_url: item.url, raw_json: item.raw || null,
-        });
-        const k = r.ctrip_key || key;
-        delete S.decisions[key];
-        if (next) S.decisions[k] = next; else delete S.decisions[k];
-        const arr = S.detail.decisions.filter((d) => d.ctrip_key !== k);
-        if (next) arr.push({ ctrip_key: k, ctrip_poi_id: item.poiId, ctrip_business_id: item.businessId, ctrip_poi_name: item.name, source, keyword: S.keyword || null, decision: next });
-        S.detail.decisions = arr;
-        render();
+        const r = await call('poi', { scenic_id: S.detail.scenic.id, keep, poiId: item.poiId || null, businessId: item.businessId || null,
+          poiName: item.name, poiUri: item.url || null });
+        if (!item.poiId && r.poiId) { item.poiId = r.poiId; item.key = 'poi:' + r.poiId; }
+        S.detail.kept = r.kept; syncKept(); render();
       } catch (e) { toast('保存失败：' + e.message, true); }
     }
     function candAsItem(c) {
@@ -271,17 +267,17 @@
         const it = candAsItem(c);
         let d = null;
         if (mode === 'high') d = c.confidence === '高' ? 'keep' : null;
-        if (mode === 'triage') d = c.triage_result === '自动保留' ? 'keep' : c.triage_result === '自动删除' ? 'drop' : null;
-        if (!d || S.decisions[it.key]) continue; // 已人工判过的不覆盖
-        await setDecision(it, d, 'candidate'); n++;
+        if (mode === 'triage') d = c.triage_result === '自动保留' ? 'keep' : null;
+        if (!d || S.decisions[it.key]) continue; // 已保留的不重复
+        await setDecision(it, 'keep'); n++;
       }
-      toast(`已批量写入 ${n} 条`);
+      toast(`已保留 ${n} 条`);
     }
     async function finish(status) {
       if (!S.detail) return;
       try {
         await call('status', { scenic_id: S.detail.scenic.id, status, note: $('#note').value || null, reviewer: prefs.reviewer || null });
-        toast(status === 'done' ? '已完成' : '已跳过');
+        toast(status === 'done' ? '已审核（approval=1）' : '已跳过');
         if ((prefs.filters || {}).status === 'todo') { S.list.splice(S.i, 1); S.total = Math.max(0, S.total - 1); S.i -= 1; }
         await go(1);
       } catch (e) { toast('保存失败：' + e.message, true); }
@@ -382,8 +378,7 @@
             </div>
           </div>
           <div class="acts">
-            <button class="keep ${dec(r.key) === 'keep' ? 'on' : ''}" data-keep="${r.n}" ${r.key ? '' : 'disabled'} title="保留 (${r.n})">保留</button>
-            <button class="drop ${dec(r.key) === 'drop' ? 'on' : ''}" data-drop="${r.n}" ${r.key ? '' : 'disabled'} title="不留 (Shift+${r.n})">不留</button>
+            <button class="keep ${dec(r.key) === 'keep' ? 'on' : ''}" data-keep="${r.n}" ${r.key ? '' : 'disabled'} title="保留 / 取消保留 (${r.n})">${dec(r.key) === 'keep' ? '✓ 已保留' : '保留'}</button>
           </div>
           ${S.rawOpen[r.key || r.name] ? `<pre>${esc(JSON.stringify(r.raw, null, 2))}</pre>` : ''}
         </div>`;
@@ -412,13 +407,12 @@
               <span>${esc(c.match_evidence || '')}</span>${c.also_in_scenic_ids ? `<span class="tag warn">也挂在 ${esc(c.also_in_scenic_ids)}</span>` : ''}</div>
           </div>
           <div class="acts">
-            <button class="keep ${dec(key) === 'keep' ? 'on' : ''}" data-ckeep="${i}">保留</button>
-            <button class="drop ${dec(key) === 'drop' ? 'on' : ''}" data-cdrop="${i}">不留</button>
+            <button class="keep ${dec(key) === 'keep' ? 'on' : ''}" data-ckeep="${i}" title="保留 / 取消保留">${dec(key) === 'keep' ? '✓ 已保留' : '保留'}</button>
           </div></div>`;
       }).join('') : '<div class="muted">无离线候选（未导入候选表，或规则没匹配到）</div>';
 
       const shownKeys = new Set([...((S.res && S.res.items) || []).map((r) => r.key), ...S.detail.candidates.map((c) => 'poi:' + c.ctrip_poi_id)]);
-      const other = S.detail.decisions.filter((d) => !shownKeys.has(d.ctrip_key));
+      const other = (S.detail.kept || []).filter((k) => !shownKeys.has('poi:' + k.poiId));
       const keptCount = Object.values(S.decisions).filter((v) => v === 'keep').length;
       const dom = (S.res && S.res.dom) || [];
       const missingAddr = sights.filter((r) => !r.address && r.url).length + S.detail.candidates.filter((c) => !c.address && c.ctrip_url).length;
@@ -427,7 +421,7 @@
       b.innerHTML = `
         <div class="card">
           <div class="ttl"><h3>${esc(s.name)}</h3><span class="tag ${s.grade === '5A' ? 'g5' : ''}">${esc(s.grade || '')}</span>
-            ${st ? `<span class="tag ${st.status === 'done' ? 'good' : 'warn'}">${st.status === 'done' ? '已完成' : '已跳过'}</span>` : ''}
+            ${Number(s.approval) === 1 ? '<span class="tag good">已审核</span>' : st && st.status === 'skip' ? '<span class="tag warn">已跳过</span>' : '<span class="tag">未审核</span>'}
             <span class="kept">已保留 <b>${keptCount}</b> 个携程POI</span></div>
           <div class="kv">
             <span>景区ID</span><div>${esc(s.id)}</div>
@@ -436,6 +430,7 @@
             <span>坐标</span><div>${slat != null ? `${slng}, ${slat}` : '—'}</div>
             ${s.alias ? `<span>别名</span><div>${esc(s.alias)}</div>` : ''}
             ${s.core_spots ? `<span>核心景点</span><div>${esc(s.core_spots)}</div>` : ''}
+            <span>已保留</span><div>${(S.detail.kept || []).length ? (S.detail.kept || []).map((k) => `<span class="tag good">${esc(k.poiName || k.poiId)}</span>`).join(' ') : '<span class="muted">（无）</span>'}</div>
           </div>
         </div>
         <div class="tools">${chips}</div>
@@ -451,9 +446,12 @@
         ${dom.length ? `<div class="muted"><button class="link" id="dom-toggle">${S.domOpen ? '收起' : '查看'}下拉框原文（${dom.length}）</button></div>
           ${S.domOpen ? '<pre style="grid-column:auto">' + esc(dom.map((d) => d.text + (d.href ? '  ' + d.href : '')).join('\n')) + '</pre>' : ''}` : ''}
         <div class="sec"><b>离线候选（${S.detail.candidates.length}）</b>
-          ${S.detail.candidates.length ? '<button id="apply-triage" title="自动保留→保留，自动删除→不留；已人工判过的不覆盖">采纳自动分流</button><button id="apply-high">高置信全保留</button>' : ''}</div>
+          ${S.detail.candidates.length ? '<button id="apply-triage" title="把「自动保留」的候选都保留">采纳自动保留</button><button id="apply-high">高置信全保留</button>' : ''}</div>
         ${candHtml}
-        ${other.length ? `<div class="sec"><b>其他已判定（${other.length}）</b></div>` + other.map((d) => `<div class="row ${d.decision}"><div></div><div><div class="l1"><b>${esc(d.ctrip_poi_name || d.ctrip_key)}</b></div><div class="meta"><span>${esc(d.ctrip_key)}</span><span>${esc(d.source)}</span><span>${esc(d.keyword || '')}</span></div></div><div></div></div>`).join('') : ''}`;
+        ${other.length ? `<div class="sec"><b>其他已保留（不在当前搜索结果里，${other.length}）</b></div>` + other.map((k) => `<div class="row keep"><div></div><div>
+            <div class="l1">${k.poiUri ? `<a href="${esc(k.poiUri)}" target="_blank" rel="noopener">${esc(k.poiName || k.poiId)}</a>` : `<b>${esc(k.poiName || k.poiId)}</b>`}</div>
+            <div class="meta"><span>poiId ${esc(k.poiId)}</span></div></div>
+            <div class="acts"><button class="keep on" data-unkeep="${esc(k.poiId)}" title="取消保留">✓ 已保留</button></div></div>`).join('') : ''}`;
     }
 
     // ---------------------------------------------------------------- events
@@ -498,10 +496,9 @@
         else if (t.id === 'apply-high') await applyOffline('high');
         else if (ds.kw) await doSearch(ds.kw, false);
         else if (ds.raw) { const r = byN(ds.raw); const k = r.key || r.name; S.rawOpen[k] = !S.rawOpen[k]; render(); }
-        else if (ds.keep) await setDecision(byN(ds.keep), 'keep', 'search');
-        else if (ds.drop) await setDecision(byN(ds.drop), 'drop', 'search');
-        else if (ds.ckeep) await setDecision(candAsItem(S.detail.candidates[ds.ckeep]), 'keep', 'candidate');
-        else if (ds.cdrop) await setDecision(candAsItem(S.detail.candidates[ds.cdrop]), 'drop', 'candidate');
+        else if (ds.keep) await setDecision(byN(ds.keep), 'keep');
+        else if (ds.ckeep) await setDecision(candAsItem(S.detail.candidates[ds.ckeep]), 'keep');
+        else if (ds.unkeep) await setDecision({ key: 'poi:' + ds.unkeep, poiId: ds.unkeep }, 'drop');
       } catch (e) { toast(e.message, true); }
     });
     root.addEventListener('change', async (ev) => {
@@ -520,7 +517,7 @@
       try {
         if (m) {
           const r = byN(m[1]);
-          if (r) { ev.preventDefault(); ev.stopPropagation(); await setDecision(r, ev.shiftKey ? 'drop' : 'keep', 'search'); }
+          if (r) { ev.preventDefault(); ev.stopPropagation(); await setDecision(r, ev.shiftKey ? 'drop' : 'keep'); }
         } else if (ev.key === 'Enter') { ev.preventDefault(); await finish('done'); }
         else if (ev.key === 's' || ev.key === 'S') { ev.preventDefault(); await finish('skip'); }
         else if (ev.key === 'r' || ev.key === 'R') { ev.preventDefault(); if (S.keyword) await doSearch(S.keyword, true); }

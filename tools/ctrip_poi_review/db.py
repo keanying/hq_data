@@ -31,7 +31,12 @@ def ident(name):
 
 SCENIC_TABLE = ident(ENV("SCENIC_TABLE", "pft_ai_dim_prd_scenic_base_yr_f"))
 CANDIDATE_TABLE = ident(ENV("CANDIDATE_TABLE", "scenic_ctrip_candidate"))
-REVIEW_TABLE = ident(ENV("REVIEW_TABLE", "scenic_ctrip_poi_review"))
+REVIEW_TABLE = ident(ENV("REVIEW_TABLE", "scenic_ctrip_poi_review"))  # 旧版明细表，仅用于一次性迁移
+POI_INFO_NAME = ENV("POI_INFO_COL", "ctrip_poi_info")
+POI_INFO = ident(POI_INFO_NAME)  # 客户景区表上存结果的字段：[{"poiId":..,"poiName":..,"poiUri":..}]
+APPROVAL_NAME = ENV("APPROVAL_COL", "approval")
+APPROVAL = ident(APPROVAL_NAME)  # 客户景区表上的审核状态：1-已审核 0-未审核
+APPROVED = f"COALESCE(s.{APPROVAL}, 0) = 1"
 STATUS_TABLE = ident(ENV("STATUS_TABLE", "scenic_ctrip_review_status"))
 CACHE_TABLE = ident(ENV("CACHE_TABLE", "scenic_ctrip_search_cache"))
 MASTER_TABLE = ident(ENV("CTRIP_MASTER_TABLE", "ctrip_attraction_master"))
@@ -48,28 +53,6 @@ DEFAULT_CITIES = [c for c in ENV("CITIES", "北京市,上海市,广州市,深圳
 GRADE_ORDER = f"FIELD(s.{C['grade']},'5A','4A','3A','2A','1A')"
 
 DDL = [
-    f"""CREATE TABLE IF NOT EXISTS {REVIEW_TABLE} (
-  id BIGINT AUTO_INCREMENT PRIMARY KEY,
-  scenic_id VARCHAR(64) NOT NULL COMMENT '客户景区ID',
-  ctrip_key VARCHAR(128) NOT NULL COMMENT '去重键：poi:<poiId> 或 biz:<businessId>',
-  ctrip_poi_id VARCHAR(32) NULL COMMENT '携程 poiId',
-  ctrip_business_id VARCHAR(32) NULL COMMENT '携程景点 businessId（url 中的数字）',
-  ctrip_poi_name VARCHAR(255) NULL COMMENT '携程名称',
-  ctrip_type VARCHAR(64) NULL COMMENT '携程搜索结果 type，如 sight',
-  ctrip_city_name VARCHAR(64) NULL,
-  ctrip_district_name VARCHAR(64) NULL,
-  ctrip_lat DOUBLE NULL, ctrip_lng DOUBLE NULL,
-  ctrip_url VARCHAR(512) NULL,
-  source VARCHAR(16) NOT NULL COMMENT 'search=携程页面搜索 dom=下拉DOM candidate=离线候选',
-  keyword VARCHAR(255) NULL COMMENT '搜索关键词',
-  decision VARCHAR(8) NOT NULL COMMENT 'keep=保留 drop=不留',
-  raw_json TEXT NULL COMMENT '携程返回的原始条目',
-  reviewer VARCHAR(64) NULL,
-  created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-  updated_at DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
-  UNIQUE KEY uk_scenic_ctrip (scenic_id, ctrip_key),
-  KEY idx_poi (ctrip_poi_id)
-) DEFAULT CHARSET=utf8mb4 COMMENT='景区-携程POI 人工核对结果'""",
     f"""CREATE TABLE IF NOT EXISTS {STATUS_TABLE} (
   scenic_id VARCHAR(64) PRIMARY KEY,
   status VARCHAR(8) NOT NULL COMMENT 'done=已核对 skip=跳过',
@@ -168,9 +151,72 @@ def init_db():
         clause = charset_clause(cur)
         for ddl in DDL:
             cur.execute(ddl.replace("DEFAULT CHARSET=utf8mb4", clause))
-        for t, col in ((REVIEW_TABLE, "scenic_id"), (STATUS_TABLE, "scenic_id"), (CANDIDATE_TABLE, "scenic_id"),
+        for t, col in ((STATUS_TABLE, "scenic_id"), (CANDIDATE_TABLE, "scenic_id"),
                        (CACHE_TABLE, "keyword"), (ADDR_TABLE, "ctrip_key")):
             align_collation(cur, t, col)
+    ensure_poi_info_column()
+    with cursor() as cur:  # 旧版「已完成」状态同步到 approval
+        cur.execute(f"""UPDATE {SCENIC_TABLE} s JOIN {STATUS_TABLE} st ON st.scenic_id = s.{C['id']}
+                        SET s.{APPROVAL} = 1 WHERE st.status = 'done' AND COALESCE(s.{APPROVAL}, 0) = 0""")
+    n = migrate_review_table()
+    if n:
+        print(f"已把旧表 {REVIEW_TABLE} 里 {n} 个景区的「保留」结果迁移到 {SCENIC_TABLE}.{POI_INFO}", flush=True)
+
+
+def ensure_poi_info_column():
+    """客户景区表上没有结果字段就加：ctrip_poi_info（LONGTEXT，JSON 数组）、approval（审核状态 1/0）。"""
+    schema, table = _scenic_schema_table()
+    specs = [
+        (POI_INFO_NAME, f"{POI_INFO} LONGTEXT NULL COMMENT '携程POI列表 JSON：[{{\"poiId\":123,\"poiName\":\"名字\",\"poiUri\":\"链接\"}}]；空=未核对，[]=核对过无匹配'"),
+        (APPROVAL_NAME, f"{APPROVAL} TINYINT NOT NULL DEFAULT 0 COMMENT '审核状态：1-已审核 0-未审核'"),
+    ]
+    added = []
+    with cursor() as cur:
+        for name, col_sql in specs:
+            cur.execute("""SELECT 1 FROM information_schema.columns WHERE table_schema=%s AND table_name=%s AND column_name=%s""",
+                        (schema, table, name))
+            if cur.fetchone():
+                continue
+            sql = f"ALTER TABLE {SCENIC_TABLE} ADD COLUMN {col_sql}"
+            try:
+                cur.execute(sql)
+            except Exception as e:
+                raise RuntimeError(f"给 {SCENIC_TABLE} 加字段 {name} 失败（{e}）。请让 DBA 执行：{sql}") from e
+            print(f"已在 {SCENIC_TABLE} 上新增字段 `{name}`", flush=True)
+            added.append(name)
+    return added
+
+
+def _parse_info(text):
+    if not text:
+        return []
+    try:
+        v = json.loads(text)
+        return [x for x in v if isinstance(x, dict) and x.get("poiId") not in (None, "")] if isinstance(v, list) else []
+    except Exception:
+        return []
+
+
+def _poi_obj(poi_id, name, uri):
+    pid = str(poi_id).strip()
+    return {"poiId": int(pid) if pid.isdigit() else pid, "poiName": name or "", "poiUri": uri or ""}
+
+
+def migrate_review_table():
+    """旧版把结果存在 scenic_ctrip_poi_review；把其中 keep 的搬到 ctrip_poi_info（只搬字段还是空的景区）。"""
+    with cursor() as cur:
+        if not table_exists(cur, REVIEW_TABLE):
+            return 0
+        cur.execute(f"""SELECT r.scenic_id, r.ctrip_poi_id, r.ctrip_poi_name, r.ctrip_url FROM {REVIEW_TABLE} r
+                        JOIN {SCENIC_TABLE} s ON s.{C['id']} = r.scenic_id
+                        WHERE r.decision='keep' AND r.ctrip_poi_id IS NOT NULL AND s.{POI_INFO} IS NULL ORDER BY r.id""")
+        by = {}
+        for r in cur.fetchall():
+            by.setdefault(r["scenic_id"], []).append(_poi_obj(r["ctrip_poi_id"], r["ctrip_poi_name"], r["ctrip_url"]))
+        for sid, lst in by.items():
+            cur.execute(f"UPDATE {SCENIC_TABLE} SET {POI_INFO}=%s WHERE {C['id']}=%s AND {POI_INFO} IS NULL",
+                        (json.dumps(lst, ensure_ascii=False), sid))
+        return len(by)
 
 
 def table_exists(cur, quoted):
@@ -219,7 +265,7 @@ def health():
 def cities():
     with cursor() as cur:
         cur.execute(f"""SELECT s.{C['province']} province, s.{C['city']} city, COUNT(*) n,
-                        CAST(SUM(st.status IS NOT NULL) AS SIGNED) reviewed
+                        CAST(SUM({APPROVED}) AS SIGNED) reviewed
                         FROM {SCENIC_TABLE} s LEFT JOIN {STATUS_TABLE} st ON st.scenic_id = s.{C['id']}
                         GROUP BY 1,2 ORDER BY n DESC""")
         return list(cur.fetchall())
@@ -237,9 +283,11 @@ def _filters(f):
         where.append(f"s.{C['grade']} IN ({','.join(['%s'] * len(g))})"); params += g
     st = f.get("status") or "todo"
     if st == "todo":
-        where.append("st.status IS NULL")
-    elif st in ("done", "skip"):
-        where.append("st.status = %s"); params.append(st)
+        where.append(f"NOT {APPROVED} AND (st.status IS NULL OR st.status <> 'skip')")
+    elif st == "done":
+        where.append(APPROVED)
+    elif st == "skip":
+        where.append(f"NOT {APPROVED} AND st.status = 'skip'")
     if f.get("q"):
         where.append(f"(s.{C['name']} LIKE %s OR s.{C['alias']} LIKE %s OR s.{C['id']} = %s)")
         params += [f"%{f['q']}%", f"%{f['q']}%", f["q"]]
@@ -256,7 +304,7 @@ def scenic_list(f, offset=0, limit=200):
     with cursor() as cur:
         cur.execute(f"SELECT COUNT(*) n {base}", params)
         total = cur.fetchone()["n"]
-        cur.execute(f"""SELECT {_select()}, st.status, st.note
+        cur.execute(f"""SELECT {_select()}, COALESCE(s.{APPROVAL}, 0) approval, st.status, st.note
                         {base} ORDER BY s.{C['city']}, {GRADE_ORDER}, s.{C['id']} LIMIT %s OFFSET %s""",
                     params + [int(limit), int(offset)])
         return dict(total=total, offset=offset, items=list(cur.fetchall()))
@@ -264,79 +312,80 @@ def scenic_list(f, offset=0, limit=200):
 
 def scenic_detail(sid):
     with cursor() as cur:
-        cur.execute(f"SELECT {_select()} FROM {SCENIC_TABLE} s WHERE s.{C['id']}=%s", (sid,))
+        cur.execute(f"SELECT {_select()}, s.{POI_INFO} AS poi_info, COALESCE(s.{APPROVAL}, 0) AS approval FROM {SCENIC_TABLE} s WHERE s.{C['id']}=%s", (sid,))
         s = cur.fetchone()
         if not s:
             raise KeyError(f"景区不存在: {sid}")
+        kept = _parse_info(s.pop("poi_info"))
         cur.execute(f"SELECT status, note, reviewer, updated_at FROM {STATUS_TABLE} WHERE scenic_id=%s", (sid,))
         st = cur.fetchone()
         cands = []
         if table_exists(cur, CANDIDATE_TABLE):
             cur.execute(f"SELECT * FROM {CANDIDATE_TABLE} WHERE scenic_id=%s ORDER BY FIELD(confidence,'高','中','低'), image_qty DESC", (sid,))
             cands = list(cur.fetchall())
-        cur.execute(f"""SELECT ctrip_key, ctrip_poi_id, ctrip_business_id, ctrip_poi_name, ctrip_type, ctrip_url,
-                        source, keyword, decision, reviewer, updated_at FROM {REVIEW_TABLE} WHERE scenic_id=%s""", (sid,))
-        decs = list(cur.fetchall())
-    _jsonable([st] + cands + decs)
-    return dict(scenic=s, status=st, candidates=cands, decisions=decs)
+    _jsonable([st] + cands)
+    return dict(scenic=s, status=st, candidates=cands, kept=kept)
 
 
 def _poi_from_business(cur, biz):
-    """下拉 DOM 只有景点ID(businessId) 时，尽量从候选表/历史判定里补 poiId，避免同一 POI 两个键。"""
-    if table_exists(cur, CANDIDATE_TABLE):
-        cur.execute(f"SELECT ctrip_poi_id FROM {CANDIDATE_TABLE} WHERE ctrip_business_id=%s LIMIT 1", (biz,))
-        r = cur.fetchone()
-        if r:
-            return r["ctrip_poi_id"]
-    cur.execute(f"SELECT ctrip_poi_id FROM {REVIEW_TABLE} WHERE ctrip_business_id=%s AND ctrip_poi_id IS NOT NULL LIMIT 1", (biz,))
-    r = cur.fetchone()
-    return r["ctrip_poi_id"] if r else None
+    """只有景点ID(businessId) 时，从携程主档/候选表补 poiId。"""
+    for t, col in ((MASTER_TABLE, "ctrip_poi_id"), (CANDIDATE_TABLE, "ctrip_poi_id")):
+        if table_exists(cur, t):
+            cur.execute(f"SELECT {col} AS p FROM {t} WHERE ctrip_business_id=%s LIMIT 1", (biz,))
+            r = cur.fetchone()
+            if r and r["p"]:
+                return r["p"]
+    return None
 
 
-def set_decision(d):
-    if not d.get("scenic_id"):
+def set_poi(d):
+    """保留 / 取消保留一个携程 POI：直接改客户景区表的 ctrip_poi_info（JSON 数组），返回最新列表。"""
+    sid = d.get("scenic_id")
+    if not sid:
         raise ValueError("scenic_id 必填")
-    with cursor() as cur:
-        if not d.get("ctrip_poi_id") and d.get("ctrip_business_id"):
-            d["ctrip_poi_id"] = _poi_from_business(cur, d["ctrip_business_id"])
-        if d.get("ctrip_poi_id"):
-            key = f"poi:{d['ctrip_poi_id']}"
-        elif d.get("ctrip_business_id"):
-            key = f"biz:{d['ctrip_business_id']}"
-        else:
-            raise ValueError("需要 poiId 或 景点ID")
-        if d.get("decision") in (None, "", "clear"):
-            cur.execute(f"DELETE FROM {REVIEW_TABLE} WHERE scenic_id=%s AND ctrip_key=%s", (d["scenic_id"], key))
-            return dict(ok=True, cleared=True, ctrip_key=key)
-        if d["decision"] not in ("keep", "drop"):
-            raise ValueError("decision 只能是 keep/drop")
-        raw = d.get("raw_json")
-        if raw is not None and not isinstance(raw, str):
-            raw = json.dumps(raw, ensure_ascii=False)
-        cols = ["scenic_id", "ctrip_key", "ctrip_poi_id", "ctrip_business_id", "ctrip_poi_name", "ctrip_type",
-                "ctrip_city_name", "ctrip_district_name", "ctrip_lat", "ctrip_lng", "ctrip_url", "source",
-                "keyword", "decision", "raw_json", "reviewer"]
-        vals = [d["scenic_id"], key] + [d.get(c) for c in cols[2:14]] + [raw, d.get("reviewer")]
-        vals = [None if v == "" else v for v in vals]
-        upd = ", ".join(f"{c}=VALUES({c})" for c in cols[2:] if c not in ("source", "keyword")) + \
-            ", source=COALESCE(source, VALUES(source)), keyword=COALESCE(VALUES(keyword), keyword)"
-        cur.execute(f"INSERT INTO {REVIEW_TABLE} ({','.join(cols)}) VALUES ({','.join(['%s'] * len(cols))}) "
-                    f"ON DUPLICATE KEY UPDATE {upd}", vals)
-    return dict(ok=True, ctrip_key=key)
+    conn = pymysql.connect(**{**DB, "autocommit": False})
+    try:
+        with conn.cursor() as cur:
+            poi = d.get("poiId")
+            if not poi and d.get("businessId"):
+                poi = _poi_from_business(cur, d["businessId"])
+            if not poi:
+                raise ValueError("这条结果没有 poiId，无法保存")
+            cur.execute(f"SELECT {POI_INFO} AS v FROM {SCENIC_TABLE} WHERE {C['id']}=%s FOR UPDATE", (sid,))
+            row = cur.fetchone()
+            if row is None:
+                raise KeyError(f"景区不存在: {sid}")
+            lst = [x for x in _parse_info(row["v"]) if str(x.get("poiId")) != str(poi)]
+            if d.get("keep"):
+                lst.append(_poi_obj(poi, d.get("poiName"), d.get("poiUri")))
+            cur.execute(f"UPDATE {SCENIC_TABLE} SET {POI_INFO}=%s WHERE {C['id']}=%s", (json.dumps(lst, ensure_ascii=False), sid))
+        conn.commit()
+        return dict(ok=True, kept=lst, poiId=str(poi))
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        conn.close()
 
 
 def set_status(d):
-    if not d.get("scenic_id"):
+    """done=审核完成（approval=1）；skip=跳过（approval=0，记在进度表）；todo=恢复未审核。备注/核对人记在进度表。"""
+    sid = d.get("scenic_id")
+    if not sid:
         raise ValueError("scenic_id 必填")
+    status = d.get("status") or "todo"
+    if status not in ("done", "skip", "todo"):
+        raise ValueError("status 只能是 done/skip/todo")
     with cursor() as cur:
-        if d.get("status") in (None, "", "todo"):
-            cur.execute(f"DELETE FROM {STATUS_TABLE} WHERE scenic_id=%s", (d["scenic_id"],))
-        elif d["status"] in ("done", "skip"):
+        if status == "todo":
+            cur.execute(f"DELETE FROM {STATUS_TABLE} WHERE scenic_id=%s", (sid,))
+        else:
             cur.execute(f"""INSERT INTO {STATUS_TABLE} (scenic_id, status, note, reviewer) VALUES (%s,%s,%s,%s)
                             ON DUPLICATE KEY UPDATE status=VALUES(status), note=VALUES(note), reviewer=VALUES(reviewer)""",
-                        (d["scenic_id"], d["status"], d.get("note"), d.get("reviewer")))
-        else:
-            raise ValueError("status 只能是 done/skip/todo")
+                        (sid, status, d.get("note"), d.get("reviewer")))
+        cur.execute(f"UPDATE {SCENIC_TABLE} SET {APPROVAL}=%s WHERE {C['id']}=%s", (1 if status == "done" else 0, sid))
+        if status == "done":  # 审核完但一个都没保留：写 []，和「未核对」(NULL) 区分开
+            cur.execute(f"UPDATE {SCENIC_TABLE} SET {POI_INFO}='[]' WHERE {C['id']}=%s AND {POI_INFO} IS NULL", (sid,))
     return dict(ok=True)
 
 
@@ -360,20 +409,20 @@ def cache_put(keyword, result):
 
 
 def export_rows():
-    """每个景区一行：保留的携程 POI 列表（| 分隔）。"""
+    """每个景区一行（只含已写过 ctrip_poi_info 的）：poiId / 名称列表（| 分隔）+ 原始 JSON。"""
     with cursor() as cur:
-        cur.execute("SET SESSION group_concat_max_len = 1000000")
-        cur.execute(f"""SELECT r.scenic_id, s.{C['name']} scenic_name, s.{C['city']} city_name, st.status,
-                        COUNT(*) kept_qty,
-                        GROUP_CONCAT(COALESCE(r.ctrip_poi_id,'') ORDER BY r.id SEPARATOR '|') ctrip_poi_id_list,
-                        GROUP_CONCAT(COALESCE(r.ctrip_business_id,'') ORDER BY r.id SEPARATOR '|') ctrip_business_id_list,
-                        GROUP_CONCAT(COALESCE(r.ctrip_poi_name,'') ORDER BY r.id SEPARATOR '|') ctrip_poi_name_list
-                        FROM {REVIEW_TABLE} r
-                        LEFT JOIN {SCENIC_TABLE} s ON s.{C['id']} = r.scenic_id
-                        LEFT JOIN {STATUS_TABLE} st ON st.scenic_id = r.scenic_id
-                        WHERE r.decision='keep' GROUP BY r.scenic_id, s.{C['name']}, s.{C['city']}, st.status
-                        ORDER BY s.{C['city']}, r.scenic_id""")
-        return list(cur.fetchall())
+        cur.execute(f"""SELECT s.{C['id']} scenic_id, s.{C['name']} scenic_name, s.{C['city']} city_name,
+                        COALESCE(s.{APPROVAL}, 0) approval, st.note, s.{POI_INFO} info
+                        FROM {SCENIC_TABLE} s LEFT JOIN {STATUS_TABLE} st ON st.scenic_id = s.{C['id']}
+                        WHERE s.{POI_INFO} IS NOT NULL ORDER BY s.{C['city']}, s.{C['id']}""")
+        rows = list(cur.fetchall())
+    out = []
+    for r in rows:
+        lst = _parse_info(r.pop("info"))
+        out.append(dict(r, kept_qty=len(lst), ctrip_poi_id_list="|".join(str(x["poiId"]) for x in lst),
+                        ctrip_poi_name_list="|".join(x.get("poiName") or "" for x in lst),
+                        ctrip_poi_info=json.dumps(lst, ensure_ascii=False)))
+    return out
 
 
 def lookup_addresses(poi_ids, biz_ids):

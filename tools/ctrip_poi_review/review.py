@@ -440,13 +440,17 @@ def check_db():
         for p in problems:
             print("  - " + p, file=sys.stderr)
         raise SystemExit(1)
-    db.init_db()
+    try:
+        db.init_db()
+    except RuntimeError as e:
+        print(f"MySQL 自检没通过：{e}", file=sys.stderr)
+        raise SystemExit(1)
     h = db.health()
     try:  # 关联查询也跑一遍，排序规则/权限之类的问题在启动时就暴露
         db.cities()
         db.scenic_list({}, 0, 1)
     except Exception as e:
-        print(f"MySQL 自检没通过：关联查询出错 {type(e).__name__}: {e}", file=sys.stderr)
+        print(f"MySQL 自检没通过：查询出错 {type(e).__name__}: {e}", file=sys.stderr)
         raise SystemExit(1)
     print(f"MySQL 正常：客户景区表 {db.SCENIC_TABLE} 共 {h['scenic_rows']} 行；默认城市 {','.join(h['cities']) or '全部'}；"
           f"离线候选表{'已导入' if h['candidate_table'] else '未导入（可选）'}", flush=True)
@@ -498,8 +502,8 @@ async def setup_run(pw, args):
                     raise ValueError(f"详情页里没找到地址（页面标题：{(res or {}).get('title')}；可能要登录或验证）")
                 db.addr_put(payload.get("poiId"), payload.get("businessId"), payload.get("name"), res["address"], payload.get("url"))
                 return dict(address=res["address"], addressSource="详情页")
-            if method == "decision":
-                return db.set_decision(payload)
+            if method == "poi":
+                return db.set_poi(payload)
             if method == "status":
                 return db.set_status(payload)
             if method == "prefs":
@@ -595,7 +599,7 @@ async def cmd_prefetch(args):
 
 
 def write_csv(path, rows):
-    cols = ["scenic_id", "scenic_name", "city_name", "status", "kept_qty", "ctrip_poi_id_list", "ctrip_business_id_list", "ctrip_poi_name_list"]
+    cols = ["scenic_id", "scenic_name", "city_name", "approval", "kept_qty", "ctrip_poi_id_list", "ctrip_poi_name_list", "ctrip_poi_info", "note"]
     with open(path, "w", encoding="utf-8-sig", newline="") as f:
         w = csv.DictWriter(f, fieldnames=cols)
         w.writeheader()

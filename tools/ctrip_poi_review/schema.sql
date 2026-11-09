@@ -1,36 +1,18 @@
 -- 携程 POI 人工核对工具用到的表（review.py 启动时会自动 CREATE IF NOT EXISTS，并把排序规则对齐客户景区表；这里供 DBA 预建/审阅）
 -- 客户景区表（只读）：pft_ai_dim_prd_scenic_base_yr_f，字段映射见 README
 
-CREATE TABLE IF NOT EXISTS scenic_ctrip_poi_review (
-  id BIGINT AUTO_INCREMENT PRIMARY KEY,
-  scenic_id VARCHAR(64) NOT NULL COMMENT '客户景区ID',
-  ctrip_key VARCHAR(128) NOT NULL COMMENT '去重键：poi:<poiId> 或 biz:<businessId>',
-  ctrip_poi_id VARCHAR(32) NULL COMMENT '携程 poiId',
-  ctrip_business_id VARCHAR(32) NULL COMMENT '携程景点 businessId（url 中的数字）',
-  ctrip_poi_name VARCHAR(255) NULL COMMENT '携程名称',
-  ctrip_type VARCHAR(64) NULL COMMENT '携程搜索结果 type，如 sight',
-  ctrip_city_name VARCHAR(64) NULL,
-  ctrip_district_name VARCHAR(64) NULL,
-  ctrip_lat DOUBLE NULL, ctrip_lng DOUBLE NULL,
-  ctrip_url VARCHAR(512) NULL,
-  source VARCHAR(16) NOT NULL COMMENT 'search=携程页面搜索 dom=下拉DOM candidate=离线候选',
-  keyword VARCHAR(255) NULL COMMENT '搜索关键词',
-  decision VARCHAR(8) NOT NULL COMMENT 'keep=保留 drop=不留',
-  raw_json TEXT NULL COMMENT '携程返回的原始条目',
-  reviewer VARCHAR(64) NULL,
-  created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-  updated_at DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
-  UNIQUE KEY uk_scenic_ctrip (scenic_id, ctrip_key),
-  KEY idx_poi (ctrip_poi_id)
-) DEFAULT CHARSET=utf8mb4 COMMENT='景区-携程POI 人工核对结果';
+-- 结果直接写在客户景区表上（review.py 启动时没有会自动加）：
+ALTER TABLE pft_ai_dim_prd_scenic_base_yr_f
+  ADD COLUMN ctrip_poi_info LONGTEXT NULL COMMENT '携程POI列表 JSON：[{"poiId":123,"poiName":"名字","poiUri":"链接"}]；空=未核对，[]=核对过无匹配',
+  ADD COLUMN approval TINYINT NOT NULL DEFAULT 0 COMMENT '审核状态：1-已审核 0-未审核';
 
 CREATE TABLE IF NOT EXISTS scenic_ctrip_review_status (
   scenic_id VARCHAR(64) PRIMARY KEY,
-  status VARCHAR(8) NOT NULL COMMENT 'done=已核对 skip=跳过',
+  status VARCHAR(8) NOT NULL COMMENT 'done=已审核 skip=跳过（审核状态以客户景区表 approval 为准）',
   note VARCHAR(500) NULL,
   reviewer VARCHAR(64) NULL,
   updated_at DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
-) DEFAULT CHARSET=utf8mb4 COMMENT='景区核对进度';
+) DEFAULT CHARSET=utf8mb4 COMMENT='景区核对进度：跳过/备注/核对人';
 
 CREATE TABLE IF NOT EXISTS scenic_ctrip_search_cache (
   keyword VARCHAR(255) PRIMARY KEY COMMENT '搜索关键词',
@@ -69,5 +51,4 @@ CREATE TABLE IF NOT EXISTS scenic_ctrip_candidate (
   PRIMARY KEY (scenic_id, ctrip_poi_id), KEY idx_poi (ctrip_poi_id)
 ) DEFAULT CHARSET=utf8mb4 COMMENT='景区-携程POI 离线候选（规则匹配）';
 
--- 最终结果：景区 -> 携程 poiId 列表
--- SELECT scenic_id, GROUP_CONCAT(ctrip_poi_id SEPARATOR '|') FROM scenic_ctrip_poi_review WHERE decision='keep' GROUP BY scenic_id;
+-- 最终结果：SELECT scenic_id, approval, ctrip_poi_info FROM pft_ai_dim_prd_scenic_base_yr_f WHERE approval = 1;

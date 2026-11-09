@@ -1,7 +1,12 @@
 # 携程 POI 人工核对工具（景区 ↔ 携程POI）
 
 把 MySQL 里的客户景区（`pft_ai_dim_prd_scenic_base_yr_f`）逐个拿出来，**用 Playwright 打开真实浏览器，模拟人在携程搜索框里逐字输入景区名**，
-读取下拉框里的结果，在页面右侧的核对面板上点「保留 / 不留」，结果直接写回 MySQL，最终得到 `scenic_id → ctrip_poi_id 列表`。
+读取下拉框里的结果，在页面右侧的核对面板上点「保留」，结果直接写回客户景区表的两个字段：
+
+- `ctrip_poi_info`（LONGTEXT）：保留的携程 POI 列表，`[{"poiId":91765,"poiName":"召稼楼古镇","poiUri":"https://you.ctrip.com/sight/…/110249.html"}]`；NULL=还没核对，`[]`=审核过但没有匹配的 POI
+- `approval`（TINYINT）：审核状态，1-已审核 0-未审核
+
+两个字段首次运行时自动 `ALTER TABLE … ADD COLUMN`（没有 ALTER 权限时，终端会打印要请 DBA 执行的 SQL）。
 
 **不直接调用携程接口**：搜索请求都是携程页面在输入后自己发出的（和人工在搜索框打字一样），
 工具只是旁路读取页面在输入期间收到的响应（xhr / fetch / JSONP 都支持），挑出含完整关键词、带结果列表的那个解析；
@@ -12,7 +17,7 @@ python review.py run
    └─ Playwright 打开浏览器 → you.ctrip.com
         ├─ 右侧注入核对面板（panel.js）
         ├─ 点关键词 → 程序点击携程搜索框、逐字输入 → 页面自己请求并弹出下拉框 → 读取结果
-        └─ 保留 / 不留 / 完成 → 直接写 MySQL（db.py）
+        └─ 保留 / 审核完成 → 直接写客户景区表的 ctrip_poi_info / approval（db.py）
 ```
 
 ## 1. 安装
@@ -41,7 +46,9 @@ Windows PowerShell 用 `$env:MYSQL_HOST="127.0.0.1"` 这样逐个设置。
 | `SCENIC_TABLE` | `pft_ai_dim_prd_scenic_base_yr_f` | 客户景区表（只读），可写 `库.表` |
 | `SCENIC_COLS` | 见下 | 字段名不同时用 JSON 覆盖，如 `{"name":"scenic_nm"}` |
 | `CITIES` | `北京市,上海市,广州市,深圳市,杭州市,成都市,西安市` | 默认只核对这些城市；设为空字符串 = 全部 |
-| `REVIEW_TABLE` / `STATUS_TABLE` / `CACHE_TABLE` | `scenic_ctrip_poi_review` / `scenic_ctrip_review_status` / `scenic_ctrip_search_cache` | 结果 / 进度 / 搜索缓存，首次运行自动建表 |
+| `POI_INFO_COL` / `APPROVAL_COL` | `ctrip_poi_info` / `approval` | 客户景区表上存结果 / 审核状态的字段名，没有会自动新增 |
+| `STATUS_TABLE` / `CACHE_TABLE` / `ADDR_TABLE` | `scenic_ctrip_review_status` / `scenic_ctrip_search_cache` / `ctrip_poi_address_cache` | 跳过与备注 / 搜索缓存 / 地址缓存，首次运行自动建表 |
+| `REVIEW_TABLE` | `scenic_ctrip_poi_review` | 旧版的结果明细表；存在时启动会把其中「保留」的记录迁移到 `ctrip_poi_info`（只迁字段为空的景区），之后不再使用 |
 | `CANDIDATE_TABLE` | `scenic_ctrip_candidate` | 离线候选表（可选） |
 
 `SCENIC_COLS` 的逻辑名和默认字段：`id=scenic_id, name=scenic_name, alias=scenic_alias, province=province_name, city=city_name, district=district_name, address=scenic_address, lng=scenic_lng, lat=scenic_lat, grade=scenic_grade_level, core_spots=scenic_core_spots`。
@@ -88,9 +95,9 @@ python review.py run --channel chrome
 | 快捷键 | 作用 |
 |---|---|
 | `1`–`9` | 保留第 n 条搜索结果（再按一次取消） |
-| `Shift` + `1`–`9` | 第 n 条标记为不留 |
-| `Enter` | 完成并下一个 |
-| `S` | 跳过 |
+| `Shift` + `1`–`9` | 取消保留第 n 条 |
+| `Enter` | 审核完成（`approval=1`）并下一个 |
+| `S` | 跳过（`approval` 保持 0，记入跳过列表） |
 | `R` | 在携程页面重新搜索当前关键词 |
 | `←` / `→` | 上一个 / 下一个景区 |
 | `/` | 输入自定义关键词 |
@@ -107,18 +114,19 @@ python review.py prefetch --channel chrome --grade 5A,4A
 参数：`--city 北京市,上海市`、`--grade`、`--status todo|done|skip|all`、`--alias`（别名也搜）、`--refresh`（已缓存也重搜）、`--limit N`、`--throttle-ms 2500`（两次搜索最小间隔，实际随机加 0–40%）、`--max-fail 5`（连续失败几次就停，通常是被限流或出验证码）。
 默认有界面运行，`--headless` 可无界面但携程更容易弹验证。
 
-## 5. 导出结果
+## 5. 结果
 
-面板上点「导出」（写到工具目录），或：
+- 结果就在客户景区表上：`ctrip_poi_info`（保留的 POI JSON 数组）和 `approval`（1-已审核 0-未审核）。
+- 「待核对」= `approval=0` 且没跳过；「已审核」= `approval=1`；「已跳过」记在 `scenic_ctrip_review_status`（同时存备注和核对人）。
+- 面板上点「导出」（写到工具目录），或：
 
 ```bash
 python review.py export -o scenic_ctrip_poi_mapping.csv
 ```
 
-每个景区一行，`ctrip_poi_id_list` 为保留的 poiId（`|` 分隔）。明细在 `scenic_ctrip_poi_review`（`decision = keep / drop`，带携程原始条目 `raw_json`、关键词、核对人），进度在 `scenic_ctrip_review_status`。
+导出每个景区一行（只含 `ctrip_poi_info` 不为空的）：`approval`、`kept_qty`、`ctrip_poi_id_list`（`|` 分隔）、`ctrip_poi_name_list`、`ctrip_poi_info`、`note`。
 
-字段对应：携程搜索返回的 `poiId` = 携程主档 `ctrip_poi_id`；`id` / url 中的数字 = `ctrip_business_id`。
-同一景区下按 `poi:<poiId>` 去重；只从下拉 DOM 拿到景点ID 时，会尽量从候选表/历史记录补出 poiId。
+字段对应：携程搜索返回的 `poiId` = 携程主档 `ctrip_poi_id`；只有景点ID（url 中的数字）时会从携程主档 / 候选表补出 poiId，补不出的不能保存。
 
 ## 其他参数
 
