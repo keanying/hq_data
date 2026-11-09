@@ -85,6 +85,47 @@ DDL = [
 ]
 
 
+_NAME = re.compile(r"^[A-Za-z0-9_]+$")
+
+
+def _scenic_schema_table():
+    parts = SCENIC_TABLE.replace("`", "").split(".")
+    return (parts[0], parts[1]) if len(parts) == 2 else (DB["database"], parts[0])
+
+
+def scenic_charset(cur):
+    """客户景区表 scenic_id 字段的字符集/排序规则；自建表跟它保持一致，避免关联时报 1267 Illegal mix of collations。"""
+    schema, table = _scenic_schema_table()
+    cur.execute("""SELECT character_set_name AS cs, collation_name AS co FROM information_schema.columns
+                   WHERE table_schema=%s AND table_name=%s AND column_name=%s""", (schema, table, COLS["id"]))
+    r = cur.fetchone()
+    if r and r["cs"] and r["co"] and _NAME.match(r["cs"]) and _NAME.match(r["co"]):
+        return r["cs"], r["co"]
+    return "utf8mb4", None
+
+
+def charset_clause(cur):
+    cs, co = scenic_charset(cur)
+    return f"DEFAULT CHARSET={cs}" + (f" COLLATE={co}" if co else "")
+
+
+def align_collation(cur, quoted_table, column="scenic_id"):
+    """已存在的自建表排序规则和客户景区表不一致时，整表转换（表都很小）。"""
+    cs, co = scenic_charset(cur)
+    if not co or not table_exists(cur, quoted_table):
+        return False
+    name = quoted_table.replace("`", "").split(".")
+    schema, table = (name[0], name[1]) if len(name) == 2 else (DB["database"], name[0])
+    cur.execute("""SELECT collation_name AS co FROM information_schema.columns
+                   WHERE table_schema=%s AND table_name=%s AND column_name=%s""", (schema, table, column))
+    r = cur.fetchone()
+    if r and r["co"] and r["co"] != co:
+        cur.execute(f"ALTER TABLE {quoted_table} CONVERT TO CHARACTER SET {cs} COLLATE {co}")
+        print(f"已把 {quoted_table} 的排序规则从 {r['co']} 转为 {co}（与客户景区表一致）", flush=True)
+        return True
+    return False
+
+
 @contextmanager
 def cursor():
     conn = pymysql.connect(**DB)
@@ -106,8 +147,11 @@ def _jsonable(rows):
 
 def init_db():
     with cursor() as cur:
+        clause = charset_clause(cur)
         for ddl in DDL:
-            cur.execute(ddl)
+            cur.execute(ddl.replace("DEFAULT CHARSET=utf8mb4", clause))
+        for t, col in ((REVIEW_TABLE, "scenic_id"), (STATUS_TABLE, "scenic_id"), (CANDIDATE_TABLE, "scenic_id"), (CACHE_TABLE, "keyword")):
+            align_collation(cur, t, col)
 
 
 def table_exists(cur, quoted):
@@ -125,8 +169,7 @@ def preflight():
         return [f"连不上 MySQL（{DB['user']}@{DB['host']}:{DB['port']}/{DB['database']}）：{e}"]
     try:
         with conn.cursor() as cur:
-            parts = SCENIC_TABLE.replace("`", "").split(".")
-            schema, table = (parts[0], parts[1]) if len(parts) == 2 else (DB["database"], parts[0])
+            schema, table = _scenic_schema_table()
             cur.execute("SELECT column_name AS c FROM information_schema.columns WHERE table_schema=%s AND table_name=%s", (schema, table))
             cols = {r["c"].lower() for r in cur.fetchall()}
             if not cols:

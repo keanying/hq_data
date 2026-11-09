@@ -35,7 +35,8 @@ def main(path):
     data = [[(r[c] if r[c] != "" else None) for c in COLS] for r in rows]
     conn = pymysql.connect(**{**db.DB, "autocommit": False})
     with conn.cursor() as cur:
-        cur.execute(DDL)
+        cur.execute(DDL.replace("DEFAULT CHARSET=utf8mb4", db.charset_clause(cur)))
+        db.align_collation(cur, T)
         cur.execute(f"DELETE FROM {T}")
         cur.executemany(f"INSERT INTO {T} ({','.join(COLS)}) VALUES ({','.join(['%s'] * len(COLS))})", data)
     conn.commit(); conn.close()
