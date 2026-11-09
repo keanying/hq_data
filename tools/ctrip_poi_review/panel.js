@@ -6,7 +6,8 @@
   window.__hqPanel = true;
 
   const call = async (method, payload) => {
-    for (let i = 0; !window.hqCall && i < 50; i++) await new Promise((r) => setTimeout(r, 100));
+    for (let i = 0; !window.hqCall && i < 100; i++) await new Promise((r) => setTimeout(r, 100));
+    if (!window.hqCall) throw new Error('没连上 review.py：请用 python review.py run 打开的那个浏览器窗口');
     const r = await window.hqCall(method, payload || {});
     if (r && r.error) throw new Error(r.error);
     return r;
@@ -25,13 +26,17 @@
   const S = { list: [], total: 0, i: -1, detail: null, decisions: {}, res: null, keyword: '', loading: false, rawOpen: {}, domOpen: false };
 
   async function boot() {
-    const hello = await call('hello');
-    if (!hello.main) return; // 只在主窗口显示面板
-    prefs = hello.prefs;
-    mount(hello);
+    const ui = mount(); // 先把按钮放出来，出错也能看到原因
+    let h;
+    try { h = await call('hello'); }
+    catch (e) { console.log('[hq] 面板初始化失败：' + e.message); ui.fail(e.message); return; }
+    if (!h.main) { ui.remove(); return; } // 只在主窗口显示面板
+    prefs = h.prefs;
+    ui.ready(h);
   }
 
-  function mount(hello) {
+  function mount() {
+    let hello = null, bootError = null;
     const host = document.createElement('div');
     host.id = 'hq-poi-review-host';
     document.documentElement.appendChild(host);
@@ -40,6 +45,7 @@
 <style>
   :host { all: initial; }
   * { box-sizing: border-box; font-family: -apple-system, "PingFang SC", "Microsoft YaHei", Arial, sans-serif; }
+  .fab.err { background: #cf222e; }
   .fab { position: fixed; right: 16px; bottom: 16px; z-index: 2147483646; background: #0b6bcb; color: #fff; border: 0; border-radius: 20px; padding: 9px 14px; font-size: 13px; cursor: pointer; box-shadow: 0 2px 8px rgba(0,0,0,.25); }
   .panel { position: fixed; top: 0; right: 0; width: 560px; height: 100vh; z-index: 2147483647; background: #fff; border-left: 1px solid #d0d7de; box-shadow: -4px 0 16px rgba(0,0,0,.12); display: flex; flex-direction: column; font-size: 13px; color: #1f2328; }
   .panel.hidden { display: none; }
@@ -329,7 +335,12 @@
       const t = ev.target.closest('button'); if (!t) return;
       const ds = t.dataset;
       try {
-        if (t.id === 'fab') { $('#panel').classList.remove('hidden'); t.style.display = 'none'; if (!S.list.length && !S.detail) await start(); }
+        if (t.id === 'fab') {
+          $('#panel').classList.remove('hidden'); t.style.display = 'none';
+          if (bootError) { $('#body').innerHTML = '<div class="muted" style="color:#cf222e;white-space:pre-wrap">面板没能连上数据：\n' + esc(bootError) + '\n\n请看运行 review.py 的终端里的提示。</div>'; return; }
+          if (!hello) { $('#body').innerHTML = '<div class="muted">正在连接 review.py…</div>'; return; }
+          if (!S.list.length && !S.detail) await start();
+        }
         else if (t.id === 'close') { $('#panel').classList.add('hidden'); $('#fab').style.display = ''; }
         else if (t.id === 'gear') $('#settings').classList.toggle('open');
         else if (t.id === 'prev') await go(-1);
@@ -402,6 +413,12 @@
         if (S.list.length) await go(1); else render();
       } catch (e) { $('#body').innerHTML = `<div class="muted">${esc(e.message)}</div>`; toast(e.message, true); }
     }
+
+    return {
+      ready(h) { hello = h; $('#fab').title = '景区 ↔ 携程POI 核对'; },
+      fail(msg) { bootError = msg; const f = $('#fab'); f.classList.add('err'); f.textContent = 'POI核对（出错，点我看原因）'; },
+      remove() { host.remove(); },
+    };
   }
 
   if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', boot); else boot();

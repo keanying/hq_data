@@ -294,6 +294,19 @@ class Prefs(dict):
 
 
 # ---------------------------------------------------------------- 浏览器
+def check_db():
+    problems = db.preflight()
+    if problems:
+        print("MySQL 自检没通过：", file=sys.stderr)
+        for p in problems:
+            print("  - " + p, file=sys.stderr)
+        raise SystemExit(1)
+    db.init_db()
+    h = db.health()
+    print(f"MySQL 正常：客户景区表 {db.SCENIC_TABLE} 共 {h['scenic_rows']} 行；默认城市 {','.join(h['cities']) or '全部'}；"
+          f"离线候选表{'已导入' if h['candidate_table'] else '未导入（可选）'}", flush=True)
+
+
 async def launch(pw, args):
     profile = Path(args.profile).resolve()
     profile.mkdir(parents=True, exist_ok=True)
@@ -314,7 +327,7 @@ async def launch(pw, args):
 
 async def setup_run(pw, args):
     """打开浏览器、注入核对面板，返回 (context, page)。"""
-    db.init_db()
+    check_db()
     ctx, page, prefs = await launch(pw, args)
     searcher = CtripSearcher(page, prefs, args.start_url, args.pattern)
 
@@ -324,7 +337,9 @@ async def setup_run(pw, args):
             if method == "hello":
                 if source["page"] is not page or source["frame"] is not page.main_frame:
                     return dict(main=False)
-                return dict(main=True, prefs=dict(prefs), health=db.health(), cities=db.cities())
+                res = dict(main=True, prefs=dict(prefs), health=db.health(), cities=db.cities())
+                print(f"[hq] 面板已加载：{page.url}（右下角点「POI核对」）", flush=True)
+                return res
             if method == "list":
                 return db.scenic_list(payload.get("filters") or {}, payload.get("offset", 0), payload.get("limit", 200))
             if method == "detail":
@@ -355,11 +370,13 @@ async def setup_run(pw, args):
                 write_csv(out, db.export_rows())
                 return dict(path=str(out))
             raise ValueError(f"未知方法 {method}")
-        except Exception as e:  # 错误回传到面板显示
+        except Exception as e:  # 错误回传到面板显示，同时打印到终端
+            print(f"[面板调用 {method} 出错] {type(e).__name__}: {e}", file=sys.stderr, flush=True)
             return dict(error=f"{type(e).__name__}: {e}")
 
     await ctx.expose_binding("hqCall", handler)
-    await ctx.add_init_script(path=str(HERE / "panel.js"))
+    await ctx.add_init_script(script=(HERE / "panel.js").read_text(encoding="utf-8"))
+    page.on("console", lambda m: print(m.text, flush=True) if m.text.startswith("[hq]") else None)
     await page.goto(args.start_url, wait_until="domcontentloaded")
     return ctx, page
 
@@ -373,7 +390,7 @@ async def cmd_run(args):
 
 
 async def cmd_prefetch(args):
-    db.init_db()
+    check_db()
     filters = dict(city=args.city or "", grade=args.grade or "", status=args.status, q=args.q or "")
     async with async_playwright() as pw:
         ctx, page, prefs = await launch(pw, args)

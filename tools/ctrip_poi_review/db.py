@@ -116,6 +116,37 @@ def table_exists(cur, quoted):
     return cur.fetchone() is not None
 
 
+def preflight():
+    """启动前自检：连得上、客户景区表存在、字段都在。返回问题列表（空 = 正常）。"""
+    problems = []
+    try:
+        conn = pymysql.connect(**DB)
+    except Exception as e:
+        return [f"连不上 MySQL（{DB['user']}@{DB['host']}:{DB['port']}/{DB['database']}）：{e}"]
+    try:
+        with conn.cursor() as cur:
+            parts = SCENIC_TABLE.replace("`", "").split(".")
+            schema, table = (parts[0], parts[1]) if len(parts) == 2 else (DB["database"], parts[0])
+            cur.execute("SELECT column_name AS c FROM information_schema.columns WHERE table_schema=%s AND table_name=%s", (schema, table))
+            cols = {r["c"].lower() for r in cur.fetchall()}
+            if not cols:
+                cur.execute("""SELECT CONCAT(table_schema, '.', table_name) t FROM information_schema.tables
+                               WHERE (table_name LIKE %s OR table_name LIKE %s) AND table_name NOT LIKE %s
+                               AND table_schema NOT IN ('information_schema','mysql','performance_schema','sys')
+                               ORDER BY 1 LIMIT 20""", ("%scenic%", "%dim_prd%", "scenic\\_ctrip\\_%"))
+                similar = [r["t"] for r in cur.fetchall()]
+                problems.append(f"找不到客户景区表 {schema}.{table}。请设置环境变量 SCENIC_TABLE=库.表"
+                                + (f"；库里相近的表：{', '.join(similar)}" if similar else ""))
+            else:
+                missing = [f"{k}={v}" for k, v in COLS.items() if v.lower() not in cols]
+                if missing:
+                    problems.append(f"客户景区表 {schema}.{table} 缺少字段：{', '.join(missing)}。"
+                                    "字段名不同请用 SCENIC_COLS='{\"name\":\"实际字段\"}' 覆盖")
+    finally:
+        conn.close()
+    return problems
+
+
 def health():
     with cursor() as cur:
         cur.execute(f"SELECT COUNT(*) n FROM {SCENIC_TABLE}")
