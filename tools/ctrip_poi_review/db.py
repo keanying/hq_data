@@ -50,6 +50,8 @@ COLS = {
 COLS.update(json.loads(ENV("SCENIC_COLS", "{}")))
 C = {k: ident(v) for k, v in COLS.items()}
 DEFAULT_CITIES = [c for c in ENV("CITIES", "北京市,上海市,广州市,深圳市,杭州市,成都市,西安市").split(",") if c]
+if [c.strip().lower() for c in DEFAULT_CITIES] in (["all"], ["*"], ["全部"]):  # CITIES=ALL：全国
+    DEFAULT_CITIES = []
 GRADE_ORDER = f"FIELD(s.{C['grade']},'5A','4A','3A','2A','1A')"
 
 DDL = [
@@ -333,6 +335,8 @@ def cities():
     if DEFAULT_CITIES:
         order = {c: i for i, c in enumerate(DEFAULT_CITIES)}
         rows.sort(key=lambda r: order.get(r["city"], 99))
+    else:  # 全国模式：按省、再按市（和待核对列表的顺序一致）
+        rows.sort(key=lambda r: (r["province"] or "", r["city"] or ""))
     return rows
 
 
@@ -372,7 +376,8 @@ def scenic_list(f, offset=0, limit=200):
         cur.execute(f"SELECT COUNT(*) n {base}", params)
         total = cur.fetchone()["n"]
         # 城市按 CITIES 的顺序依次排（一个城市跑完再下一个），城市内 5A→4A→…
-        city_order, city_params = (f"FIELD(s.{C['city']}, {','.join(['%s'] * len(DEFAULT_CITIES))}), ", list(DEFAULT_CITIES)) if DEFAULT_CITIES else ("", [])
+        city_order, city_params = ((f"FIELD(s.{C['city']}, {','.join(['%s'] * len(DEFAULT_CITIES))}), ", list(DEFAULT_CITIES)) if DEFAULT_CITIES
+                                   else (f"s.{C['province']}, ", []))  # 全国模式：按省、再按市依次跑
         cur.execute(f"""SELECT {_select()}, COALESCE(s.{APPROVAL}, 0) approval, st.status, st.note
                         {base} ORDER BY {city_order}s.{C['city']}, {GRADE_ORDER}, s.{C['id']} LIMIT %s OFFSET %s""",
                     params + city_params + [int(limit), int(offset)])

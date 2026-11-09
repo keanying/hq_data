@@ -729,6 +729,7 @@ def build_parser():
         p.add_argument("--headless", action="store_true", help="无界面运行（不建议，携程更容易弹验证）")
         p.add_argument("--start-url", default=DEFAULT_START_URL)
         p.add_argument("--pattern", action="append", default=None, help="要旁路读取的携程搜索请求 URL 片段，可多次指定")
+        p.add_argument("--all-cities", action="store_true", help="全国所有城市都核对（默认只核对 CITIES 里的 7 城）")
 
     p = sub.add_parser("run", help="交互核对（默认）")
     browser_opts(p)
@@ -770,6 +771,8 @@ def main(argv=None):
     args = ap.parse_args(argv)
     if getattr(args, "pattern", "x") is None:
         args.pattern = DEFAULT_PATTERNS
+    if getattr(args, "all_cities", False):
+        db.DEFAULT_CITIES = []
     if args.cmd == "export":
         cmd_export(args)
     elif args.cmd == "prefetch":

@@ -272,8 +272,15 @@
     function fillCities() {
       const sel = $('#f-city'), cur = (prefs.filters || {}).city || '';
       const tot = (S.cities || []).reduce((a, c) => a + Number(c.n || 0), 0), ok = (S.cities || []).reduce((a, c) => a + Number(c.reviewed || 0), 0);
-      sel.innerHTML = `<option value="">全部城市 ${ok}/${tot}</option>` +
-        (S.cities || []).filter((c) => c.city).map((c) => `<option value="${esc(c.city)}">${esc(c.city.replace(/市$/, ''))} ${c.reviewed || 0}/${c.n}</option>`).join('');
+      const opt = (c) => `<option value="${esc(c.city)}">${esc(c.city.replace(/市$/, ''))} ${c.reviewed || 0}/${c.n}</option>`;
+      const cs = (S.cities || []).filter((c) => c.city);
+      let body;
+      if (cs.length > 12) { // 全国模式城市多：按省分组
+        const groups = [];
+        for (const c of cs) { const g = groups[groups.length - 1]; if (g && g.p === c.province) g.list.push(c); else groups.push({ p: c.province, list: [c] }); }
+        body = groups.map((g) => `<optgroup label="${esc(g.p || '未知省份')}">${g.list.map(opt).join('')}</optgroup>`).join('');
+      } else body = cs.map(opt).join('');
+      sel.innerHTML = `<option value="">全部城市 ${ok}/${tot}</option>` + body;
       sel.value = cur;
       sel.title = '城市（已审核/景区数）';
     }
