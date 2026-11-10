@@ -438,7 +438,7 @@ class CtripSearcher:
 class Prefs(dict):
     def __init__(self, path):
         super().__init__(reviewer="", throttle_ms=2500, sight_only=False, auto_search=True, input_selector="",
-                         panel_width=560, push_page=False, auto_address=False, auto_keep_similar=True, auto_approve=True, auto_approve_delay_ms=2000, auto_collect=True, collect_max_pages=20, collect_max_images=300, search_more=True, search_core_spots=False, max_extra=8, idle_skip=True, idle_skip_sec=10,
+                         panel_width=560, push_page=False, auto_address=False, auto_keep_similar=True, auto_approve=True, auto_approve_delay_ms=2000, auto_collect=True, collect_max_pages=20, collect_max_images=300, collect_empty_pages=10, search_more=True, search_core_spots=False, max_extra=8, idle_skip=True, idle_skip_sec=10,
                          filters=dict(city="", grade="", status="todo", q=""))
         self.path = path
         if path.exists():
@@ -770,7 +770,7 @@ async def cmd_images(args):
     try:
         await crawler.crawl_all(lb.get_page, dict(city=args.city or "", grade=args.grade or "", q=args.q or ""),
                                 max_pages=args.max_pages, max_images=args.max_images, limit=args.limit, refresh=args.refresh,
-                                log=lambda m: print(m, flush=True))
+                                empty_limit=args.empty_pages, log=lambda m: print(m, flush=True))
     finally:
         await lb.close()
 
@@ -837,6 +837,7 @@ def build_parser():
     p.add_argument("--max-pages", type=int, default=20, help="每个 POI 最多翻几页点评，默认 20")
     p.add_argument("--max-images", type=int, default=300, help="每个 POI 最多存几张图，默认 300（0=不限）")
     p.add_argument("--limit", type=int, default=0, help="最多采几个 POI（0=不限）")
+    p.add_argument("--empty-pages", type=int, default=10, help="连续几页没有新图片就换下一个 POI，默认 10（0=不限）")
     p.add_argument("--refresh", action="store_true", help="已采完的 POI 也重新采")
     p = sub.add_parser("sync-ods", help="把已采集的图片补写进交付表 ods_prd_poi_image_di（重复的会被忽略）")
     p = sub.add_parser("export", help="导出最终映射 CSV")

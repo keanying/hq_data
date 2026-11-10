@@ -59,25 +59,46 @@
   :host(.embed) { display: block; height: 100%; }
   :host(.embed) .fab, :host(.embed) #close, :host(.embed) .grip, :host(.embed) .push-opt { display: none !important; }
   :host(.embed) .panel { position: relative; top: auto; right: auto; width: 100% !important; height: 100%; z-index: auto; border: 0; box-shadow: none;
-    background: transparent; border-radius: 22px; font-size: 13px; }
-  :host(.embed) header, :host(.embed) .prog, :host(.embed) .filters, :host(.embed) .settings { background: transparent; border: 0; }
-  :host(.embed) header b { font-size: 16px; color: #2b2250; }
-  :host(.embed) .filters { padding: 4px 16px 10px; }
-  :host(.embed) .body { padding: 6px 16px 90px; }
-  :host(.embed) .card { background: #fff; border: 0; border-radius: 20px; box-shadow: 0 10px 30px rgba(108, 82, 255, .08); padding: 14px 18px; }
-  :host(.embed) .row { border: 0; border-radius: 16px; box-shadow: 0 6px 18px rgba(108, 82, 255, .07); padding: 10px 12px; margin-bottom: 8px; }
-  :host(.embed) .row.keep { border-left: 4px solid #7b5cff; background: #f7f4ff; }
-  :host(.embed) .idx { color: #7b5cff; }
-  :host(.embed) button { border-radius: 10px; border-color: #e4dcff; }
-  :host(.embed) button.primary, :host(.embed) button.keep.on { background: linear-gradient(135deg, #9a7bff, #6c4dff); border-color: #6c4dff; color: #fff; }
-  :host(.embed) button.link { color: #6c4dff; }
-  :host(.embed) .chip.active { background: #7b5cff; border-color: #7b5cff; color: #fff; }
-  :host(.embed) .tag.sight { background: #efeaff; color: #6c4dff; }
-  :host(.embed) .prog .bar { height: 8px; background: #eee9ff; }
-  :host(.embed) .prog .bar i { background: linear-gradient(90deg, #ff8cc6, #8b6cff); }
-  :host(.embed) select, :host(.embed) input[type=text], :host(.embed) input[type=number] { border-color: #e4dcff; border-radius: 10px; padding: 6px 8px; background: #fff; }
-  :host(.embed) footer { background: rgba(255, 255, 255, .85); backdrop-filter: blur(6px); border-top: 1px solid #eee9ff; border-radius: 0 0 22px 22px; }
-  :host(.embed) .auto-banner { border-radius: 14px; } :host(.embed) .idle-banner { border-radius: 14px; }
+    background: #fff; border-radius: 0; font-size: 14px; color: #1c1f23;
+    font-family: Inter, -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", "Helvetica Neue", Arial, sans-serif; }
+  :host(.embed) header { background: #fff; border: 0; padding: 12px 16px 6px; gap: 8px; min-height: 40px; }
+  :host(.embed) header b { font-size: 16px; font-weight: 600; color: #1c1f23; }
+  :host(.embed) header .grow { font-size: 13px; color: rgba(28, 31, 35, .62); }
+  :host(.embed) header button { width: 30px; height: 30px; padding: 0; font-size: 16px; line-height: 28px; text-align: center; border-radius: 6px;
+    border: 1px solid transparent; background: rgba(46, 50, 56, .05); color: rgba(28, 31, 35, .8); }
+  :host(.embed) header button:hover { background: rgba(46, 50, 56, .09); }
+  :host(.embed) .prog { background: #fff; border: 0; border-bottom: 1px solid rgba(28, 31, 35, .08); padding: 4px 16px 12px; font-size: 13px; gap: 12px;
+    color: rgba(28, 31, 35, .62); flex-wrap: nowrap; }
+  :host(.embed) .prog .bar { height: 6px; min-width: 120px; background: rgba(46, 50, 56, .08); }
+  :host(.embed) .prog .bar i { background: #6c4dff; }
+  :host(.embed) #prog-text { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; flex: 0 1 auto; max-width: 60%; }
+  :host(.embed) .settings { background: #fafafb; border: 0; border-bottom: 1px solid rgba(28, 31, 35, .08); padding: 12px 16px; }
+  :host(.embed) .filters { background: #fff; border: 0; padding: 12px 16px; gap: 8px; }
+  :host(.embed) .body { padding: 4px 16px 90px; background: #fff; }
+  :host(.embed) .card { background: #f9f9fb; border: 1px solid rgba(28, 31, 35, .08); border-radius: 8px; box-shadow: none; padding: 12px 16px; }
+  :host(.embed) .row { border: 1px solid rgba(28, 31, 35, .08); border-radius: 8px; box-shadow: none; padding: 10px 12px; margin-bottom: 8px; }
+  :host(.embed) .row:hover { border-color: rgba(108, 77, 255, .35); }
+  :host(.embed) .row.keep { border-color: rgba(108, 77, 255, .5); border-left: 3px solid #6c4dff; background: rgba(108, 77, 255, .04); }
+  :host(.embed) .idx { color: #6c4dff; }
+  :host(.embed) button { font-size: 13px; padding: 4px 12px; border-radius: 6px; border: 1px solid rgba(28, 31, 35, .12); background: #fff; color: #1c1f23; }
+  :host(.embed) button:hover { background: rgba(46, 50, 56, .05); }
+  :host(.embed) button.primary, :host(.embed) button.keep.on { background: #6c4dff; border-color: #6c4dff; color: #fff; }
+  :host(.embed) button.primary:hover, :host(.embed) button.keep.on:hover { background: #5b3deb; }
+  :host(.embed) button.link { color: #6c4dff; border: 0; background: transparent; padding: 0 2px; }
+  :host(.embed) .chip { border-radius: 6px; }
+  :host(.embed) .chip.active { background: #6c4dff; border-color: #6c4dff; color: #fff; }
+  :host(.embed) .tag { border-radius: 4px; }
+  :host(.embed) .tag.sight { background: rgba(108, 77, 255, .1); color: #5b3deb; }
+  :host(.embed) select, :host(.embed) input[type=text], :host(.embed) input[type=number] { font-size: 13px; height: 32px; box-sizing: border-box;
+    border: 1px solid transparent; border-radius: 6px; padding: 4px 10px; background: rgba(46, 50, 56, .05); color: #1c1f23; }
+  :host(.embed) select:hover, :host(.embed) input[type=text]:hover, :host(.embed) input[type=number]:hover { background: rgba(46, 50, 56, .09); }
+  :host(.embed) select:focus, :host(.embed) input[type=text]:focus, :host(.embed) input[type=number]:focus { outline: 0; border-color: #6c4dff; background: #fff; }
+  :host(.embed) .filters button { height: 32px; }
+  :host(.embed) footer { background: rgba(255, 255, 255, .96); border-top: 1px solid rgba(28, 31, 35, .08); border-radius: 0; padding: 10px 16px; }
+  :host(.embed) .auto-banner, :host(.embed) .idle-banner { border-radius: 8px; }
+  :host(.embed) .empty-state { text-align: center; padding: 64px 16px; color: rgba(28, 31, 35, .62); }
+  :host(.embed) .empty-state b { display: block; font-size: 16px; color: #1c1f23; margin-bottom: 6px; }
+  :host(.embed) .empty-state .acts { margin-top: 16px; display: flex; gap: 8px; justify-content: center; }
   * { box-sizing: border-box; font-family: -apple-system, "PingFang SC", "Microsoft YaHei", Arial, sans-serif; }
   .fab.err { background: #cf222e; }
   .fab { position: fixed; right: 16px; bottom: 16px; z-index: 2147483646; background: #0b6bcb; color: #fff; border: 0; border-radius: 20px; padding: 9px 14px; font-size: 13px; cursor: pointer; box-shadow: 0 2px 8px rgba(0,0,0,.25); }
@@ -604,7 +625,15 @@
     function render() {
       renderProgress();
       const b = $('#body');
-      if (!S.detail) { b.innerHTML = `<div class="muted">${S.total === 0 ? '当前筛选下没有景区。' : '加载中…'}</div>`; return; }
+      if (!S.detail) {
+        if (S.total !== 0) { b.innerHTML = '<div class="muted">加载中…</div>'; return; }
+        const f = prefs.filters || {};
+        const msg = { todo: '当前范围内没有待核对的景区', skip: '当前范围内没有已跳过的景区', done: '当前范围内还没有已审核的景区', auto: '当前范围内没有自动通过的景区' }[f.status] || '当前筛选下没有景区';
+        const acts = [f.status !== 'skip' && '<button data-empty="skip">看已跳过的</button>', f.status !== 'all' && '<button data-empty="all">看全部</button>',
+          (f.q || f.city || f.grade) && '<button data-empty="clear">清空筛选</button>'].filter(Boolean).join('');
+        b.innerHTML = `<div class="empty-state"><b>${msg}</b>${f.status === 'todo' ? '都处理完了。已跳过的景区需要人来定，可以在「已跳过」里继续处理。' : '换个筛选条件试试。'}<div class="acts">${acts}</div></div>`;
+        return;
+      }
       const s = S.detail.scenic, st = S.detail.status;
       const slat = num(s.lat), slng = num(s.lng);
       const candByPoi = {}, candByBiz = {};
@@ -740,7 +769,11 @@
         else if (t.id === 'next') await go(1);
         else if (t.id === 'done') await finish('done');
         else if (t.id === 'skip') await finish('skip');
-        else if (t.id === 'f-apply') { await savePrefs({ filters: { city: $('#f-city').value, grade: $('#f-grade').value, status: $('#f-status').value, q: $('#f-q').value.trim() } }); await start(); }
+        else if (t.dataset && t.dataset.empty) {
+          const f = Object.assign({}, prefs.filters || {});
+          if (t.dataset.empty === 'clear') Object.assign(f, { q: '', city: '', grade: '' }); else f.status = t.dataset.empty;
+          await savePrefs({ filters: f }); await start();
+        } else if (t.id === 'f-apply') { await savePrefs({ filters: { city: $('#f-city').value, grade: $('#f-grade').value, status: $('#f-status').value, q: $('#f-q').value.trim() } }); await start(); }
         else if (t.id === 'export') { const r = await call('export'); if (r.url) window.open(r.url, '_blank'); else toast('已导出：' + r.path); }
         else if (t.id === 's-save') {
           await savePrefs({ reviewer: $('#s-reviewer').value.trim(), throttle_ms: Number($('#s-throttle').value || 2500), auto_search: $('#s-auto').checked,
@@ -835,6 +868,8 @@
       }
     }
 
+    // 网页顶栏改了核对人等设置：同步到面板
+    window.addEventListener('hq:prefs', (e) => { Object.assign(prefs, (e && e.detail) || {}); fillSettings(); });
     // 网页其他页面「去核对」：window.dispatchEvent(new CustomEvent('hq:open', { detail: { scenic_id } }))
     window.addEventListener('hq:open', async (e) => {
       const sid = e.detail && e.detail.scenic_id;

@@ -96,10 +96,26 @@ JS_NEXT_STATE = """(el) => {
 }"""
 
 
+SKIP_MSG = "手动跳到下一个 POI"
+
+
 class CommentImageCrawler:
-    def __init__(self, page, max_pages=20, max_images=300, page_delay=(1.5, 3.0), timeout_s=15.0, log=print):
+    def __init__(self, page, max_pages=20, max_images=300, page_delay=(1.5, 3.0), timeout_s=15.0, log=print,
+                 empty_limit=10, on_progress=None):
         self.page, self.max_pages, self.max_images = page, max_pages, max_images
         self.page_delay, self.timeout_s, self.log = page_delay, timeout_s, log
+        self.empty_limit = empty_limit  # 连续这么多页没有新图片就换下一个 POI（0 = 不限）
+        self.on_progress = on_progress or (lambda stat: None)
+        self.skipped = False
+
+    def skip(self):
+        """手动跳到下一个 POI：当前页处理完（或等待中）立即结束这个 POI。"""
+        self.skipped = True
+
+    async def _sleep(self, sec):
+        end = time.monotonic() + sec
+        while not self.skipped and time.monotonic() < end:
+            await asyncio.sleep(min(0.2, max(0.0, end - time.monotonic())))
 
     async def _check_blocked(self):
         url = self.page.url.lower()
@@ -110,7 +126,7 @@ class CommentImageCrawler:
     async def _wait_new(self, captured, seen_n):
         """等到有新的 getCommentCollapseList 返回（可解析且带 result），返回其 JSON。"""
         deadline = time.monotonic() + self.timeout_s
-        while time.monotonic() < deadline:
+        while time.monotonic() < deadline and not self.skipped:
             while seen_n[0] < len(captured):
                 resp = captured[seen_n[0]]
                 seen_n[0] += 1
@@ -144,11 +160,15 @@ class CommentImageCrawler:
         captured, seen_n = [], [0]
         on_resp = lambda r: captured.append(r) if COMMENT_API in r.url else None  # noqa: E731
         page.on("response", on_resp)
-        stat = dict(pages=0, reviews=0, images=0, total=None, stop="")
+        stat = dict(pages=0, reviews=0, images=0, total=None, stop="", empty_run=0)
+        self.skipped = False
         db.crawl_put(sid, pid, poi_name=poi.get("poiName"), poi_uri=poi.get("poiUri"), status="running", message=None)
         try:
             await page.goto(poi["poiUri"], wait_until="domcontentloaded", timeout=30000)
             await self._check_blocked()
+            if self.skipped:
+                stat["stop"] = SKIP_MSG
+                return stat
             # 第一页：优先读服务端渲染的 __NEXT_DATA__；没有时退回「滚到点评区等接口返回」
             ssr = None
             try:
@@ -170,6 +190,9 @@ class CommentImageCrawler:
                     await page.wait_for_timeout(random.randint(300, 600))
                 if not js:
                     js = await self._wait_new(captured, seen_n)
+            if self.skipped:
+                stat["stop"] = SKIP_MSG
+                return stat
             if not js:
                 stat["stop"] = "没读到第一页点评（页面没有点评，或结构变了：可用 dump_page.py 抓页面结构）"
                 return stat
@@ -192,8 +215,17 @@ class CommentImageCrawler:
                 stat["pages"] += 1
                 stat["reviews"] += len(items)
                 stat["total"] = total
-                stat["images"] += db.images_insert(rows_from_items(items, total, scenic, poi, collect_time, image_total))
+                new = db.images_insert(rows_from_items(items, total, scenic, poi, collect_time, image_total))
+                stat["images"] += new
+                stat["empty_run"] = 0 if new else stat["empty_run"] + 1
                 db.crawl_put(sid, pid, pages_done=stat["pages"], total_count=total, review_qty=stat["reviews"], image_qty=stat["images"])
+                self.on_progress(stat)
+                if self.skipped:
+                    stat["stop"] = SKIP_MSG
+                    break
+                if self.empty_limit and stat["empty_run"] >= self.empty_limit:
+                    stat["stop"] = f"连续 {self.empty_limit} 页没有新图片，换下一个 POI"
+                    break
                 if stat["pages"] >= self.max_pages:
                     stat["stop"] = f"到达最大页数 {self.max_pages}"
                     break
@@ -207,10 +239,16 @@ class CommentImageCrawler:
                 if btn is None or disabled:
                     stat["stop"] = "已是最后一页"
                     break
-                await asyncio.sleep(random.uniform(*self.page_delay))
+                await self._sleep(random.uniform(*self.page_delay))
+                if self.skipped:
+                    stat["stop"] = SKIP_MSG
+                    break
                 await btn.scroll_into_view_if_needed()
                 await btn.click()
                 js = await self._wait_new(captured, seen_n)
+                if self.skipped and not js:
+                    stat["stop"] = SKIP_MSG
+                    break
                 if not js:
                     await self._check_blocked()
                     stat["stop"] = "点「下一页」后没等到点评返回"
@@ -224,7 +262,8 @@ class CommentImageCrawler:
 
 
 async def crawl_all(get_page, f, max_pages=20, max_images=300, limit=0, refresh=False, poi_delay=(2.0, 4.0),
-                    log=print, should_stop=lambda: False, progress=lambda done, total: None):
+                    log=print, should_stop=lambda: False, progress=lambda done, total: None,
+                    empty_limit=10, on_crawler=None):
     """对筛选范围内已审核的景区，逐个 POI 采集点评图片。get_page 为 async 函数，返回可用的 Playwright page。"""
     targets = db.crawl_targets(f, refresh=refresh)
     if limit:
@@ -238,7 +277,9 @@ async def crawl_all(get_page, f, max_pages=20, max_images=300, limit=0, refresh=
             log("已取消")
             break
         page = page or await get_page()
-        crawler = CommentImageCrawler(page, max_pages=max_pages, max_images=max_images, log=log)
+        crawler = CommentImageCrawler(page, max_pages=max_pages, max_images=max_images, log=log, empty_limit=empty_limit)
+        if on_crawler:
+            on_crawler(crawler, t)
         name = f"{t['scenic']['name']} / {t['poi'].get('poiName')}（poiId {t['poi']['poiId']}）"
         try:
             st = await crawler.crawl(t, should_stop)
@@ -252,6 +293,9 @@ async def crawl_all(get_page, f, max_pages=20, max_images=300, limit=0, refresh=
         except Exception as e:
             stats["failed"] += 1
             log(f"[{i}/{total}] {name}：失败 {type(e).__name__}: {e}")
+        finally:
+            if on_crawler:
+                on_crawler(None, None)
         progress(i, total)
         await asyncio.sleep(random.uniform(*poi_delay))
     log(f"完成：POI {stats['pois']} 个，新增图片 {stats['images']} 张，失败 {stats['failed']}")

@@ -833,3 +833,31 @@ def scenic_table(f, offset=0, limit=50):
             p["images"] = c.get(str(p["poiId"]), 0)
         r["images"] = sum(c.values())
     return dict(total=total, items=_jsonable(rows))
+
+
+def crawl_query(status=None, q=None, offset=0, limit=50):
+    """图片采集页：每个 POI 的采集记录（状态、页数、图片数、停止原因），最近更新的在前。"""
+    where, params = [], []
+    if status:
+        where.append("c.status=%s"); params.append(status)
+    if q:
+        where.append("(c.poi_name LIKE %s OR c.scenic_id=%s OR c.poi_id=%s)")
+        params += [f"%{q}%", q, int(q) if str(q).isdigit() else -1]
+    w = ("WHERE " + " AND ".join(where)) if where else ""
+    with cursor() as cur:
+        cur.execute(f"SELECT COUNT(*) n FROM {CRAWL_TABLE} c {w}", params)
+        total = cur.fetchone()["n"]
+        cur.execute(f"""SELECT c.scenic_id, c.poi_id, c.poi_name, c.poi_uri, c.status, c.pages_done, c.total_count, c.review_qty,
+                        c.image_qty, c.message, c.updated_at FROM {CRAWL_TABLE} c {w}
+                        ORDER BY c.updated_at DESC, c.scenic_id, c.poi_id LIMIT %s OFFSET %s""", params + [int(limit), int(offset)])
+        rows = list(cur.fetchall())
+        ids = sorted({r["scenic_id"] for r in rows})
+        names = {}
+        if ids:
+            cur.execute(f"""SELECT s.{C['id']} id, s.{C['name']} name, s.{C['city']} city FROM {SCENIC_TABLE} s
+                            WHERE s.{C['id']} IN ({','.join(['%s'] * len(ids))})""", ids)
+            names = {x["id"]: x for x in cur.fetchall()}
+    for r in rows:
+        n = names.get(r["scenic_id"]) or {}
+        r["scenic_name"], r["city"] = n.get("name"), n.get("city")
+    return dict(total=total, items=_jsonable(rows))
