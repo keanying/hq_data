@@ -752,7 +752,7 @@
     const cols = [
       { title: '时间', dataIndex: 'time', width: 120, render: (v) => html`<span className="num nw sm">${(v || '').slice(5)}</span>` },
       { title: '景区', dataIndex: 'scenic_name', width: 200, render: (v, r) => html`<div className="cell-2"><div className="t ell">${v || r.scenic_id || '—'}</div>
-          <div className="d">${r.model || ''}${r.web_search ? ' · 联网' : ''}${r.items != null ? ` · ${r.items} 个候选` : ''}</div></div>` },
+          <div className="d">${r.model || ''}${r.thinking ? ' · 思考' : ''}${r.web_search ? ' · 联网' : ''}${r.items != null ? ` · ${r.items} 个候选` : ''}</div></div>` },
       { title: '结果', dataIndex: 'ok', width: 70, render: (v) => (v ? html`<${Tag} color="green" size="small">成功<//>` : html`<${Tag} color="red" size="small">失败<//>`) },
       { title: '用时', dataIndex: 'elapsed', width: 64, align: 'right', render: (v) => html`<span className="num sm">${v != null ? v + 's' : '—'}</span>` },
       { title: '说明', dataIndex: 'error', render: (v, r) => html`<div className=${'ell sm ' + (r.ok ? 'muted' : '')} style=${{ color: r.ok ? undefined : '#c62828' }}
@@ -780,7 +780,7 @@
     if (!st) return html`<div className="page"><${Spin} /></div>`;
     const set = (k) => (v) => setSt((o) => ({ ...o, [k]: v }));
     const sw = (k) => html`<${Switch} checked=${!!st[k]} onChange=${set(k)} />`;
-    const AI_FIELDS = ['ai_enabled', 'ai_base_url', 'ai_model', 'ai_web_search', 'ai_max_keyword', 'ai_min_confidence', 'ai_auto_approve', 'ai_timeout_s'];
+    const AI_FIELDS = ['ai_enabled', 'ai_base_url', 'ai_model', 'ai_web_search', 'ai_max_keyword', 'ai_min_confidence', 'ai_auto_approve', 'ai_timeout_s', 'ai_thinking'];
     const save = async () => {
       setBusy(true);
       try {
@@ -821,6 +821,7 @@
             <//>
             <${Field} label="联网搜索">${sw('ai_web_search')}<span className="lbl">让模型先上网查（web_search），更准但更慢、费用更高；最多</span>
               <${InputNumber} hideButtons value=${st.ai_max_keyword} onChange=${set('ai_max_keyword')} min=${1} max=${10} disabled=${!st.ai_web_search} style=${{ width: 90 }} suffix="个词" /><//>
+            <${Field} label="深度思考">${sw('ai_thinking')}<span className="lbl">默认关闭（请求带 thinking: disabled），更快更省；输出固定非流式（stream: false），一次拿完整结果</span><//>
             <${Field} label="自动通过">${sw('ai_auto_approve')}<span className="lbl">置信度 ≥</span>
               <${InputNumber} hideButtons value=${st.ai_min_confidence} onChange=${set('ai_min_confidence')} min=${0.5} max=${1} step=${0.05} precision=${2} style=${{ width: 90 }} />
               <span className="lbl">时自动保留并审核通过；低于这个只打标签、留给人</span><//>
@@ -831,7 +832,7 @@
             <//>
           </div>
           ${test && !test.loading && html`<${Banner} style=${{ marginTop: 14 }} type=${test.ok ? 'success' : 'danger'} closeIcon=${null}
-            description=${test.ok ? `连通了：${test.model}${test.web_search ? '（联网搜索）' : ''}，用时 ${test.elapsed} 秒；返回：${test.text}${test.request_id ? `；request_id ${test.request_id}` : ''}`
+            description=${test.ok ? `连通了：${test.model}（${test.thinking ? '深度思考开' : '深度思考关'}，非流式${test.web_search ? '，联网搜索' : ''}），用时 ${test.elapsed} 秒；返回：${test.text}${test.request_id ? `；request_id ${test.request_id}` : ''}${test.note ? `；${test.note}` : ''}`
               : `没连通：${test.error}${test.request_id ? `（request_id ${test.request_id}）` : ''}${test.raw ? `；原始返回：${test.raw}` : ''}`} />`}
         <//>
         <${AILog} />

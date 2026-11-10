@@ -11,6 +11,7 @@
     ai_min_confidence   自动通过 / 自动保留需要的最低置信度，默认 0.8
     ai_auto_approve     AI 有把握时是否自动审核通过（备注以「AI审核：」开头，方便人最后复核）
     ai_timeout_s        单次请求超时（秒）
+    ai_thinking         深度思考（默认关：请求里带 thinking: {"type": "disabled"}；始终非流式 stream: false，一次拿完整结果）
 
 发送给模型的只有：景区名称 / 别名 / 省市区 / 地址 / 坐标 / 等级 / 核心景点，和携程候选的名称 / 类型 / 城市区县 / 地址 / 距离。
 同一景区、同一组候选的结果会缓存在 MySQL（scenic_ai_judge），重复打开不重复调用。
@@ -30,7 +31,8 @@ from pathlib import Path
 import match
 
 DEFAULTS = dict(ai_enabled=False, ai_base_url="https://ark.cn-beijing.volces.com/api/v3", ai_model="glm-5-3-flash-260828",
-                ai_api_key="", ai_web_search=False, ai_max_keyword=3, ai_min_confidence=0.8, ai_auto_approve=True, ai_timeout_s=60)
+                ai_api_key="", ai_web_search=False, ai_max_keyword=3, ai_min_confidence=0.8, ai_auto_approve=True, ai_timeout_s=60,
+                ai_thinking=False)
 MAX_ITEMS = 30  # 一次最多给模型看的候选数
 
 # 调用日志：每次调用（成功 / 失败）一行 JSON，写 logs/ai_calls.jsonl，内存里留最近 300 条给设置页看
@@ -164,25 +166,44 @@ def _rid(headers):
     return None
 
 
+def _post(url, key, body, timeout):
+    """发一次请求，返回 (原始文字, request id)；HTTP 错误原样抛出给上层处理。"""
+    req = urllib.request.Request(url, data=json.dumps(body, ensure_ascii=False).encode("utf-8"),
+                                 headers={"Authorization": f"Bearer {key}", "Content-Type": "application/json"})
+    with urllib.request.urlopen(req, timeout=timeout) as r:
+        return r.read().decode("utf-8", "replace"), _rid(r.headers)
+
+
 def call(cfg, text):
-    """返回 (文字结果, 用时秒, 附加信息 {request_id, usage, raw})；失败抛 AIError（带 HTTP 状态码、request id、原始返回片段）。"""
+    """返回 (文字结果, 用时秒, 附加信息 {request_id, usage, note})；失败抛 AIError（带 HTTP 状态码、request id、原始返回片段）。
+    非流式（stream: false），默认关闭深度思考（thinking: disabled）；模型不认 thinking 参数时自动去掉重试一次。"""
     if not cfg.get("ai_api_key"):
         raise AIError("没有配置 API Key（设置页填写，或设置环境变量 ARK_API_KEY）")
     body = dict(model=cfg["ai_model"], stream=False,
+                thinking=dict(type="enabled" if cfg.get("ai_thinking") else "disabled"),
                 input=[dict(role="user", content=[dict(type="input_text", text=text)])])
     if cfg.get("ai_web_search"):
         body["tools"] = [dict(type="web_search", max_keyword=int(cfg.get("ai_max_keyword") or 3))]
     url = cfg["ai_base_url"] + "/responses"
-    req = urllib.request.Request(url, data=json.dumps(body, ensure_ascii=False).encode("utf-8"),
-                                 headers={"Authorization": f"Bearer {cfg['ai_api_key']}", "Content-Type": "application/json"})
     t0 = time.time()
     timeout = float(cfg.get("ai_timeout_s") or 60)
+    note = None
     try:
-        with urllib.request.urlopen(req, timeout=timeout) as r:
-            rid = _rid(r.headers)
-            raw = r.read().decode("utf-8", "replace")
+        try:
+            raw, rid = _post(url, cfg["ai_api_key"], body, timeout)
+        except urllib.error.HTTPError as e:
+            raw0 = e.read().decode("utf-8", "replace")
+            if e.code == 400 and "thinking" in raw0.lower():  # 这个模型 / 接口不认 thinking 参数：去掉重试一次
+                body.pop("thinking", None)
+                note = "模型不支持 thinking 参数，已去掉后重试"
+                raw, rid = _post(url, cfg["ai_api_key"], body, timeout)
+            else:
+                e.raw_text = raw0
+                raise
     except urllib.error.HTTPError as e:
-        raw = e.read().decode("utf-8", "replace")
+        raw = getattr(e, "raw_text", None)
+        if raw is None:
+            raw = e.read().decode("utf-8", "replace")
         rid = _rid(e.headers)
         msg = raw[:300]
         try:  # 方舟的错误格式：{"error": {"code": "...", "message": "...", "type": "..."}}
@@ -211,7 +232,7 @@ def call(cfg, text):
     except AIError as e:
         e.request_id, e.raw = rid, raw[:1000]
         raise
-    return out, round(time.time() - t0, 1), dict(request_id=rid, usage=js.get("usage") if isinstance(js, dict) else None)
+    return out, round(time.time() - t0, 1), dict(request_id=rid, usage=js.get("usage") if isinstance(js, dict) else None, note=note)
 
 
 def parse(text):
@@ -247,7 +268,7 @@ def judge(cfg, scenic, items, rule=None, cache_get=None, cache_put=None):
         if hit:
             return dict(hit, cached=True)
     base = dict(scenic_id=scenic.get("id"), scenic_name=scenic.get("name"), model=cfg.get("ai_model"),
-                web_search=bool(cfg.get("ai_web_search")), items=len(items))
+                web_search=bool(cfg.get("ai_web_search")), thinking=bool(cfg.get("ai_thinking")), stream=False, items=len(items))
     t0 = time.time()
     try:
         text, elapsed, meta = call(cfg, build_prompt(scenic, items, rule))
@@ -271,7 +292,7 @@ def judge(cfg, scenic, items, rule=None, cache_get=None, cache_put=None):
     res = dict(decisions=dec, approve=bool(js.get("approve")) and any(v["keep"] for v in dec.values()),
                confidence=_num(js.get("confidence")), summary=str(js.get("summary") or "")[:120], model=cfg.get("ai_model"),
                elapsed=elapsed, cached=False)
-    log_call(dict(base, ok=True, elapsed=elapsed, request_id=meta.get("request_id"), usage=meta.get("usage"),
+    log_call(dict(base, ok=True, elapsed=elapsed, request_id=meta.get("request_id"), usage=meta.get("usage"), note=meta.get("note"),
                   approve=res["approve"], confidence=res["confidence"], summary=res["summary"],
                   kept=sum(1 for v in dec.values() if v["keep"]), raw=text[:500]))
     if cache_put:
@@ -280,7 +301,8 @@ def judge(cfg, scenic, items, rule=None, cache_get=None, cache_put=None):
 
 
 def ping(cfg):
-    base = dict(scenic_id="(测试连接)", model=cfg.get("ai_model"), web_search=bool(cfg.get("ai_web_search")))
+    base = dict(scenic_id="(测试连接)", model=cfg.get("ai_model"), web_search=bool(cfg.get("ai_web_search")),
+                thinking=bool(cfg.get("ai_thinking")), stream=False)
     t0 = time.time()
     try:
         text, elapsed, meta = call(cfg, '只回复 JSON：{"ok":true}')
@@ -288,6 +310,7 @@ def ping(cfg):
         log_call(dict(base, ok=False, elapsed=round(time.time() - t0, 1), error=str(e), http_status=e.http_status,
                       request_id=e.request_id, raw=(e.raw or "")[:500]))
         raise
-    log_call(dict(base, ok=True, elapsed=elapsed, request_id=meta.get("request_id"), usage=meta.get("usage"), raw=text[:200]))
+    log_call(dict(base, ok=True, elapsed=elapsed, request_id=meta.get("request_id"), usage=meta.get("usage"), note=meta.get("note"),
+                  raw=text[:200]))
     return dict(ok=True, text=text[:200], elapsed=elapsed, model=cfg.get("ai_model"), web_search=bool(cfg.get("ai_web_search")),
-                request_id=meta.get("request_id"))
+                thinking=bool(cfg.get("ai_thinking")), request_id=meta.get("request_id"), note=meta.get("note"))
