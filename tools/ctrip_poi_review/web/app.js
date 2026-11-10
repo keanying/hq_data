@@ -119,9 +119,16 @@
     </div>`;
   }
 
-  function Card({ title, sub, extra, children, className = '', bodyClass = '', style }) {
+  function Help({ text }) {
+    return html`<${Tooltip} content=${html`<div style=${{ maxWidth: 340, lineHeight: 1.7 }}>${text}</div>`}>
+      <span className="help"><${Ic.IconInfoCircle} /></span><//>`;
+  }
+  function Field({ label, children }) {
+    return html`<label className="f-l">${label}</label><div className="f-c">${children}</div>`;
+  }
+  function Card({ title, sub, help, extra, children, className = '', bodyClass = '', style }) {
     return html`<div className=${'card ' + className} style=${style}>
-      ${(title || extra) && html`<div className="hd"><h3>${title}</h3>${sub && html`<span className="sub">${sub}</span>`}<span className="grow"></span>${extra}</div>`}
+      ${(title || extra) && html`<div className="hd"><h3>${title}</h3>${help && html`<${Help} text=${help} />`}${sub && html`<span className="sub">${sub}</span>`}<span className="grow"></span>${extra}</div>`}
       <div className=${'bd ' + bodyClass}>${children}</div>
     </div>`;
   }
@@ -377,50 +384,55 @@
       return () => clearInterval(t);
     });
     const cols = [
-      { title: '景区 / POI', dataIndex: 'poi_name', width: 260, render: (v, r) => html`<div className="cell-2"><div className="t">${v || '—'} <${Text} type="tertiary" size="small">poiId ${r.poi_id}<//></div>
-          <div className="d">${r.scenic_name || r.scenic_id}${r.city ? ' · ' + shortCity(r.city) : ''}</div></div>` },
-      { title: '状态', dataIndex: 'status', width: 80, render: crawlTag },
-      { title: '页数', dataIndex: 'pages_done', width: 64, align: 'right' },
-      { title: '点评', dataIndex: 'review_qty', width: 100, align: 'right', render: (v, r) => html`<span className="nw">${fmt(v)} / ${fmt(r.total_count)}</span>` },
-      { title: '新增图片', dataIndex: 'image_qty', width: 96, align: 'right', render: fmt },
-      { title: '说明', dataIndex: 'message', render: (v) => html`<${Text} type="tertiary" size="small" ellipsis=${{ showTooltip: true }} style=${{ width: 220 }}>${v || '—'}<//>` },
-      { title: '更新时间', dataIndex: 'updated_at', width: 150, render: (v) => html`<span className="nw">${v || ''}</span>` },
-      { title: '', dataIndex: 'op', width: 190, render: (v, r) => html`<span className="toolbar nw" style=${{ flexWrap: 'nowrap' }}>
-          <${Button} size="small" theme="borderless" onClick=${() => go('gallery', { poi_id: r.poi_id })}>看图片<//>
-          ${r.poi_uri && html`<${Button} size="small" theme="borderless" type="tertiary" onClick=${() => window.open(r.poi_uri, '_blank', 'noreferrer')}>携程页面<//>`}</span>` },
+      { title: 'POI', dataIndex: 'poi_name', width: 340, render: (v, r) => html`<div className="cell-2">
+          <div className="t ell" title=${v}>${v || '—'}</div>
+          <div className="d ell">${r.scenic_name || r.scenic_id}${r.city ? ' · ' + shortCity(r.city) : ''} · poiId ${r.poi_id}</div></div>` },
+      { title: '状态', dataIndex: 'status', width: 84, render: crawlTag },
+      { title: '页数', dataIndex: 'pages_done', width: 64, align: 'right', render: (v) => html`<span className="num">${fmt(v)}</span>` },
+      { title: '点评', dataIndex: 'review_qty', width: 110, align: 'right', render: (v, r) => html`<span className="num nw">${fmt(v)}<span className="muted"> / ${fmt(r.total_count)}</span></span>` },
+      { title: '新增图片', dataIndex: 'image_qty', width: 96, align: 'right', render: (v) => html`<span className="num">${fmt(v)}</span>` },
+      { title: '说明', dataIndex: 'message', render: (v) => html`<div className="ell muted sm" title=${v || ''}>${v || '—'}</div>` },
+      { title: '更新', dataIndex: 'updated_at', width: 112, render: (v) => html`<span className="num muted sm nw" title=${v || ''}>${(v || '').slice(5, 16)}</span>` },
+      { title: '', dataIndex: 'op', width: 150, render: (v, r) => html`<span className="links nw">
+          <a onClick=${() => go('gallery', { scenic_id: r.scenic_id, poi_id: r.poi_id })}>看图片</a>
+          ${r.poi_uri && html`<a className="sec" href=${r.poi_uri} target="_blank" rel="noreferrer">携程页面</a>`}</span>` },
     ];
     const statusOpts = [{ value: '', label: '全部' }, { value: 'done', label: '完成' }, { value: 'empty', label: '无图' }, { value: 'partial', label: '部分' }, { value: 'failed', label: '失败' }, { value: 'running', label: '采集中' }];
     return html`<div className="page">
-      <div className="row2 even" style=${{ height: 300, flex: 'none' }}>
-        <${Card} title="批量采集" sub="对已审核（approval=1）景区保留的 POI，进主页翻点评、存图片" bodyClass="scroll">
-          <div className="toolbar" style=${{ marginBottom: 12 }}>
-            <${CitySelect} value=${p.city} onChange=${set('city')} cities=${cities} />
-            <${Input} value=${p.grade} onChange=${set('grade')} placeholder="等级，如 5A,4A" style=${{ width: 140 }} showClear />
-            <${Input} value=${p.q} onChange=${set('q')} placeholder="景区名 / 景区ID" style=${{ width: 180 }} showClear />
+      <div className="row2 even" style=${{ flex: 'none' }}>
+        <${Card} title="批量采集" sub="已审核景区保留的 POI"
+          help="对已审核（approval=1）景区保留的每个 POI：打开携程主页，第一页读页面里的 __NEXT_DATA__，之后点「下一页」读 getCommentCollapseList，把点评图片写进 MySQL。采过的 POI 自动跳过；没有图片的 POI 记为「无图」并立即换下一个。数字填 0 表示不限。">
+          <div className="form">
+            <${Field} label="采集范围">
+              <${CitySelect} value=${p.city} onChange=${set('city')} cities=${cities} style=${{ width: 130 }} />
+              <${Input} value=${p.grade} onChange=${set('grade')} placeholder="等级，如 5A,4A" style=${{ width: 140 }} showClear />
+              <${Input} value=${p.q} onChange=${set('q')} placeholder="景区名 / 景区ID" style=${{ width: 180 }} showClear />
+            <//>
+            <${Field} label="每个 POI">
+              <span className="lbl">最多</span><${InputNumber} hideButtons value=${p.max_pages} onChange=${set('max_pages')} min=${1} style=${{ width: 96 }} suffix="页" />
+              <${InputNumber} hideButtons value=${p.max_images} onChange=${set('max_images')} min=${0} style=${{ width: 106 }} suffix="张" />
+            <//>
+            <${Field} label="换下一个">
+              <span className="lbl">连续</span><${InputNumber} hideButtons value=${p.empty_pages} onChange=${set('empty_pages')} min=${0} style=${{ width: 96 }} suffix="页" />
+              <span className="lbl">没有新图片</span>
+            <//>
+            <${Field} label="本次">
+              <span className="lbl">最多</span><${InputNumber} hideButtons value=${p.limit} onChange=${set('limit')} min=${0} style=${{ width: 116 }} suffix="个 POI" />
+              <${Checkbox} checked=${p.refresh} onChange=${(e) => set('refresh')(e.target.checked)}>已采过的也重采<//>
+              <span style=${{ flex: 1 }}></span>
+              <${Button} theme="solid" icon=${html`<${Ic.IconPlay} />`} onClick=${submit}>开始采集<//>
+            <//>
           </div>
-          <div className="toolbar" style=${{ marginBottom: 12 }}>
-            <span className="lbl">每个 POI 最多</span><${InputNumber} hideButtons value=${p.max_pages} onChange=${set('max_pages')} min=${1} style=${{ width: 110 }} suffix="页" />
-            <${InputNumber} hideButtons value=${p.max_images} onChange=${set('max_images')} min=${0} style=${{ width: 120 }} suffix="张" />
-            <span className="lbl">连续</span><${InputNumber} hideButtons value=${p.empty_pages} onChange=${set('empty_pages')} min=${0} style=${{ width: 110 }} suffix="页" />
-            <span className="lbl">没有新图片就换下一个 POI</span>
-          </div>
-          <div className="toolbar">
-            <span className="lbl">最多采</span><${InputNumber} hideButtons value=${p.limit} onChange=${set('limit')} min=${0} style=${{ width: 120 }} suffix="个 POI" />
-            <${Checkbox} checked=${p.refresh} onChange=${(e) => set('refresh')(e.target.checked)}>已采完的也重采<//>
-            <span className="grow" style=${{ flex: 1 }}></span>
-            <${Button} theme="solid" icon=${html`<${Ic.IconPlay} />`} onClick=${submit}>开始采集<//>
-          </div>
-          <div className="muted" style=${{ fontSize: 12, marginTop: 10 }}>第一页读页面里的 __NEXT_DATA__，之后点「下一页」读 getCommentCollapseList；最多张数填 0 表示不限，连续页数填 0 表示不按这个规则换。</div>
         <//>
         <${Card} title="正在采集" extra=${html`<${FollowControls} follow=${follow} refresh=${refreshFollow} />`} bodyClass="flush">
-          <div style=${{ padding: '12px 16px 8px', flex: 'none' }}>
+          <div style=${{ padding: '4px 18px 10px', flex: 'none' }}>
             ${follow && follow.paused && follow.message && html`<${Banner} type="warning" description=${follow.message} closeIcon=${null} style=${{ marginBottom: 8 }} />`}
             <${CrawlNow} active=${follow && follow.active} refresh=${refreshFollow} />
           </div>
-          <div style=${{ flex: 1, minHeight: 0, padding: '0 16px 12px', display: 'flex' }}><${LogBox} lines=${follow && follow.log} style=${{ flex: 1 }} /></div>
+          <div style=${{ flex: 1, minHeight: 90, padding: '0 18px 16px', display: 'flex' }}><${LogBox} lines=${follow && follow.log} style=${{ flex: 1 }} /></div>
         <//>
       </div>
-      <${Card} title="POI 采集记录" sub=${list.total != null ? `共 ${fmt(list.total)} 个 POI` : ''} className="fill" bodyClass="flush"
+      <${Card} title="POI 采集记录" sub=${list.total != null ? `${fmt(list.total)} 个` : ''} className="fill" bodyClass="flush"
         extra=${html`<span className="toolbar">
           <${Select} value=${flt.status} onChange=${(v) => setFlt((o) => ({ ...o, status: v }))} optionList=${statusOpts} style=${{ width: 110 }} />
           <${Input} value=${kw} onChange=${setKw} onEnterPress=${() => setFlt((o) => ({ ...o, q: kw.trim() }))} placeholder="POI 名 / poiId / 景区ID，回车"
@@ -449,7 +461,9 @@
           ${(v || []).length > 4 && html`<${Tag} size="small" color="grey">+${v.length - 4}<//>`}${!(v || []).length && html`<${Text} type="quaternary">—<//>`}</div>` },
       { title: '图片采集', dataIndex: 'collect', width: 96, render: (v, r) => collectTag(r) },
       { title: '图片', dataIndex: 'images', width: 70, align: 'right', render: fmt },
-      { title: '核对', dataIndex: 'updated_at', width: 150, render: (v, r) => html`<div className="cell-2"><div className="d">${r.reviewer || (/^自动审核/.test(r.note || '') ? 'auto' : '')}</div><div className="d nw">${v || ''}</div></div>` },
+      { title: '核对', dataIndex: 'updated_at', width: 120, render: (v, r) => html`<div className="cell-2"><div className="d">${r.reviewer || (/^自动审核/.test(r.note || '') ? 'auto' : '')}</div>
+          <div className="d num nw" title=${v || ''}>${(v || '').slice(5, 16)}</div></div>` },
+
     ];
     const setK = (k) => (v) => setF((o) => ({ ...o, [k]: v }));
     return html`<div className="page">
@@ -653,35 +667,44 @@
     const box = useRef(null); const h = useHeight(box);
     return html`<div className="page">
       <div className="row2 even" style=${{ flex: 'none' }}>
-        <${Card} title="自动审核" sub="名称一致且（地址相近 / 门牌一致 / 同省市区）直接通过，通过后自动排进图片采集">
-          <div className="toolbar" style=${{ marginBottom: 12 }}>
-            <${CitySelect} value=${ar.city} onChange=${sa('city')} cities=${cities} />
-            <${Input} value=${ar.grade} onChange=${sa('grade')} placeholder="等级，如 5A,4A" style=${{ width: 130 }} showClear />
-            <${Input} value=${ar.q} onChange=${sa('q')} placeholder="景区名 / ID" style=${{ width: 150 }} showClear />
-            <span className="lbl">最多</span><${InputNumber} hideButtons value=${ar.limit} onChange=${sa('limit')} min=${0} style=${{ width: 120 }} suffix="个" />
-          </div>
-          <div className="toolbar">
-            <${Checkbox} checked=${ar.spots} onChange=${(e) => sa('spots')(e.target.checked)}>再搜核心景点<//>
-            <${Checkbox} checked=${ar.cache_only} onChange=${(e) => sa('cache_only')(e.target.checked)}>只用缓存<//>
-            <${Checkbox} checked=${ar.dry_run} onChange=${(e) => sa('dry_run')(e.target.checked)}>试运行（不写库）<//>
-            <span style=${{ flex: 1 }}></span>
-            <${Button} theme="solid" icon=${html`<${Ic.IconPlay} />`} onClick=${() => submit('auto_review', ar)}>开始<//>
+        <${Card} title="自动审核" help="名称一致且（地址相近 / 门牌一致 / 同省市区）的直接通过，通过后自动排进图片采集；拿不准的留给人工。试运行只看结果不写库。">
+          <div className="form">
+            <${Field} label="范围">
+              <${CitySelect} value=${ar.city} onChange=${sa('city')} cities=${cities} style=${{ width: 130 }} />
+              <${Input} value=${ar.grade} onChange=${sa('grade')} placeholder="等级，如 5A,4A" style=${{ width: 140 }} showClear />
+              <${Input} value=${ar.q} onChange=${sa('q')} placeholder="景区名 / ID" style=${{ width: 160 }} showClear />
+            <//>
+            <${Field} label="数量">
+              <span className="lbl">最多</span><${InputNumber} hideButtons value=${ar.limit} onChange=${sa('limit')} min=${0} style=${{ width: 110 }} suffix="个景区" />
+              <span className="lbl">0 = 不限</span>
+            <//>
+            <${Field} label="选项">
+              <${Checkbox} checked=${ar.spots} onChange=${(e) => sa('spots')(e.target.checked)}>再搜核心景点<//>
+              <${Checkbox} checked=${ar.cache_only} onChange=${(e) => sa('cache_only')(e.target.checked)}>只用缓存<//>
+              <${Checkbox} checked=${ar.dry_run} onChange=${(e) => sa('dry_run')(e.target.checked)}>试运行<//>
+              <span style=${{ flex: 1 }}></span>
+              <${Button} theme="solid" icon=${html`<${Ic.IconPlay} />`} onClick=${() => submit('auto_review', ar)}>开始<//>
+            <//>
           </div>
         <//>
-        <${Card} title="采集点评图片" sub="已审核景区保留的 POI；已采完的自动跳过">
-          <div className="toolbar" style=${{ marginBottom: 12 }}>
-            <${CitySelect} value=${im.city} onChange=${si('city')} cities=${cities} />
-            <${Input} value=${im.grade} onChange=${si('grade')} placeholder="等级" style=${{ width: 100 }} showClear />
-            <${Input} value=${im.q} onChange=${si('q')} placeholder="景区名 / ID" style=${{ width: 150 }} showClear />
-            <${InputNumber} hideButtons value=${im.max_pages} onChange=${si('max_pages')} min=${1} style=${{ width: 110 }} suffix="页" />
-            <${InputNumber} hideButtons value=${im.max_images} onChange=${si('max_images')} min=${0} style=${{ width: 120 }} suffix="张" />
-          </div>
-          <div className="toolbar">
-            <span className="lbl">连续</span><${InputNumber} hideButtons value=${im.empty_pages} onChange=${si('empty_pages')} min=${0} style=${{ width: 110 }} suffix="页" />
-            <span className="lbl">无新图换下一个</span>
-            <${Checkbox} checked=${im.refresh} onChange=${(e) => si('refresh')(e.target.checked)}>重采<//>
-            <span style=${{ flex: 1 }}></span>
-            <${Button} theme="solid" icon=${html`<${Ic.IconPlay} />`} onClick=${() => submit('images', im)}>开始<//>
+        <${Card} title="采集点评图片" help="已审核景区保留的 POI；采过的自动跳过，没有图片的记为「无图」立即换下一个。数字填 0 表示不限。">
+          <div className="form">
+            <${Field} label="范围">
+              <${CitySelect} value=${im.city} onChange=${si('city')} cities=${cities} style=${{ width: 130 }} />
+              <${Input} value=${im.grade} onChange=${si('grade')} placeholder="等级" style=${{ width: 110 }} showClear />
+              <${Input} value=${im.q} onChange=${si('q')} placeholder="景区名 / ID" style=${{ width: 160 }} showClear />
+            <//>
+            <${Field} label="每个 POI">
+              <span className="lbl">最多</span><${InputNumber} hideButtons value=${im.max_pages} onChange=${si('max_pages')} min=${1} style=${{ width: 96 }} suffix="页" />
+              <${InputNumber} hideButtons value=${im.max_images} onChange=${si('max_images')} min=${0} style=${{ width: 106 }} suffix="张" />
+              <span className="lbl">连续</span><${InputNumber} hideButtons value=${im.empty_pages} onChange=${si('empty_pages')} min=${0} style=${{ width: 96 }} suffix="页" />
+              <span className="lbl">无新图换下一个</span>
+            <//>
+            <${Field} label="选项">
+              <${Checkbox} checked=${im.refresh} onChange=${(e) => si('refresh')(e.target.checked)}>已采过的也重采<//>
+              <span style=${{ flex: 1 }}></span>
+              <${Button} theme="solid" icon=${html`<${Ic.IconPlay} />`} onClick=${() => submit('images', im)}>开始<//>
+            <//>
           </div>
         <//>
       </div>
@@ -721,46 +744,41 @@
     ['data', '数据预览', Ic.IconGridView], ['gallery', '图片预览', Ic.IconGallery], ['jobs', '任务中心', Ic.IconList],
   ];
 
-  function Rail({ route }) {
-    return html`<nav className="rail">
-      <div className="logo" title="景区 POI 数据工作台"><${Ic.IconMapPin} /></div>
-      ${NAV.map(([k, t, I]) => html`<${Tooltip} key=${k} content=${t} position="right">
-        <a className=${route === k ? 'on' : ''} href=${'#/' + k} aria-label=${t}><${I} /></a><//>`)}
-      <span className="grow"></span>
-      <${Tooltip} content="接口文档" position="right"><a href="/docs" target="_blank" aria-label="接口文档"><${Ic.IconFile} /></a><//>
-    </nav>`;
-  }
-
-  function TopBar({ route, health, follow, onReviewer }) {
+  /** 左侧深色图标栏：导航 + 搜索 / 提醒 / 核对人（不再单独占一行顶栏，页面用满高度） */
+  function Rail({ route, health, follow, onReviewer }) {
     const [kw, setKw] = useState('');
-    const [title, sub] = PAGES[route] || PAGES.overview;
     const alerts = [];
     if (health && health.need_human) alerts.push({ text: `${health.need_human} 个任务需要人工处理（登录 / 验证）`, to: 'jobs' });
     if (follow && follow.paused) alerts.push({ text: `边核对边采集已暂停：${follow.message || '手动暂停'}`, to: 'images' });
     if (health && health.ok === false) alerts.push({ text: `数据库异常：${health.error || ''}`, to: 'overview' });
     const reviewer = (health && health.reviewer) || '';
-    return html`<header className="topbar">
-      <h1>${title}</h1><span className="sub" title=${sub}>${sub}</span>
+    const search = () => { if (kw.trim()) go('data', { q: kw.trim() }); };
+    return html`<nav className="rail">
+      <div className="logo" title="景区 POI 数据工作台"><${Ic.IconMapPin} /></div>
+      ${NAV.map(([k, t, I]) => html`<${Tooltip} key=${k} content=${t} position="right">
+        <a className=${route === k ? 'on' : ''} href=${'#/' + k} aria-label=${t}><${I} /></a><//>`)}
       <span className="grow"></span>
-      <${Input} value=${kw} onChange=${setKw} prefix=${html`<${Ic.IconSearch} style=${{ marginLeft: 6 }} />`} placeholder="搜索景区名 / 景区ID，回车" style=${{ width: 260 }}
-        onEnterPress=${() => { if (kw.trim()) go('data', { q: kw.trim() }); }} showClear />
-      <${Popover} trigger="click" position="bottomRight" content=${html`<div style=${{ width: 320, padding: '10px 14px' }}>
-          <div style=${{ fontWeight: 600, marginBottom: 4 }}>提醒</div>
-          ${alerts.length ? alerts.map((a, i) => html`<div className="alert-item" key=${i} onClick=${() => go(a.to)}>${a.text}</div>`)
-            : html`<div className="muted" style=${{ padding: '8px 0' }}>没有需要处理的事项</div>`}</div>`}>
-        <div className="icon-btn" title="提醒"><${Ic.IconBell} />${alerts.length > 0 && html`<i className="dot"></i>`}</div>
+      <${Popover} trigger="click" position="rightBottom" content=${html`<div style=${{ padding: 12, width: 300 }}>
+          <${Input} value=${kw} onChange=${setKw} onEnterPress=${search} autoFocus showClear placeholder="景区名 / 别名 / 景区ID，回车"
+            prefix=${html`<${Ic.IconSearch} style=${{ marginLeft: 6 }} />`} /></div>`}>
+        <a aria-label="搜索景区" title="搜索景区"><${Ic.IconSearch} /></a>
       <//>
-      <${Dropdown} position="bottomRight" render=${html`<${Dropdown.Menu}>
+      <${Popover} trigger="click" position="rightBottom" content=${html`<div style=${{ width: 320, padding: '10px 14px' }}>
+          <div style=${{ fontWeight: 600, marginBottom: 4 }}>提醒</div>
+          ${alerts.length ? alerts.map((x, i) => html`<div className="alert-item" key=${i} onClick=${() => go(x.to)}>${x.text}</div>`)
+            : html`<div className="muted" style=${{ padding: '8px 0' }}>没有需要处理的事项</div>`}</div>`}>
+        <a aria-label="提醒" title="提醒" className="bell"><${Ic.IconBell} />${alerts.length > 0 && html`<i className="dot"></i>`}</a>
+      <//>
+      <${Dropdown} position="rightBottom" render=${html`<${Dropdown.Menu}>
+          <${Dropdown.Title}>${reviewer ? `核对人：${reviewer}` : '还没设置核对人'}<//>
           <${Dropdown.Item} icon=${html`<${Ic.IconUser} />`} onClick=${onReviewer}>设置核对人<//>
           <${Dropdown.Item} icon=${html`<${Ic.IconDownload} />`} onClick=${() => window.open('/api/export.csv')}>导出核对结果 CSV<//>
           <${Dropdown.Item} icon=${html`<${Ic.IconFile} />`} onClick=${() => window.open('/docs')}>接口文档<//>
         <//>`}>
-        <div className="who">
-          <${Avatar} size="small" style=${{ background: 'linear-gradient(135deg,#8b6cff,#e0703a)' }}>${reviewer ? reviewer.slice(0, 1) : html`<${Ic.IconUser} />`}<//>
-          <span className="nm">${reviewer || '设置核对人'}</span><${Ic.IconChevronDown} size="small" />
-        </div>
+        <span className="me" title=${reviewer || '设置核对人'}><${Avatar} size="small" style=${{ background: 'linear-gradient(135deg,#8b6cff,#e0703a)' }}>
+          ${reviewer ? reviewer.slice(0, 1) : html`<${Ic.IconUser} />`}<//></span>
       <//>
-    </header>`;
+    </nav>`;
   }
 
   function ReviewerModal({ visible, current, onClose, onSaved }) {
@@ -794,10 +812,10 @@
     else if (route === 'data') page = html`<${DataPage} ...${props} />`;
     else if (route === 'gallery') page = html`<${GalleryPage} ...${props} />`;
     else if (route === 'jobs') page = html`<${JobsPage} ...${props} />`;
+    useEffect(() => { document.title = `${PAGES[route][0]} · 景区 POI 数据工作台`; }, [route]);
     return html`<div className="frame">
-      <${Rail} route=${route} />
+      <${Rail} route=${route} health=${health} follow=${follow} onReviewer=${() => setRv(true)} />
       <div className="main">
-        <${TopBar} route=${route} health=${health} follow=${follow} onReviewer=${() => setRv(true)} />
         <div className="content">
           <${ReviewPage} visible=${route === 'review'} ...${props} />
           ${page}
