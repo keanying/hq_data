@@ -96,6 +96,19 @@
   :host(.embed) .filters button { height: 32px; }
   :host(.embed) footer { background: rgba(255, 255, 255, .96); border-top: 1px solid rgba(28, 31, 35, .08); border-radius: 0; padding: 10px 16px; }
   :host(.embed) .auto-banner, :host(.embed) .idle-banner { border-radius: 8px; }
+  /* 右侧操作对齐：‹ › ⚙、每条结果的「保留」、底部「跳过 / 审核完成」在同一条竖线上；列表滚动条细且占位固定 */
+  :host(.embed) .body { scrollbar-gutter: stable; scrollbar-width: thin; }
+  :host(.embed) .body::-webkit-scrollbar { width: 6px; }
+  :host(.embed) .body::-webkit-scrollbar-thumb { background: rgba(28, 31, 35, .18); border-radius: 3px; }
+  :host(.embed) header { padding-right: 35px; }
+  :host(.embed) .prog { padding-right: 35px; }
+  :host(.embed) footer { padding-right: 35px; gap: 8px; }
+  :host(.embed) .row { align-items: center; padding-right: 12px; }
+  :host(.embed) .row > :last-child { align-self: center; }
+  :host(.embed) .row button.keep { min-width: 84px; height: 32px; padding: 0 12px; font-weight: 500; }
+  :host(.embed) footer button { height: 34px; min-width: 84px; padding: 0 14px; font-size: 13px; font-weight: 500; }
+  :host(.embed) footer button.primary { min-width: 104px; }
+  :host(.embed) footer input { height: 34px; }
   :host(.embed) .empty-state { text-align: center; padding: 64px 16px; color: rgba(28, 31, 35, .62); }
   :host(.embed) .empty-state b { display: block; font-size: 16px; color: #1c1f23; margin-bottom: 6px; }
   :host(.embed) .empty-state .acts { margin-top: 16px; display: flex; gap: 8px; justify-content: center; }
