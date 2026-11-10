@@ -418,6 +418,14 @@ def create_app(args):
         return db.images_query(scenic_id or None, poi_id or None, min(max(limit, 1), 500), max(offset, 0), city or None, q or None,
                                score_min or None, sort)
 
+    @app.post("/api/images/delete")
+    def images_delete(payload: dict = Body(...)):
+        """删除图片：{"record_ids": [...]}。从图片表和交付表删除，并记下来（重采也不会写回）。"""
+        ids = payload.get("record_ids") or []
+        if not isinstance(ids, list) or len(ids) > 5000:
+            raise HTTPException(400, "record_ids 需要是列表，一次最多 5000 条")
+        return db.images_delete(ids, by=svc.prefs.get("reviewer") or "web")
+
     @app.get("/api/image_facets")
     def image_facets(city: str = "", scenic_id: str = "", q: str = ""):
         """图片预览的下拉选项：有图片的城市、景区（带图片数），选了景区再给它的 POI。"""

@@ -95,3 +95,10 @@ CREATE TABLE IF NOT EXISTS scenic_ai_judge (
   created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
   PRIMARY KEY (scenic_id, sig)
 ) DEFAULT CHARSET=utf8mb4 COMMENT='AI 辅助核对结果缓存';
+
+-- 人工删除的点评图片：从图片表和交付表删掉，记在这里，之后重采也不会写回
+CREATE TABLE IF NOT EXISTS scenic_poi_image_deleted (
+  record_id VARCHAR(64) NOT NULL PRIMARY KEY COMMENT '被删除图片的 record_id（再次采集时跳过）',
+  scenic_id VARCHAR(64) NULL, poi_id BIGINT NULL, image_url VARCHAR(512) NULL,
+  deleted_by VARCHAR(64) NULL, deleted_at DATETIME DEFAULT CURRENT_TIMESTAMP
+) DEFAULT CHARSET=utf8mb4 COMMENT='人工删除的点评图片（不再采集、不进交付表）';

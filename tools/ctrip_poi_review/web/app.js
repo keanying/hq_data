@@ -76,7 +76,11 @@
     }, [key]); // eslint-disable-line
     useEffect(() => { load(true); }, [key]); // eslint-disable-line
     const hasMore = st.total == null || st.items.length < st.total;
-    return { ...st, hasMore, loadMore: () => load(false), reload: () => load(true) };
+    const remove = (pred) => setSt((s) => {  // 本地去掉（如删除后），不重新加载、不丢滚动位置
+      const items = s.items.filter((x) => !pred(x));
+      return { ...s, items, total: s.total == null ? null : Math.max(0, s.total - (s.items.length - items.length)) };
+    });
+    return { ...st, hasMore, loadMore: () => load(false), reload: () => load(true), remove };
   }
 
   function useHeight(ref) {
@@ -527,9 +531,11 @@
   }
 
   // ------------------------------------------------------------ 图片预览
-  function Thumb({ x, onOpen }) {
+  function Thumb({ x, onOpen, selecting, selected, onToggle }) {
     const [bad, setBad] = useState(false);
-    return html`<div className="ph" onClick=${onOpen} title=${`${x.scenic_name} / ${x.poi_name}`}>
+    return html`<div className=${'ph' + (selecting ? ' selecting' : '') + (selected ? ' selected' : '')}
+        onClick=${(e) => (selecting ? onToggle(e) : onOpen())} title=${`${x.scenic_name} / ${x.poi_name}`}>
+      <span className="pick" title=${selected ? '取消选择' : '选择（Shift 连选）'} onClick=${(e) => { e.stopPropagation(); onToggle(e); }}></span>
       ${bad ? html`<div className="broken"><div><${Ic.IconImage} size="extra-large" /><div>图片加载失败</div></div></div>`
         : html`<img loading="lazy" referrerPolicy="no-referrer" src=${x.image_thumb_url || x.image_url} onError=${() => setBad(true)} alt="" />`}
       ${x.review_score != null && html`<span className="score">★ ${x.review_score}</span>`}
@@ -538,7 +544,7 @@
   }
 
   /** 大图 + 右侧图片信息；← → 翻页，Esc 关闭，翻到已加载的末尾会自动加载下一页 */
-  function Viewer({ list, index, setIndex, onClose }) {
+  function Viewer({ list, index, setIndex, onClose, onDelete }) {
     const x = list.items[index];
     const [bad, setBad] = useState(false);
     useEffect(() => setBad(false), [index]);
@@ -549,6 +555,7 @@
         if (e.key === 'Escape') onClose();
         else if (e.key === 'ArrowLeft') prev();
         else if (e.key === 'ArrowRight') next();
+        else if (e.key === 'Delete' && onDelete && list.items[index]) onDelete([list.items[index].record_id]);
       };
       window.addEventListener('keydown', f);
       return () => window.removeEventListener('keydown', f);
@@ -596,6 +603,7 @@
           ${x.poi_uri && html`<${Button} size="small" onClick=${() => window.open(x.poi_uri, '_blank', 'noreferrer')}>携程 POI 页面<//>`}
           <${Button} size="small" theme="borderless" onClick=${() => { onClose(); go('gallery', { scenic_id: x.scenic_id, poi_id: x.poi_id }); }}>只看这个 POI<//>
           <${Button} size="small" theme="borderless" onClick=${() => { onClose(); go('data', { q: x.scenic_id }); }}>景区数据<//>
+          ${onDelete && html`<${Button} size="small" type="danger" theme="light" icon=${html`<${Ic.IconDelete} />`} onClick=${() => onDelete([x.record_id])}>删除这张（Delete）<//>`}
         </div>
       </aside>
     </div>`;
@@ -617,13 +625,53 @@
     const list = useInfinite('/api/images', f, 60);
     const box = useRef(null); const sentinel = useRef(null);
     const [vi, setVi] = useState(-1);
+    const [selMode, setSelMode] = useState(false);
+    const [sel, setSel] = useState(() => new Set());
+    const lastPick = useRef(-1);
+    const exitSel = () => { setSelMode(false); setSel(new Set()); lastPick.current = -1; };
+    const toggle = (i, e) => {
+      setSelMode(true);
+      setSel((old) => {
+        const n = new Set(old);
+        const id = list.items[i].record_id;
+        if (e && e.shiftKey && lastPick.current >= 0) {  // Shift：连选一段
+          const [a, b] = [Math.min(lastPick.current, i), Math.max(lastPick.current, i)];
+          for (let k = a; k <= b; k++) n.add(list.items[k].record_id);
+        } else if (n.has(id)) n.delete(id); else n.add(id);
+        lastPick.current = i;
+        return n;
+      });
+    };
+    const doDelete = (ids, after) => {
+      if (!ids.length) return;
+      Modal.confirm({
+        title: `删除 ${ids.length} 张图片？`,
+        content: '会同时从图片表和交付表 ods_prd_poi_image_di 删除；删掉的图片会记下来，之后再采集同一景区也不会写回。',
+        okText: '删除', cancelText: '取消', okButtonProps: { type: 'danger', theme: 'solid' },
+        onOk: async () => {
+          try {
+            const r = await post('/api/images/delete', { record_ids: ids });
+            const gone = new Set(ids);
+            list.remove((x) => gone.has(x.record_id));
+            Toast.success(`已删除 ${r.deleted} 张（交付表 ${r.ods_deleted} 行）`);
+            if (after) after();
+          } catch (e) { Toast.error(e.message); }
+        },
+      });
+    };
+    useEffect(() => {  // 选择模式下：Esc 退出，Delete 删除已选
+      if (!selMode || vi >= 0) return undefined;
+      const f = (e) => { if (e.key === 'Escape') exitSel(); else if (e.key === 'Delete' && sel.size) doDelete([...sel], exitSel); };
+      window.addEventListener('keydown', f);
+      return () => window.removeEventListener('keydown', f);
+    });
     useEffect(() => {
       if (!sentinel.current) return undefined;
       const io = new IntersectionObserver(([e]) => { if (e.isIntersecting) list.loadMore(); }, { root: box.current, rootMargin: '400px' });
       io.observe(sentinel.current);
       return () => io.disconnect();
     });
-    useEffect(() => { if (box.current) box.current.scrollTop = 0; setVi(-1); }, [JSON.stringify(f)]); // eslint-disable-line
+    useEffect(() => { if (box.current) box.current.scrollTop = 0; setVi(-1); exitSel(); }, [JSON.stringify(f)]); // eslint-disable-line
     const set = (patch) => setF((o) => ({ ...o, ...patch }));
     const cityOpts = [{ value: '', label: '全部城市' }].concat((facets.cities || []).filter((c) => c.city).map((c) => ({ value: c.city, label: `${shortCity(c.city)} · ${fmt(c.n)}` })));
     let scenicOpts = (facets.scenics || []).map((x) => ({ value: x.id, label: `${x.name} · ${fmt(x.n)}` }));
@@ -633,6 +681,14 @@
     return html`<div className="page">
       <${Card} title="点评图片" sub=${list.total != null ? `共 ${fmt(list.total)} 张` : ''} className="fill" bodyClass="flush"
         extra=${html`<span className="toolbar">
+          ${selMode ? html`<span className="sel-bar">
+              <b>已选 ${fmt(sel.size)} 张</b>
+              <${Button} size="small" theme="borderless" onClick=${() => setSel(new Set(list.items.map((x) => x.record_id)))}>全选已加载（${fmt(list.items.length)}）<//>
+              <${Button} size="small" theme="borderless" type="tertiary" onClick=${exitSel}>取消（Esc）<//>
+              <${Button} size="small" type="danger" theme="solid" icon=${html`<${Ic.IconDelete} />`} disabled=${!sel.size}
+                onClick=${() => doDelete([...sel], exitSel)}>删除${sel.size ? `（${fmt(sel.size)}）` : ''}<//>
+            </span>`
+            : html`<${Button} icon=${html`<${Ic.IconCheckboxTick} />`} onClick=${() => setSelMode(true)} disabled=${!list.items.length}>选择<//>`}
           <${Select} value=${f.city} onChange=${(v) => set({ city: v || '', scenic_id: '', poi_id: '' })} optionList=${cityOpts} style=${{ width: 140 }} />
           <${Select} value=${f.scenic_id || undefined} placeholder="全部景区（可搜索）" optionList=${scenicOpts} style=${{ width: 240 }} filter remote
             onSearch=${onScenicSearch} showClear onChange=${(v) => set({ scenic_id: v || '', poi_id: '' })} emptyContent="没有有图片的景区" />
@@ -644,12 +700,14 @@
           ${filtered && html`<${Button} theme="borderless" type="tertiary" onClick=${() => { setF({ city: '', scenic_id: '', poi_id: '', score_min: '', sort: 'collect', q: '' }); go('gallery'); }}>重置<//>`}
         </span>`}>
         <div className="gallery" ref=${box}>
-          ${list.items.length ? html`<div className="grid">${list.items.map((x, i) => html`<${Thumb} key=${x.record_id} x=${x} onOpen=${() => setVi(i)} />`)}</div>`
+          ${list.items.length ? html`<div className="grid">${list.items.map((x, i) => html`<${Thumb} key=${x.record_id} x=${x} onOpen=${() => setVi(i)}
+              selecting=${selMode} selected=${sel.has(x.record_id)} onToggle=${(e) => toggle(i, e)} />`)}</div>`
             : !list.loading && html`<${Empty} description=${list.error || '没有符合条件的图片'} style=${{ padding: 60 }} />`}
           <div ref=${sentinel} className="more">${listFoot(list, '张')}</div>
         </div>
       <//>
-      ${vi >= 0 && html`<${Viewer} list=${list} index=${vi} setIndex=${setVi} onClose=${() => setVi(-1)} />`}
+      ${vi >= 0 && html`<${Viewer} list=${list} index=${vi} setIndex=${setVi} onClose=${() => setVi(-1)}
+        onDelete=${(ids) => doDelete(ids, () => { if (vi >= list.items.length - 1) setVi(Math.max(-1, list.items.length - 2)); })} />`}
     </div>`;
   }
 

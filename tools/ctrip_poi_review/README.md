@@ -269,6 +269,7 @@ python service.py --channel chrome
 | 图片采集 | 批量采集（城市 / 等级 / 景区、每个 POI 最多页数 / 张数、连续几页无新图换下一个）；正在采集的 POI（进度 + 「下一个 POI」）和日志；POI 采集记录（状态、页数、点评、新增图片、停止原因） |
 | 数据预览 | 客户景区表 + `ctrip_poi_info` + `approval`，按城市 / 状态 / 等级 / 名称筛选；点一行看详情：保留的 POI、每个 POI 的图片数、去核对 / 看图片 |
 | 图片预览 | 下拉筛选：城市 → 景区（可搜索，带图片数）→ POI、评分、排序（最新采集 / 最新点评 / 评分最高 / 尺寸最大）。点开图片：左边大图（← → 翻页、Esc 关闭），右边图片信息：点评内容、record_id / image_id（可复制）、携程 imageId、点评时间、POI 图片 / 点评总数、景区、坐标，以及打开原图 / 点评详情 / 携程 POI 页面 |
+|  | **多选删除**：点「选择」或鼠标移到图片上点右上角的圆圈进入多选，Shift 连选一段，「全选已加载」；「删除」后确认。大图里也可「删除这张」（Delete 键）。删除会同时删工具图片表和交付表 `ods_prd_poi_image_di` 里的行，并记进 `scenic_poi_image_deleted`，之后重采也不会写回 |
 | 任务中心 | 提交「自动审核」「采集点评图片」任务，看进度和日志、取消；采集任务运行时也能点「下一个 POI」 |
 
 顶栏：全局搜索（跳到数据预览）、提醒（任务需要人工 / 边核对边采集暂停）、核对人设置、接口文档、导出 CSV。
@@ -296,6 +297,7 @@ python service.py --channel chrome
 | GET | `/api/scenic_table?city=&status=&grade=&q=&offset=&limit=` | 景区 + 保留 POI + 每个 POI 的图片数（分页） |
 | GET | `/api/scenic/{scenic_id}` | 景区详情和已保留的 POI |
 | GET | `/api/images?city=&q=&scenic_id=&poi_id=&score_min=&sort=&limit=&offset=` | 已采图片（分页）；sort = collect / publish / score / size |
+| POST | `/api/images/delete` | 删除图片：`{"record_ids": [...]}`（图片表 + 交付表，记入删除表，不再采） |
 | GET | `/api/image_facets?city=&scenic_id=&q=` | 图片预览的下拉选项：有图片的城市、景区（带图片数），选了景区再给 POI |
 | GET | `/api/crawl_records?status=&q=&limit=&offset=` | 每个 POI 的采集记录（分页） |
 | GET | `/api/crawl` | 正在采集的 POI：来源、页数、新增图片、连续无新图页数 |
