@@ -117,7 +117,7 @@ DDL += [
     f"""CREATE TABLE IF NOT EXISTS {CRAWL_TABLE} (
   scenic_id VARCHAR(64) NOT NULL, poi_id BIGINT NOT NULL,
   poi_name VARCHAR(255) NULL, poi_uri VARCHAR(512) NULL,
-  status VARCHAR(16) NULL COMMENT 'running / done / failed',
+  status VARCHAR(16) NULL COMMENT 'running / done / empty(无图) / partial / failed',
   pages_done INT NOT NULL DEFAULT 0 COMMENT '已翻到第几页',
   total_count INT NULL COMMENT '点评总数', review_qty INT NOT NULL DEFAULT 0 COMMENT '已读点评数',
   image_qty INT NOT NULL DEFAULT 0 COMMENT '已入库图片数',
@@ -205,6 +205,9 @@ def init_db():
             align_collation(cur, t, col)
     ensure_poi_info_column()
     ensure_image_columns()
+    n = mark_no_image()
+    if n:
+        print(f"{n} 个 POI 之前记为「失败 · 没读到第一页点评」，其实是没有图片，已改为「无图」", flush=True)
     n = mark_interrupted()
     if n:
         print(f"上次有 {n} 个 POI 采集到一半被中断，已记为「部分」，采到的页不会再采", flush=True)
@@ -624,7 +627,18 @@ def crawled_set():
         cur.execute(f"SELECT scenic_id, poi_id, status, pages_done, message FROM {CRAWL_TABLE}")
         rows = cur.fetchall()
     return {(r["scenic_id"], str(r["poi_id"])) for r in rows
-            if r["status"] == "done" or (r["pages_done"] or 0) > 0 or str(r["message"] or "").startswith(PERMANENT_FAIL)}
+            if r["status"] in ("done", "empty") or (r["pages_done"] or 0) > 0 or str(r["message"] or "").startswith(PERMANENT_FAIL)}
+
+
+def mark_no_image():
+    """旧版把「页面没有点评 / 没有图片」记成了失败：改成 empty（无图，正常情况）。"""
+    with cursor() as cur:
+        if not table_exists(cur, CRAWL_TABLE):
+            return 0
+        n = cur.execute(f"""UPDATE {CRAWL_TABLE} SET status = 'empty',
+                            message = '该 POI 没有图片数据（页面没有返回点评数据）'
+                            WHERE status = 'failed' AND pages_done = 0 AND message LIKE %s""", ("没读到第一页点评%",))
+    return n or 0
 
 
 def mark_interrupted():
@@ -982,7 +996,7 @@ def image_facets(city=None, scenic_id=None, q=None, limit=200):
             pois = list(cur.fetchall())
         cur.execute(f"SELECT i.city, COUNT(*) n FROM {IMAGE_TABLE} i GROUP BY i.city ORDER BY n DESC")
         cities = list(cur.fetchall())
-    return _jsonable(dict(scenics=scenics, pois=pois, cities=cities))
+    return dict(scenics=_jsonable(scenics), pois=_jsonable(pois), cities=_jsonable(cities))
 
 
 def overview():
@@ -1056,7 +1070,7 @@ def scenic_table(f, offset=0, limit=50):
             cr = crawls.get((r["id"], str(p["poiId"])))
             p["crawl"] = cr["status"] if cr else None
             p["crawl_msg"] = cr["message"] if cr else None
-            p["collected"] = bool(cr and (cr["status"] == "done" or (cr["pages_done"] or 0) > 0
+            p["collected"] = bool(cr and (cr["status"] in ("done", "empty") or (cr["pages_done"] or 0) > 0
                                           or str(cr["message"] or "").startswith(PERMANENT_FAIL)))
             n_col += p["collected"]
         r["images"] = sum(c.values())

@@ -215,7 +215,7 @@ class CommentImageCrawler:
                 stat["stop"] = SKIP_MSG
                 return stat
             if not js:
-                stat["stop"] = "没读到第一页点评：页面没有返回点评数据，换下一个 POI（若很多 POI 都这样，可能是页面结构变了：用 dump_page.py 抓页面结构）"
+                stat["stop"] = NO_DATA_MSG + "（页面没有返回点评数据），换下一个 POI"
                 return stat
             last_ids = None
             collect_time = datetime.now(CN_TZ).strftime("%Y-%m-%d %H:%M:%S")
@@ -281,9 +281,13 @@ class CommentImageCrawler:
             return stat
         finally:
             page.remove_listener("response", on_resp)
-            ok = stat["stop"] and not stat["stop"].startswith(("没读到", "点「下一页」后", "已取消", "页面上的 poiId", "页面打不开"))
-            db.crawl_put(sid, pid, status="done" if ok else ("failed" if stat["pages"] == 0 else "partial"),
-                         message=stat["stop"] or "中断")
+            stop = stat["stop"] or ""
+            ok = stop and not stop.startswith(("没读到", "点「下一页」后", "已取消", "页面上的 poiId", "页面打不开"))
+            if stop.startswith(NO_DATA_MSG) and stat["pages"] == 0:
+                st = "empty"  # 这个 POI 本来就没有图片 / 点评：正常情况，不算失败，也不再采
+            else:
+                st = "done" if ok else ("failed" if stat["pages"] == 0 else "partial")
+            db.crawl_put(sid, pid, status=st, message=stop or "中断")
 
 
 async def crawl_all(get_page, f, max_pages=20, max_images=300, limit=0, refresh=False, poi_delay=(2.0, 4.0),

@@ -145,7 +145,7 @@
     if (x.collect === 'partial') return html`<${Tag} color="orange" size="small">部分 ${x.collect_n}/${x.pois.length}<//>`;
     return html`<${Tag} color="grey" size="small">未采<//>`;
   }
-  const CRAWL_ST = { done: ['green', '完成'], partial: ['orange', '部分'], failed: ['red', '失败'], running: ['blue', '采集中'] };
+  const CRAWL_ST = { done: ['green', '完成'], empty: ['grey', '无图'], partial: ['orange', '部分'], failed: ['red', '失败'], running: ['blue', '采集中'] };
   const crawlTag = (s) => { const [c, t] = CRAWL_ST[s] || ['grey', s || '—']; return html`<${Tag} color=${c} size="small">${t}<//>`; };
   const JOB_ST = { queued: ['grey', '排队中'], running: ['blue', '运行中'], done: ['green', '完成'], failed: ['red', '失败'], cancelled: ['grey', '已取消'], need_human: ['orange', '需要人工'] };
   const jobTag = (s) => { const [c, t] = JOB_ST[s] || ['grey', s]; return html`<${Tag} color=${c} size="small">${t}<//>`; };
@@ -215,52 +215,112 @@
   }
 
   // ------------------------------------------------------------ 总览
+  const HERO_SVG = `<svg viewBox="0 0 420 300" xmlns="http://www.w3.org/2000/svg" width="100%" aria-hidden="true">
+    <defs><linearGradient id="hq-hp" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#9c82ff"/><stop offset="1" stop-color="#6c4dff"/></linearGradient>
+    <linearGradient id="hq-hc" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#ffa477"/><stop offset="1" stop-color="#e0703a"/></linearGradient></defs>
+    <ellipse cx="220" cy="276" rx="160" ry="13" fill="rgba(60,40,120,.10)"/>
+    <g transform="translate(176 34) rotate(11)"><rect width="172" height="132" rx="14" fill="#fff"/><rect x="10" y="10" width="152" height="92" rx="9" fill="#ffe3d2"/>
+      <path d="M22 94 l40-46 l28 31 l18-19 l44 34z" fill="#f2a27a"/><circle cx="128" cy="34" r="10" fill="#fff5d6"/><rect x="12" y="112" width="70" height="7" rx="3.5" fill="#f1eef0"/></g>
+    <g transform="translate(66 72) rotate(-8)"><rect width="196" height="154" rx="16" fill="#fff"/><rect x="12" y="12" width="172" height="108" rx="10" fill="#e8e2ff"/>
+      <path d="M26 112 l48-54 l33 37 l22-23 l51 40z" fill="#8b6cff"/><circle cx="148" cy="40" r="12" fill="#ffd36b"/><rect x="14" y="130" width="96" height="8" rx="4" fill="#efedf5"/></g>
+    <g transform="translate(296 118)"><path d="M36 0a36 36 0 0 1 36 36c0 27-36 66-36 66S0 63 0 36A36 36 0 0 1 36 0z" fill="url(#hq-hc)"/><circle cx="36" cy="36" r="14" fill="#fff"/></g>
+    <g transform="translate(36 196)"><rect x="18" y="-10" width="30" height="16" rx="5" fill="#17171c"/><rect width="100" height="66" rx="15" fill="#17171c"/>
+      <circle cx="50" cy="33" r="21" fill="#34343c"/><circle cx="50" cy="33" r="13" fill="url(#hq-hp)"/><circle cx="83" cy="16" r="5" fill="#ffd36b"/></g>
+    <circle cx="56" cy="44" r="6" fill="#fff" opacity=".85"/><circle cx="388" cy="70" r="4" fill="#fff" opacity=".9"/><circle cx="372" cy="246" r="5" fill="#8b6cff" opacity=".45"/>
+  </svg>`;
+
+  /** 审核完成度：已审核 / 已跳过 / 待核对，段与段之间留 2px 空隙 */
+  function Donut({ parts, size = 128, stroke = 16 }) {
+    const r = (size - stroke) / 2, C = 2 * Math.PI * r, total = parts.reduce((a, p) => a + p.v, 0) || 1;
+    let start = 0;
+    const segs = parts.filter((p) => p.v > 0).map((p) => {
+      const len = (C * p.v) / total, gap = parts.filter((q) => q.v > 0).length > 1 ? 2 : 0;
+      const seg = html`<circle key=${p.k} cx=${size / 2} cy=${size / 2} r=${r} fill="none" stroke=${p.c} strokeWidth=${stroke}
+        strokeDasharray=${`${Math.max(len - gap, 0.5)} ${C}`} strokeDashoffset=${-start}><title>${p.k}：${fmt(p.v)}（${pct(p.v, total)}%）</title></circle>`;
+      start += len;
+      return seg;
+    });
+    return html`<svg className="donut" viewBox=${`0 0 ${size} ${size}`} style=${{ transform: 'rotate(-90deg)' }}>
+      <circle cx=${size / 2} cy=${size / 2} r=${r} fill="none" stroke="#f4f4f6" strokeWidth=${stroke} />${segs}</svg>`;
+  }
+
   function Overview({ follow, refreshFollow }) {
     const [ov] = usePoll(() => api('/api/overview'), 15000);
     const [jobs] = usePoll(() => api('/api/jobs'), 5000);
     const o = ov || {};
     const crawl = o.crawl || {};
+    const cities = (o.cities || []).filter((c) => c.city);
+    const rate = (c) => pct(+c.reviewed || 0, +c.n || 0);
+    const top = Math.max(5, ...cities.map(rate));
+    const T = +o.total || 0, A = +o.approved || 0, S = +o.skipped || 0, R = Math.max(0, T - A - S);
     const cityCols = [
-      { title: '城市', dataIndex: 'city', width: 90, render: (v) => shortCity(v) },
-      { title: '景区', dataIndex: 'n', width: 70, align: 'right', render: fmt },
-      { title: '已审核', dataIndex: 'reviewed', render: (v, r) => html`<div style=${{ display: 'flex', alignItems: 'center', gap: 8 }}>
-          <${Progress} percent=${pct(v || 0, r.n)} showInfo=${false} size="small" style=${{ flex: 1, margin: 0 }} />
-          <span className="nw" style=${{ width: 110, textAlign: 'right' }}>${fmt(v || 0)}（${pct(v || 0, r.n)}%）</span></div>` },
-      { title: '跳过', dataIndex: 'skipped', width: 60, align: 'right', render: fmt },
-      { title: '已采 POI', dataIndex: 'pois', width: 80, align: 'right', render: fmt },
+      { title: '城市', dataIndex: 'city', width: 80, render: (v) => shortCity(v) },
+      { title: '景区', dataIndex: 'n', width: 64, align: 'right', render: fmt },
+      { title: '审核进度', dataIndex: 'reviewed', render: (v, r) => html`<div style=${{ display: 'flex', alignItems: 'center', gap: 10 }}>
+          <div className="bar-track" style=${{ flex: 1 }}><i style=${{ width: `${Math.min(100, rate(r))}%` }}></i></div>
+          <span className="nw" style=${{ width: 92, textAlign: 'right' }}><b>${fmt(v || 0)}</b><span className="muted">/${fmt(r.n)}</span></span></div>` },
+      { title: '跳过', dataIndex: 'skipped', width: 56, align: 'right', render: (v) => fmt(v || 0) },
+      { title: '已采 POI', dataIndex: 'pois', width: 76, align: 'right', render: fmt },
       { title: '图片', dataIndex: 'images', width: 80, align: 'right', render: fmt },
     ];
     const box = useRef(null); const h = useHeight(box);
-    const recent = (jobs || []).slice(0, 8);
-    return html`<div className="page">
-      <div className="stats">
-        <${Stat} icon=${html`<${Ic.IconMapPin} />`} color="violet" k="景区总数" v=${fmt(o.total)} s=${`${(o.cities || []).length} 个城市`} />
-        <${Stat} icon=${html`<${Ic.IconTick} />`} color="green" k="已审核" v=${fmt(o.approved)} s=${`自动 ${fmt(o.auto_approved)} · 人工 ${fmt(o.manual_approved)} · ${pct(o.approved, o.total)}%`} />
-        <${Stat} icon=${html`<${Ic.IconCheckboxTick} />`} color="grey" k="待核对" v=${fmt(o.todo)} s=${html`<a onClick=${() => go('review')}>去核对</a>`} />
-        <${Stat} icon=${html`<${Ic.IconAlertTriangle} />`} color="orange" k="已跳过（待人定）" v=${fmt(o.skipped)} s="核对页筛选「已跳过」处理" />
-        <${Stat} icon=${html`<${Ic.IconCamera} />`} color="blue" k="已采景区" v=${fmt(o.scenics_collected)}
-          s=${`共 ${fmt(o.scenics_with_pois)} 个可采 · 部分 ${fmt(o.scenics_partial)} · POI 完成 ${fmt(crawl.done || 0)}/${fmt(o.crawlable_pois)}`} />
-        <${Stat} icon=${html`<${Ic.IconGallery} />`} color="pink" k="点评图片" v=${fmt(o.images)} s=${`${o.ods_table || 'ODS'}：${fmt(o.ods_rows)} 行`} />
-      </div>
-      <div className="row2 fill">
-        <${Card} title="各城市进度" sub="审核 approval=1 / 图片按 POI 统计" bodyClass="flush">
-          <div className="fill" ref=${box}>${h > 0 && html`<${Table} size="small" columns=${cityCols} dataSource=${o.cities || []} rowKey="city"
-            pagination=${false} scroll=${{ y: h - 41 }} loading=${!ov} onRow=${(r) => ({ onClick: () => go('data', { city: r.city }), style: { cursor: 'pointer' } })} />`}</div>
-        <//>
-        <div className="page" style=${{ gap: 12 }}>
-          <${Card} title="正在采集" bodyClass="scroll" style=${{ flex: 'none', maxHeight: '50%' }}>
-            <div style=${{ marginBottom: 10 }}><${FollowControls} follow=${follow} refresh=${refreshFollow} /></div>
-            ${follow && follow.paused && follow.message && html`<${Banner} type="warning" description=${follow.message} closeIcon=${null} style=${{ marginBottom: 8 }} />`}
-            <${CrawlNow} active=${follow && follow.active} refresh=${refreshFollow} />
-          <//>
-          <${Card} title="最近任务" extra=${html`<${Button} size="small" theme="borderless" onClick=${() => go('jobs')}>任务中心<//>`} className="fill" bodyClass="scroll">
-            ${recent.length ? recent.map((j) => html`<div key=${j.id} style=${{ padding: '6px 0', borderBottom: '1px solid var(--app-line)', cursor: 'pointer' }} onClick=${() => go('jobs', { id: j.id })}>
-              <div style=${{ display: 'flex', gap: 8, alignItems: 'center' }}><b>#${j.id} ${j.type_name}</b>${jobTag(j.status)}<span className="grow" style=${{ flex: 1 }}></span>
-                <${Text} type="tertiary" size="small">${(j.started || j.created || '').slice(5, 16)}<//></div>
-              <${Text} type="tertiary" size="small" ellipsis=${{ showTooltip: true }} style=${{ width: '100%' }}>${(j.last || '').slice(9)}<//>
-            </div>`) : html`<${Empty} description="还没有任务" />`}
-          <//>
+    const recent = (jobs || []).slice(0, 6);
+    return html`<div className="ov">
+      <div className="hero">
+        <h2>景区 POI<br />数据工作台</h2>
+        <div className="acts">
+          <${Button} className="btn-dark" icon=${html`<${Ic.IconChevronRight} />`} iconPosition="right" onClick=${() => go('review')}>开始核对<//>
+          <${Button} theme="borderless" style=${{ height: 40, borderRadius: 12, background: 'rgba(255,255,255,.6)' }} onClick=${() => go('gallery')}>看图片<//>
         </div>
+        <div className="art" dangerouslySetInnerHTML=${{ __html: HERO_SVG }}></div>
+        <div className="glass">
+          <div className="kpi"><div className="k">已审核景区</div><div className="v">${fmt(A)}</div>
+            <div className="s">自动 ${fmt(o.auto_approved)} · 人工 ${fmt(o.manual_approved)} · 共 ${fmt(T)}</div></div>
+          <div className="kpi"><div className="k">已采景区</div><div className="v">${fmt(o.scenics_collected)}</div>
+            <div className="s">可采 ${fmt(o.scenics_with_pois)} · POI ${fmt((crawl.done || 0) + (crawl.empty || 0))}/${fmt(o.crawlable_pois)}</div></div>
+          <div className="kpi"><div className="k">点评图片</div><div className="v">${fmt(o.images)}</div>
+            <div className="s">${o.ods_table || '交付表'} ${fmt(o.ods_rows)} 行</div></div>
+        </div>
+      </div>
+      <div className="ov-right">
+        <${Card} title="各城市审核完成率" sub="已审核 / 景区数" className="chart-card">
+          <div style=${{ flex: 1, display: 'flex', flexDirection: 'column', minHeight: 0 }}>
+            <div className="cols">${cities.map((c) => html`<${Tooltip} key=${c.city} content=${`${shortCity(c.city)}：已审核 ${fmt(c.reviewed || 0)} / ${fmt(c.n)}（${rate(c)}%）`}>
+              <div className="c"><span className="val">${rate(c)}%</span><div className="col" style=${{ height: `${(rate(c) / top) * 82}%` }}></div></div><//>`)}</div>
+            <div className="cols-x">${cities.map((c) => html`<span key=${c.city}>${shortCity(c.city)}</span>`)}</div>
+          </div>
+        <//>
+        <${Card} title="审核完成度" sub=${`共 ${fmt(T)} 个景区`} className="chart-card">
+          <div className="donut-wrap">
+            <${Donut} parts=${[{ k: '已审核', v: A, c: '#6c4dff' }, { k: '已跳过', v: S, c: '#e0703a' }, { k: '待核对', v: R, c: '#e7e5e4' }]} />
+            <div>
+              <div className="big">${pct(A, T)}%</div>
+              <div className="legend">
+                <span><i style=${{ background: '#6c4dff' }}></i>已审核 ${fmt(A)}</span>
+                <span><i style=${{ background: '#e0703a' }}></i>已跳过 ${fmt(S)}<a style=${{ marginLeft: 6, fontSize: 12 }} onClick=${() => go('review')}>去处理</a></span>
+                <span><i style=${{ background: '#e7e5e4' }}></i>待核对 ${fmt(R)}</span>
+              </div>
+            </div>
+          </div>
+        <//>
+      </div>
+      <${Card} title="各城市进度" sub="点一行看该城市的景区" bodyClass="flush">
+        <div className="fill" ref=${box}>${h > 0 && html`<${Table} size="small" columns=${cityCols} dataSource=${cities} rowKey="city"
+          pagination=${false} scroll=${{ y: h - 41 }} loading=${!ov} onRow=${(r) => ({ onClick: () => go('data', { city: r.city }), style: { cursor: 'pointer' } })} />`}</div>
+      <//>
+      <div className="ov-bottom-right">
+        <${Card} title="正在采集" bodyClass="scroll" style=${{ maxHeight: 260 }}>
+          <div style=${{ marginBottom: 10 }}><${FollowControls} follow=${follow} refresh=${refreshFollow} /></div>
+          ${follow && follow.paused && follow.message && html`<${Banner} type="warning" description=${follow.message} closeIcon=${null} style=${{ marginBottom: 8 }} />`}
+          <${CrawlNow} active=${follow && follow.active} refresh=${refreshFollow} />
+        <//>
+        <${Card} title="最近任务" extra=${html`<a onClick=${() => go('jobs')}>任务中心</a>`} bodyClass="scroll">
+          ${recent.length ? recent.map((j) => html`<div className="job-item" key=${j.id} onClick=${() => go('jobs', { id: j.id })}>
+            <div style=${{ display: 'flex', gap: 8, alignItems: 'center' }}><b>#${j.id} ${j.type_name}</b>${jobTag(j.status)}<span style=${{ flex: 1 }}></span>
+              <${Text} type="tertiary" size="small">${(j.started || j.created || '').slice(5, 16)}<//></div>
+            <${Text} type="tertiary" size="small" ellipsis=${{ showTooltip: true }} style=${{ width: '100%' }}>${(j.last || '').slice(9)}<//>
+          </div>`) : html`<${Empty} description="还没有任务" />`}
+        <//>
       </div>
     </div>`;
   }
@@ -329,7 +389,7 @@
           <${Button} size="small" theme="borderless" onClick=${() => go('gallery', { poi_id: r.poi_id })}>看图片<//>
           ${r.poi_uri && html`<${Button} size="small" theme="borderless" type="tertiary" onClick=${() => window.open(r.poi_uri, '_blank', 'noreferrer')}>携程页面<//>`}</span>` },
     ];
-    const statusOpts = [{ value: '', label: '全部' }, { value: 'done', label: '完成' }, { value: 'partial', label: '部分' }, { value: 'failed', label: '失败' }, { value: 'running', label: '采集中' }];
+    const statusOpts = [{ value: '', label: '全部' }, { value: 'done', label: '完成' }, { value: 'empty', label: '无图' }, { value: 'partial', label: '部分' }, { value: 'failed', label: '失败' }, { value: 'running', label: '采集中' }];
     return html`<div className="page">
       <div className="row2 even" style=${{ height: 300, flex: 'none' }}>
         <${Card} title="批量采集" sub="对已审核（approval=1）景区保留的 POI，进主页翻点评、存图片" bodyClass="scroll">
@@ -443,48 +503,124 @@
     return html`<div className="ph" onClick=${onOpen} title=${`${x.scenic_name} / ${x.poi_name}`}>
       ${bad ? html`<div className="broken"><div><${Ic.IconImage} size="extra-large" /><div>图片加载失败</div></div></div>`
         : html`<img loading="lazy" referrerPolicy="no-referrer" src=${x.image_thumb_url || x.image_url} onError=${() => setBad(true)} alt="" />`}
-      <div className="cap"><b>${x.poi_name}</b><span>${x.review_score != null ? `${x.review_score} 分 · ` : ''}${(x.review_publish_time || '').slice(0, 10)}</span></div>
+      ${x.review_score != null && html`<span className="score">★ ${x.review_score}</span>`}
+      <div className="cap"><b>${x.poi_name}</b><span>${x.scenic_name} · ${(x.review_publish_time || '').slice(0, 10)}</span></div>
     </div>`;
   }
 
-  function GalleryPage({ query, cities }) {
-    const init = () => ({ city: query.city || '', q: query.q || '', scenic_id: query.scenic_id || '', poi_id: query.poi_id || '' });
+  /** 大图 + 右侧图片信息；← → 翻页，Esc 关闭，翻到已加载的末尾会自动加载下一页 */
+  function Viewer({ list, index, setIndex, onClose }) {
+    const x = list.items[index];
+    const [bad, setBad] = useState(false);
+    useEffect(() => setBad(false), [index]);
+    const prev = () => { if (index > 0) setIndex(index - 1); };
+    const next = () => { if (index < list.items.length - 1) setIndex(index + 1); };
+    useEffect(() => {
+      const f = (e) => {
+        if (e.key === 'Escape') onClose();
+        else if (e.key === 'ArrowLeft') prev();
+        else if (e.key === 'ArrowRight') next();
+      };
+      window.addEventListener('keydown', f);
+      return () => window.removeEventListener('keydown', f);
+    });
+    useEffect(() => { if (index >= list.items.length - 6 && list.hasMore && !list.loading) list.loadMore(); }, [index, list.items.length]); // eslint-disable-line
+    if (!x) return null;
+    const close = (e) => { if (e.target === e.currentTarget) onClose(); };
+    const row = (k, v) => html`<span>${k}</span><div>${v == null || v === '' ? '—' : v}</div>`;
+    return html`<div className="viewer">
+      <div className="stage" onClick=${close}>
+        <div className="top">
+          <span>${fmt(index + 1)} / ${fmt(list.total)}</span><span style=${{ flex: 1 }}></span>
+          <span className="muted">← → 翻页 · Esc 关闭</span>
+          <button className="close" title="关闭 (Esc)" onClick=${onClose}><${Ic.IconClose} /></button>
+        </div>
+        ${bad ? html`<div className="broken"><${Ic.IconImage} size="extra-large" /><div>图片加载失败</div><a href=${x.image_url} target="_blank" rel="noreferrer">打开原链接</a></div>`
+          : html`<img key=${x.record_id} src=${x.image_url} referrerPolicy="no-referrer" onError=${() => setBad(true)} alt="" />`}
+        <button className="nav l" disabled=${index === 0} onClick=${prev} title="上一张 (←)"><${Ic.IconChevronLeft} /></button>
+        <button className="nav r" disabled=${index >= list.items.length - 1} onClick=${next} title="下一张 (→)"><${Ic.IconChevronRight} /></button>
+      </div>
+      <aside className="info">
+        <h2>${x.poi_name}</h2>
+        <div className="scn">${x.scenic_name} · ${x.scenic_id}</div>
+        <div className="tags">
+          ${x.review_score != null && html`<${Tag} color="amber">★ ${x.review_score} 分<//>`}
+          <${Tag} color="grey">${shortCity(x.city)}${x.district ? ' · ' + x.district : ''}<//>
+          ${x.tourist_type && html`<${Tag} color="violet">${x.tourist_type}<//>`}
+          ${x.width && html`<${Tag} color="grey">${x.width} × ${x.height}<//>`}
+        </div>
+        <div className="quote">${x.review_content || html`<span className="muted">没有存点评内容（之前采的图片没存，重采后会有）</span>`}</div>
+        <div className="sec">图片</div>
+        <div className="kv">
+          <span>record_id</span><div><${Text} copyable size="small">${x.record_id}<//></div>
+          <span>image_id</span><div><${Text} copyable size="small">${String(x.image_id)}<//></div>
+          ${row('携程 imageId', x.ctrip_image_id)}${row('采集时间', x.collect_time)}${row('数据来源', x.data_source)}
+        </div>
+        <div className="sec">点评</div>
+        <div className="kv">${row('点评 ID', x.review_id)}${row('发布时间', x.review_publish_time)}${row('出游类型', x.tourist_type)}</div>
+        <div className="sec">POI / 景区</div>
+        <div className="kv">${row('poiId', x.poi_id)}${row('POI 图片总数', fmt(x.total_count))}${row('POI 点评总数', fmt(x.comment_total))}
+          ${row('省市区', [x.province, x.city, x.district].filter(Boolean).join(' / '))}${row('景区坐标', x.lon != null ? `${x.lon}, ${x.lat}` : null)}</div>
+        <div className="links">
+          <${Button} size="small" theme="solid" icon=${html`<${Ic.IconExternalOpen} />`} onClick=${() => window.open(x.image_url, '_blank', 'noreferrer')}>打开原图<//>
+          ${x.review_url && html`<${Button} size="small" onClick=${() => window.open(x.review_url, '_blank', 'noreferrer')}>点评详情<//>`}
+          ${x.poi_uri && html`<${Button} size="small" onClick=${() => window.open(x.poi_uri, '_blank', 'noreferrer')}>携程 POI 页面<//>`}
+          <${Button} size="small" theme="borderless" onClick=${() => { onClose(); go('gallery', { scenic_id: x.scenic_id, poi_id: x.poi_id }); }}>只看这个 POI<//>
+          <${Button} size="small" theme="borderless" onClick=${() => { onClose(); go('data', { q: x.scenic_id }); }}>景区数据<//>
+        </div>
+      </aside>
+    </div>`;
+  }
+
+  const SCORE_OPTS = [{ value: '', label: '全部评分' }, { value: '5', label: '5 分' }, { value: '4', label: '4 分及以上' }, { value: '3', label: '3 分及以上' }];
+  const SORT_OPTS = [{ value: 'collect', label: '最新采集' }, { value: 'publish', label: '最新点评' }, { value: 'score', label: '评分最高' }, { value: 'size', label: '尺寸最大' }];
+
+  function GalleryPage({ query }) {
+    const init = () => ({ city: query.city || '', scenic_id: query.scenic_id || '', poi_id: query.poi_id || '', score_min: query.score_min || '',
+      sort: query.sort || 'collect', q: query.q || '' });
     const [f, setF] = useState(init);
-    const [kw, setKw] = useState(query.q || '');
-    useEffect(() => { setF(init()); setKw(query.q || ''); }, [query.city, query.q, query.scenic_id, query.poi_id]); // eslint-disable-line
+    useEffect(() => { setF(init()); }, [query.city, query.scenic_id, query.poi_id, query.q]); // eslint-disable-line
+    const [scq, setScq] = useState('');
+    const deb = useRef(null);
+    const onScenicSearch = (v) => { clearTimeout(deb.current); deb.current = setTimeout(() => setScq(v || ''), 250); };
+    const [fac] = usePoll(() => api(`/api/image_facets?${qs({ city: f.city, scenic_id: f.scenic_id, q: scq })}`), 0, [f.city, f.scenic_id, scq]);
+    const facets = fac || { scenics: [], pois: [], cities: [] };
     const list = useInfinite('/api/images', f, 60);
     const box = useRef(null); const sentinel = useRef(null);
-    const [pv, setPv] = useState({ visible: false, index: 0 });
+    const [vi, setVi] = useState(-1);
     useEffect(() => {
       if (!sentinel.current) return undefined;
       const io = new IntersectionObserver(([e]) => { if (e.isIntersecting) list.loadMore(); }, { root: box.current, rootMargin: '400px' });
       io.observe(sentinel.current);
       return () => io.disconnect();
     });
-    useEffect(() => { if (box.current) box.current.scrollTop = 0; }, [JSON.stringify(f)]); // eslint-disable-line
-    const setK = (k) => (v) => setF((o) => ({ ...o, [k]: v }));
-    const cur = list.items[pv.index];
+    useEffect(() => { if (box.current) box.current.scrollTop = 0; setVi(-1); }, [JSON.stringify(f)]); // eslint-disable-line
+    const set = (patch) => setF((o) => ({ ...o, ...patch }));
+    const cityOpts = [{ value: '', label: '全部城市' }].concat((facets.cities || []).filter((c) => c.city).map((c) => ({ value: c.city, label: `${shortCity(c.city)} · ${fmt(c.n)}` })));
+    let scenicOpts = (facets.scenics || []).map((x) => ({ value: x.id, label: `${x.name} · ${fmt(x.n)}` }));
+    if (f.scenic_id && !scenicOpts.some((o) => o.value === f.scenic_id)) scenicOpts = [{ value: f.scenic_id, label: f.scenic_id }].concat(scenicOpts);
+    const poiOpts = (facets.pois || []).map((x) => ({ value: String(x.id), label: `${x.name} · ${fmt(x.n)}` }));
+    const filtered = f.city || f.scenic_id || f.poi_id || f.score_min || f.q || f.sort !== 'collect';
     return html`<div className="page">
       <${Card} title="点评图片" sub=${list.total != null ? `共 ${fmt(list.total)} 张` : ''} className="fill" bodyClass="flush"
         extra=${html`<span className="toolbar">
-          <${CitySelect} value=${f.city} onChange=${setK('city')} cities=${cities} />
-          <${Input} value=${kw} onChange=${setKw} onEnterPress=${() => setK('q')(kw.trim())} placeholder="景区名 / POI 名，回车" prefix=${html`<${Ic.IconSearch} />`}
-            style=${{ width: 200 }} showClear onClear=${() => setK('q')('')} />
-          <${Input} value=${f.scenic_id} onChange=${setK('scenic_id')} placeholder="景区ID" style=${{ width: 160 }} showClear />
-          <${Input} value=${f.poi_id} onChange=${setK('poi_id')} placeholder="poiId" style=${{ width: 120 }} showClear />
+          <${Select} value=${f.city} onChange=${(v) => set({ city: v || '', scenic_id: '', poi_id: '' })} optionList=${cityOpts} style=${{ width: 140 }} />
+          <${Select} value=${f.scenic_id || undefined} placeholder="全部景区（可搜索）" optionList=${scenicOpts} style=${{ width: 240 }} filter remote
+            onSearch=${onScenicSearch} showClear onChange=${(v) => set({ scenic_id: v || '', poi_id: '' })} emptyContent="没有有图片的景区" />
+          <${Select} value=${f.poi_id || undefined} placeholder=${f.scenic_id ? '全部 POI' : '先选景区'} disabled=${!f.scenic_id} optionList=${poiOpts}
+            style=${{ width: 220 }} showClear onChange=${(v) => set({ poi_id: v || '' })} />
+          <${Select} value=${f.score_min} onChange=${(v) => set({ score_min: v })} optionList=${SCORE_OPTS} style=${{ width: 120 }} />
+          <${Select} value=${f.sort} onChange=${(v) => set({ sort: v })} optionList=${SORT_OPTS} style=${{ width: 140 }}
+            prefix=${html`<${Ic.IconSort} style=${{ marginLeft: 8, color: 'var(--ink-3)' }} />`} />
+          ${filtered && html`<${Button} theme="borderless" type="tertiary" onClick=${() => { setF({ city: '', scenic_id: '', poi_id: '', score_min: '', sort: 'collect', q: '' }); go('gallery'); }}>重置<//>`}
         </span>`}>
         <div className="gallery" ref=${box}>
-          ${list.items.length ? html`<div className="grid">${list.items.map((x, i) => html`<${Thumb} key=${x.record_id} x=${x} onOpen=${() => setPv({ visible: true, index: i })} />`)}</div>`
-            : !list.loading && html`<${Empty} description=${list.error || '没有图片'} style=${{ padding: 60 }} />`}
+          ${list.items.length ? html`<div className="grid">${list.items.map((x, i) => html`<${Thumb} key=${x.record_id} x=${x} onOpen=${() => setVi(i)} />`)}</div>`
+            : !list.loading && html`<${Empty} description=${list.error || '没有符合条件的图片'} style=${{ padding: 60 }} />`}
           <div ref=${sentinel} className="more">${listFoot(list, '张')}</div>
         </div>
       <//>
-      ${list.items.length > 0 && html`<${ImagePreview} src=${list.items.map((x) => x.image_url)} visible=${pv.visible} currentIndex=${pv.index}
-        onVisibleChange=${(v) => setPv((o) => ({ ...o, visible: v }))} onChange=${(i) => setPv((o) => ({ ...o, index: i }))}
-        infinite=${false} />`}
-      ${pv.visible && cur && html`<div style=${{ position: 'fixed', left: 0, right: 0, bottom: 72, zIndex: 2000, textAlign: 'center', pointerEvents: 'none' }}>
-        <span style=${{ background: 'rgba(0,0,0,.55)', color: '#fff', padding: '6px 12px', borderRadius: 6, fontSize: 13 }}>
-          ${cur.scenic_name} / ${cur.poi_name} · ${pv.index + 1} / ${fmt(list.total)} · ${cur.review_score != null ? cur.review_score + ' 分 · ' : ''}${(cur.review_publish_time || '').slice(0, 10)} · ${cur.width}×${cur.height}</span></div>`}
+      ${vi >= 0 && html`<${Viewer} list=${list} index=${vi} setIndex=${setVi} onClose=${() => setVi(-1)} />`}
     </div>`;
   }
 
@@ -571,15 +707,29 @@
     return html`<${CrawlNow} active=${a} refresh=${refresh} empty="正在切换 POI…" />`;
   }
 
-  // ------------------------------------------------------------ 顶栏
+  // ------------------------------------------------------------ 顶栏 / 侧栏
   const PAGES = {
     overview: ['总览', '审核与图片采集进度'],
-    review: ['核对', '服务端浏览器在携程搜索框里输入、读下拉结果；快捷键 1–9 保留、Enter 审核完成、S 跳过、←/→ 翻景区'],
+    review: ['核对', '快捷键 1–9 保留、Enter 审核完成、S 跳过、←/→ 翻景区'],
     images: ['图片采集', '进已审核 POI 的携程主页翻点评，把点评图片写进 MySQL'],
     data: ['数据预览', '客户景区表 + ctrip_poi_info + approval，点一行看详情'],
-    gallery: ['图片预览', '已采集的点评图片，点开看大图（← → 翻页、Esc 关闭）'],
-    jobs: ['任务中心', '任务按提交顺序逐个执行；遇到登录 / 验证会停在「需要人工」，在服务打开的浏览器里处理后重新提交'],
+    gallery: ['图片预览', '按城市 / 景区 / POI 筛选，点开看大图和图片信息'],
+    jobs: ['任务中心', '任务按提交顺序逐个执行；遇到登录 / 验证会停在「需要人工」'],
   };
+  const NAV = [
+    ['overview', '总览', Ic.IconHome], ['review', '核对', Ic.IconCheckboxTick], ['images', '图片采集', Ic.IconCamera],
+    ['data', '数据预览', Ic.IconGridView], ['gallery', '图片预览', Ic.IconGallery], ['jobs', '任务中心', Ic.IconList],
+  ];
+
+  function Rail({ route }) {
+    return html`<nav className="rail">
+      <div className="logo" title="景区 POI 数据工作台"><${Ic.IconMapPin} /></div>
+      ${NAV.map(([k, t, I]) => html`<${Tooltip} key=${k} content=${t} position="right">
+        <a className=${route === k ? 'on' : ''} href=${'#/' + k} aria-label=${t}><${I} /></a><//>`)}
+      <span className="grow"></span>
+      <${Tooltip} content="接口文档" position="right"><a href="/docs" target="_blank" aria-label="接口文档"><${Ic.IconFile} /></a><//>
+    </nav>`;
+  }
 
   function TopBar({ route, health, follow, onReviewer }) {
     const [kw, setKw] = useState('');
@@ -589,28 +739,28 @@
     if (follow && follow.paused) alerts.push({ text: `边核对边采集已暂停：${follow.message || '手动暂停'}`, to: 'images' });
     if (health && health.ok === false) alerts.push({ text: `数据库异常：${health.error || ''}`, to: 'overview' });
     const reviewer = (health && health.reviewer) || '';
-    return html`<div className="topbar">
-      <div className="ttl"><h1>${title}</h1><span title=${sub}>${sub}</span></div>
+    return html`<header className="topbar">
+      <h1>${title}</h1><span className="sub" title=${sub}>${sub}</span>
       <span className="grow"></span>
-      <${Input} value=${kw} onChange=${setKw} prefix=${html`<${Ic.IconSearch} />`} placeholder="搜索景区名 / 景区ID，回车" style=${{ width: 260 }}
+      <${Input} value=${kw} onChange=${setKw} prefix=${html`<${Ic.IconSearch} style=${{ marginLeft: 6 }} />`} placeholder="搜索景区名 / 景区ID，回车" style=${{ width: 260 }}
         onEnterPress=${() => { if (kw.trim()) go('data', { q: kw.trim() }); }} showClear />
-      <${Popover} trigger="click" position="bottomRight" content=${html`<div style=${{ width: 320, padding: '8px 12px' }}>
+      <${Popover} trigger="click" position="bottomRight" content=${html`<div style=${{ width: 320, padding: '10px 14px' }}>
           <div style=${{ fontWeight: 600, marginBottom: 4 }}>提醒</div>
           ${alerts.length ? alerts.map((a, i) => html`<div className="alert-item" key=${i} onClick=${() => go(a.to)}>${a.text}</div>`)
             : html`<div className="muted" style=${{ padding: '8px 0' }}>没有需要处理的事项</div>`}</div>`}>
-        <span><${Badge} dot=${alerts.length > 0} type="danger"><${Button} theme="borderless" type="tertiary" icon=${html`<${Ic.IconBell} />`} /><//></span>
+        <div className="icon-btn" title="提醒"><${Ic.IconBell} />${alerts.length > 0 && html`<i className="dot"></i>`}</div>
       <//>
       <${Dropdown} position="bottomRight" render=${html`<${Dropdown.Menu}>
           <${Dropdown.Item} icon=${html`<${Ic.IconUser} />`} onClick=${onReviewer}>设置核对人<//>
-          <${Dropdown.Item} icon=${html`<${Ic.IconFile} />`} onClick=${() => window.open('/docs')}>接口文档<//>
           <${Dropdown.Item} icon=${html`<${Ic.IconDownload} />`} onClick=${() => window.open('/api/export.csv')}>导出核对结果 CSV<//>
+          <${Dropdown.Item} icon=${html`<${Ic.IconFile} />`} onClick=${() => window.open('/docs')}>接口文档<//>
         <//>`}>
         <div className="who">
-          <${Avatar} size="small" color="violet">${reviewer ? reviewer.slice(0, 1) : html`<${Ic.IconUser} />`}<//>
-          <span>${reviewer || '未设置核对人'}</span><${Ic.IconChevronDown} size="small" />
+          <${Avatar} size="small" style=${{ background: 'linear-gradient(135deg,#8b6cff,#e0703a)' }}>${reviewer ? reviewer.slice(0, 1) : html`<${Ic.IconUser} />`}<//>
+          <span className="nm">${reviewer || '设置核对人'}</span><${Ic.IconChevronDown} size="small" />
         </div>
       <//>
-    </div>`;
+    </header>`;
   }
 
   function ReviewerModal({ visible, current, onClose, onSaved }) {
@@ -629,15 +779,6 @@
   }
 
   // ------------------------------------------------------------ 应用
-  const NAV = [
-    { itemKey: 'overview', text: '总览', icon: html`<${Ic.IconHome} />` },
-    { itemKey: 'review', text: '核对', icon: html`<${Ic.IconCheckboxTick} />` },
-    { itemKey: 'images', text: '图片采集', icon: html`<${Ic.IconCamera} />` },
-    { itemKey: 'data', text: '数据预览', icon: html`<${Ic.IconGridView} />` },
-    { itemKey: 'gallery', text: '图片预览', icon: html`<${Ic.IconGallery} />` },
-    { itemKey: 'jobs', text: '任务中心', icon: html`<${Ic.IconList} />` },
-  ];
-
   function App() {
     const { path, query } = useHash();
     const route = PAGES[path] ? path : 'overview';
@@ -646,7 +787,6 @@
     const [stats] = usePoll(() => api('/api/stats'), 60000);
     const cities = stats && stats.cities;
     const [rv, setRv] = useState(false);
-    const [collapsed, setCollapsed] = useState(window.innerWidth < 1440);
     const props = { query, follow, refreshFollow, cities };
     let page = null;
     if (route === 'overview') page = html`<${Overview} ...${props} />`;
@@ -654,22 +794,17 @@
     else if (route === 'data') page = html`<${DataPage} ...${props} />`;
     else if (route === 'gallery') page = html`<${GalleryPage} ...${props} />`;
     else if (route === 'jobs') page = html`<${JobsPage} ...${props} />`;
-    return html`<${Layout} className="app">
-      <${Layout.Sider}>
-        <${Nav} items=${NAV} selectedKeys=${[route]} onSelect=${({ itemKey }) => go(itemKey)} isCollapsed=${collapsed}
-          onCollapseChange=${setCollapsed} style=${{ height: '100%' }}
-          header=${{ logo: html`<${Ic.IconMapPin} style=${{ fontSize: 28 }} />`, text: html`<span className="brand">POI 数据工作台</span>` }}
-          footer=${{ collapseButton: true }} />
-      <//>
-      <${Layout}>
+    return html`<div className="frame">
+      <${Rail} route=${route} />
+      <div className="main">
         <${TopBar} route=${route} health=${health} follow=${follow} onReviewer=${() => setRv(true)} />
         <div className="content">
           <${ReviewPage} visible=${route === 'review'} ...${props} />
           ${page}
         </div>
-      <//>
+      </div>
       <${ReviewerModal} visible=${rv} current=${health && health.reviewer} onClose=${() => setRv(false)} onSaved=${refreshHealth} />
-    <//>`;
+    </div>`;
   }
 
   ReactDOM.createRoot(document.getElementById('root')).render(html`<${App} />`);

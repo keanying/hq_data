@@ -82,7 +82,7 @@ CREATE TABLE IF NOT EXISTS scenic_poi_image (
 -- 采集进度（断点续采）
 CREATE TABLE IF NOT EXISTS scenic_poi_image_crawl (
   scenic_id VARCHAR(64) NOT NULL, poi_id BIGINT NOT NULL, poi_name VARCHAR(255) NULL, poi_uri VARCHAR(512) NULL,
-  status VARCHAR(16) NULL COMMENT 'running / done / partial / failed', pages_done INT NOT NULL DEFAULT 0,
+  status VARCHAR(16) NULL COMMENT 'running / done / empty(无图) / partial / failed', pages_done INT NOT NULL DEFAULT 0,
   total_count INT NULL, review_qty INT NOT NULL DEFAULT 0, image_qty INT NOT NULL DEFAULT 0, message VARCHAR(500) NULL,
   updated_at DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
   PRIMARY KEY (scenic_id, poi_id)
