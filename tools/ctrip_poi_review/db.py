@@ -6,6 +6,7 @@ import hashlib
 import json
 import os
 import re
+import time
 from contextlib import contextmanager
 
 import pymysql
@@ -203,7 +204,7 @@ def init_db():
             align_collation(cur, t, col)
     ensure_poi_info_column()
     ensure_image_columns()
-    migrate_image_ids()
+    migrate_image_ids(log=lambda m: print(m, flush=True))
     with cursor() as cur:  # 旧版「已完成」状态同步到 approval
         cur.execute(f"""UPDATE {SCENIC_TABLE} s JOIN {STATUS_TABLE} st ON st.scenic_id = s.{C['id']}
                         SET s.{APPROVAL} = 1 WHERE st.status = 'done' AND COALESCE(s.{APPROVAL}, 0) = 0""")
@@ -709,41 +710,76 @@ def images_insert(rows):
 OLD_RECORD_RE = r"^img_[0-9]{8}_[0-9]+$"
 
 
-def migrate_image_ids(batch=2000, log=print):
+def migrate_image_ids(batch=5000, log=print):
     """旧版 record_id = img_<采集日期>_<序号>、image_id = 携程 imageId 的记录，改成由图片链接算出的 ID；
-    交付表里对应的行（按旧 record_id 找）一起改。重复的图片（同景区同 POI 同一张图）只留一条。可重复执行。"""
+    交付表里对应的行（按旧 record_id 找）一起改。同一景区同一张图只留一条。按批处理，可重复执行（只处理还没改过的）。"""
     if not table_exists_q(IMAGE_TABLE):
         return 0
+    with cursor() as cur:
+        cur.execute(f"""SELECT COUNT(*) n FROM {IMAGE_TABLE} WHERE old_record_id IS NULL AND (record_id IS NULL OR record_id REGEXP %s)""",
+                    (OLD_RECORD_RE,))
+        total = cur.fetchone()["n"]
+    if not total:
+        return 0
     ods = ods_exists()
+    coll = "utf8mb4_general_ci"
+    if ods:
+        with cursor() as cur:
+            cur.execute("""SELECT COLLATION_NAME c FROM information_schema.COLUMNS WHERE TABLE_SCHEMA = DATABASE()
+                           AND TABLE_NAME = %s AND COLUMN_NAME = 'record_id'""", (ODS_TABLE.strip("`").split(".")[-1].strip("`"),))
+            r = cur.fetchone()
+            coll = (r or {}).get("c") or coll
+    log(f"图片 ID 升级（只做一次）：{total} 条记录改为由图片链接算出" + (f"，交付表 {ODS_TABLE} 一起改" if ods else "") + "…")
     done = dup = 0
+    last = 0
+    t0 = time.time()
     while True:
         with cursor() as cur:
-            cur.execute(f"""SELECT id, record_id, scenic_id, poi_id, image_id, image_url FROM {IMAGE_TABLE}
-                            WHERE old_record_id IS NULL AND (record_id IS NULL OR record_id REGEXP %s) ORDER BY id LIMIT %s""",
-                        (OLD_RECORD_RE, batch))
+            cur.execute(f"""SELECT id, record_id, scenic_id, poi_id, image_url FROM {IMAGE_TABLE}
+                            WHERE id > %s AND old_record_id IS NULL AND (record_id IS NULL OR record_id REGEXP %s) ORDER BY id LIMIT %s""",
+                        (last, OLD_RECORD_RE, batch))
             rows = list(cur.fetchall())
             if not rows:
                 break
+            last = rows[-1]["id"]
             for r in rows:
-                old = r["record_id"] or ""
-                nid = image_num(r["image_url"])
-                nrid = make_record_id(r["scenic_id"], nid)
-                cur.execute(f"SELECT id FROM {IMAGE_TABLE} WHERE scenic_id=%s AND poi_id=%s AND image_id=%s AND id<>%s",
-                            (r["scenic_id"], r["poi_id"], nid, r["id"]))
-                if cur.fetchone():  # 同一张图已经有一条：删掉这条重复的
-                    cur.execute(f"DELETE FROM {IMAGE_TABLE} WHERE id=%s", (r["id"],))
-                    if ods and old:
-                        cur.execute(f"DELETE FROM {ODS_TABLE} WHERE record_id=%s", (old,))
-                    dup += 1
-                    continue
-                cur.execute(f"""UPDATE {IMAGE_TABLE} SET ctrip_image_id = COALESCE(ctrip_image_id, image_id), image_id=%s, record_id=%s,
-                                old_record_id=%s WHERE id=%s""", (nid, nrid, old or "-", r["id"]))
-                if ods and old:
-                    cur.execute(f"UPDATE IGNORE {ODS_TABLE} SET record_id=%s, image_id=%s WHERE record_id=%s", (nrid, nid, old))
-                    cur.execute(f"DELETE FROM {ODS_TABLE} WHERE record_id=%s", (old,))  # 改不了的（新 ID 已存在）就是重复行
-                done += 1
-    if done or dup:
-        log(f"图片 ID 已改为由图片链接算出：更新 {done} 条，去掉重复 {dup} 条" + (f"（交付表 {ODS_TABLE} 同步修改）" if ods else ""))
+                r["nid"] = image_num(r["image_url"])
+                r["nrid"] = make_record_id(r["scenic_id"], r["nid"])
+            # 已经有新 ID 的同一张图（或本批里重复的）→ 这条是重复，删掉
+            nrids = sorted({r["nrid"] for r in rows})
+            cur.execute(f"SELECT record_id FROM {IMAGE_TABLE} WHERE record_id IN ({','.join(['%s'] * len(nrids))})", nrids)
+            taken = {x["record_id"] for x in cur.fetchall()}
+            keep, drop = [], []
+            for r in rows:
+                if r["nrid"] in taken:
+                    drop.append(r)
+                else:
+                    taken.add(r["nrid"])
+                    keep.append(r)
+            if drop:
+                cur.execute(f"DELETE FROM {IMAGE_TABLE} WHERE id IN ({','.join(['%s'] * len(drop))})", [r["id"] for r in drop])
+                olds = [r["record_id"] for r in drop if r["record_id"]]
+                if ods and olds:
+                    cur.execute(f"DELETE FROM {ODS_TABLE} WHERE record_id IN ({','.join(['%s'] * len(olds))})", olds)
+            if keep:
+                cur.execute(f"""CREATE TEMPORARY TABLE IF NOT EXISTS _hq_imgid (id BIGINT PRIMARY KEY, nid BIGINT NOT NULL,
+                                nrid VARCHAR(64) CHARACTER SET utf8mb4 COLLATE {coll} NOT NULL,
+                                old VARCHAR(64) CHARACTER SET utf8mb4 COLLATE {coll} NULL, KEY k_old (old))""")
+                cur.execute("DELETE FROM _hq_imgid")
+                cur.executemany("INSERT INTO _hq_imgid (id, nid, nrid, old) VALUES (%s, %s, %s, %s)",
+                                [(r["id"], r["nid"], r["nrid"], r["record_id"]) for r in keep])
+                cur.execute(f"""UPDATE {IMAGE_TABLE} i JOIN _hq_imgid t ON t.id = i.id
+                                SET i.ctrip_image_id = COALESCE(i.ctrip_image_id, i.image_id), i.image_id = t.nid, i.record_id = t.nrid,
+                                    i.old_record_id = COALESCE(t.old, '-')""")
+                if ods:
+                    cur.execute(f"""UPDATE IGNORE {ODS_TABLE} o JOIN _hq_imgid t ON o.record_id = t.old
+                                    SET o.record_id = t.nrid, o.image_id = t.nid""")
+                    cur.execute(f"DELETE o FROM {ODS_TABLE} o JOIN _hq_imgid t ON o.record_id = t.old")  # 新 ID 已存在的旧行 = 重复
+                cur.execute("DROP TEMPORARY TABLE IF EXISTS _hq_imgid")
+            done += len(keep)
+            dup += len(drop)
+        log(f"  图片 ID 升级：{done + dup} / {total}（{time.time() - t0:.0f} 秒）")
+    log(f"图片 ID 升级完成：更新 {done} 条，去掉重复 {dup} 条")
     return done
 
 
@@ -759,8 +795,10 @@ def ensure_image_columns():
         cur.execute(f"SHOW COLUMNS FROM {IMAGE_TABLE}")
         cols = {c["Field"]: c for c in cur.fetchall()}
         if "varchar(64)" not in str(cols.get("record_id", {}).get("Type", "")).lower():
+            print(f"图片表 {IMAGE_TABLE} 加长 record_id 字段（只做一次，表大时要等一会）…", flush=True)
             cur.execute(f"ALTER TABLE {IMAGE_TABLE} MODIFY record_id VARCHAR(64) NULL COMMENT '记录ID：img_<景区ID>_<image_id>'")
         if "ctrip_image_id" not in cols:
+            print(f"图片表 {IMAGE_TABLE} 增加 ctrip_image_id / old_record_id 字段（只做一次）…", flush=True)
             cur.execute(f"ALTER TABLE {IMAGE_TABLE} ADD COLUMN ctrip_image_id BIGINT NULL COMMENT '携程接口里的 imageId' AFTER image_id")
         if "old_record_id" not in cols:
             cur.execute(f"ALTER TABLE {IMAGE_TABLE} ADD COLUMN old_record_id VARCHAR(64) NULL COMMENT '旧版 record_id' AFTER ctrip_image_id")

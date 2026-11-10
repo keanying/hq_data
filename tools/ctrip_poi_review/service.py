@@ -11,6 +11,7 @@
 import argparse
 import asyncio
 import collections
+import contextlib
 import itertools
 import re
 import time
@@ -215,18 +216,18 @@ class Service:
 
 def create_app(args):
     svc = Service(args)
-    app = FastAPI(title="携程 POI 核对 / 景点图像采集服务")
-    app.add_middleware(GZipMiddleware, minimum_size=2048)  # web/vendor 里的前端库较大，压缩后传输
-
-    @app.on_event("startup")
-    async def _start():
-        review.check_db()
-        asyncio.get_running_loop().create_task(svc.worker())
-        asyncio.get_running_loop().create_task(svc.follow_worker())
-
-    @app.on_event("shutdown")
-    async def _stop():
+    @contextlib.asynccontextmanager
+    async def lifespan(_app):
+        loop = asyncio.get_running_loop()
+        loop.create_task(svc.worker())
+        loop.create_task(svc.follow_worker())
+        url = f"http://{args.host}:{args.port}"
+        loop.call_later(0.5, lambda: print(f"服务已就绪：{url}  （浏览器打开即是工作台；Ctrl+C 停止）", flush=True))
+        yield
         await svc.browser.close()
+
+    app = FastAPI(title="携程 POI 核对 / 景点图像采集服务", lifespan=lifespan)
+    app.add_middleware(GZipMiddleware, minimum_size=2048)  # web/vendor 里的前端库较大，压缩后传输
 
     @app.get("/", response_class=HTMLResponse)
     def index():
@@ -395,7 +396,8 @@ def main():
     args.pattern = review.DEFAULT_PATTERNS
     if args.all_cities:
         db.DEFAULT_CITIES = []
-    print(f"服务启动：http://{args.host}:{args.port}  （浏览器打开即是工作台）", flush=True)
+    print("检查 MySQL（第一次升级到新版本时会顺带升级数据，表大时要等一会，进度会打印在下面）…", flush=True)
+    review.check_db()
     uvicorn.run(create_app(args), host=args.host, port=args.port, log_level="warning")
 
 
