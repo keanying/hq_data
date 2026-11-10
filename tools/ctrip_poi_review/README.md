@@ -210,6 +210,10 @@ python review.py images --channel chrome --grade 5A,4A
     这是正常情况（不算失败），**立即换下一个 POI**，不翻页、不长时间等待
   - 链接指向了别的 POI（再采也一样）
 
+  - **疑似限流（不算采过，会重采）**：页面没返回点评数据、页面点评列表为空、接口返回空列表但页面显示有点评 / 图片、翻页时接口突然返回空或没返回。
+    只有页面**明确写着**图片总数 0 / 点评总数 0 才记「无图」。旧版误记成「无图」/「没读到第一页点评」的，启动时自动改回「疑似限流」。
+  - **被限流时主动放慢**：连续 3 个 POI 疑似限流就暂停 30 分钟后自动继续（设置页「图片采集 → 被限流时」可改；页面上显示「冷却 mm:ss」，
+    点「继续」可提前开始）；可设「每日上限」（每天最多采多少个 POI，到了暂停到第二天）。一直疑似限流时，可在服务打开的浏览器里登录携程再试。
   只有「一页都没采到的临时失败」（网络、异常）会再采。要强制重采请勾「重采」（命令行 `--refresh`）。
   数据预览里每个景区有「图片采集」一列：已采 / 部分 x/y / 未采；点开看每个 POI 的采集状态和原因。总览里有「已采景区」。
 - 同一景区同一张图只存一条（见下方 record_id 说明），就算重采也不会重复。
@@ -337,6 +341,43 @@ python service.py --channel chrome
 发给模型的只有：景区名称、别名、省市区、地址、坐标、等级、核心景点，以及携程候选的名称、类型、城市区县、地址、距离和规则提示。
 同一景区、同一组候选、同一模型的结果缓存在 `scenic_ai_judge` 表，重复打开不会重复调用。API Key 存在浏览器目录（`.pw-profile-service/hq_prefs.json`，已在 .gitignore）里，不会进 git。
 
+## 10. 智能客服对话数据：大模型改写（对到我们的景区，可追溯到原始对话）
+
+把包里的原始客服问答（`dwd.dwd_cus_service_dialogue_df` + `dwd.dwd_cus_service_dialogue_turn_df`）交给大模型，改写成多轮在线客服会话。
+输出字段和目标样例完全一致（session_id / channel / visitor_id / scenic_id / scenic_name / start_time / related_order_id / turns / end_type /
+satisfaction_score / session_duration_sec），**只多一个 `source`**：原始对话 ID、原始景点、意图、场景、来源网址、第几个版本、改写模型和提示词版本、
+质检结果（`needs_review`、`check_flags`）。
+
+**在工作台操作（推荐）**：左侧「客服数据」页
+- 填原始数据目录（服务所在电脑上、解压后的目录）、范围（数据类型 / 只用训练集 / 意图）、**我们的景区**（城市、景区ID 或名称）、数量、每通改写几版、并发；
+- 「预估（不调模型）」：能用多少原始对话、分别对到我们哪些景区（点景区跳到数据预览）、意图分布；
+- 「开始生成」/「停止」：进度条、成功 / 需复核 / 不合格 / 调用失败、用时、速度，日志实时滚动；停了再开始会接着做（已生成的跳过）；
+- 「处理记录」点一行看**数据交换**：① 原始对话 → ② 发给模型的提示词 → ③ 模型原始返回 → ④ 生成结果（对话气泡 + 完整 JSON + 质检提示）；
+- 「导出」：每个批次可下载 会话 JSONL / JSON、只要合格 / 只要需复核、对照表 CSV、原始数据、不合格 / 失败，以及「写入 MySQL」。
+
+**MySQL**（勾「同时写入 MySQL」或批次的「写入 MySQL」；表要先建好，表名可用环境变量 `CS_SESSION_TABLE` / `CS_TURN_TABLE` 改）：
+
+| 表 | 写法 |
+|---|---|
+| `dwd_cus_cs_session_di` | 一行一个会话；`turn_cnt` = 消息条数；`travel_date` = `start_time` 的日期 |
+| `dwd_cus_cs_session_turn_di` | 一行一条消息；`msg_ts` = 会话日期 + 该条 ts（跨零点自动顺延）；`source` = 溯源 JSON（每条都带，`source.dialogue_id` 指回原始对话） |
+
+同一会话重复写会覆盖（会话行更新，消息先删后写），不会重复。
+
+**命令行**（同样的功能）：
+```bash
+python cs_synth.py --data-dir <解压后的包>/data --limit 20                                   # 先试 20 条
+python cs_synth.py --data-dir <解压后的包>/data --scenic-city 北京市 --intent 门票,预约购票 --variants 2 --mysql
+python cs_synth.py --load-jsonl out/cs_synth_20261110/dialogs.jsonl                          # 已生成的补写进 MySQL
+```
+
+- **景区联动**：原始 `attraction_id = ctrip_<携程景点ID>` → 携程主档 → 我们客户景区表里**已审核**且 `ctrip_poi_info` 含该 POI 的景区，
+  `scenic_id` / `scenic_name` 取我们的景区；对不上的默认不生成（可勾「对不到我们景区的也生成」）。核对的景区越多，能用的原始对话越多。
+  原始问的是景区里的某个景点时（如「中国科学技术馆」→「北京奥林匹克公园」），会保留具体景点名，不把它的信息说成整个景区的。
+- AI 配置用「设置 → AI 判断」的（非流式、关闭深度思考）。默认只用 `真实`、`train` 的原始对话（不把验证 / 测试集改写进训练数据）。
+- 防编造：客服只能说原文里有的事实；生成后自动质检，客服说的金额 / 时间点原文没有的标「需复核」。
+- 文件在 `out/cs_synth_<日期>/`（已在 .gitignore）：`dialogs.jsonl`、`source_extract.jsonl`（原表整行 + 逐轮发言）、`mapping.csv`、`rejected.jsonl`。
+
 ## 其他参数
 
 | 参数 | 说明 |
@@ -357,6 +398,7 @@ python service.py --channel chrome
 | `import_candidates.py` | 导入离线候选 CSV |
 | `import_ctrip_master.py` | 导入携程景区主档（用于显示地址/等级） |
 | `match.py` | 名称/地址比对与自动审核判定、坐标换算 |
+| `cs_synth.py` | 智能客服对话：用大模型改写原始客服问答，输出目标格式 + source，写 MySQL 两张表；工作台「客服数据」页 |
 | `ai_judge.py` | AI 辅助核对（火山方舟 Responses API，提示词、解析、缓存） |
 | `crawler.py` | 点评图片采集（翻页、解析、入库） |
 | `service.py` | 常驻服务（FastAPI）：核对接口、任务队列、边核对边采集 |

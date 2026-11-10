@@ -4,3 +4,4 @@ __pycache__/
 debug/
 .pw-profile-service/
 logs/
+out/

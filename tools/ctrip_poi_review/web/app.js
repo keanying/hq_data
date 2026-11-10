@@ -157,7 +157,7 @@
     if (x.collect === 'partial') return html`<${Tag} color="orange" size="small">部分 ${x.collect_n}/${x.pois.length}<//>`;
     return html`<${Tag} color="grey" size="small">未采<//>`;
   }
-  const CRAWL_ST = { done: ['green', '完成'], empty: ['grey', '无图'], partial: ['orange', '部分'], failed: ['red', '失败'], running: ['blue', '采集中'] };
+  const CRAWL_ST = { done: ['green', '完成'], empty: ['grey', '无图'], limited: ['orange', '疑似限流'], partial: ['orange', '部分'], failed: ['red', '失败'], running: ['blue', '采集中'] };
   const crawlTag = (s) => { const [c, t] = CRAWL_ST[s] || ['grey', s || '—']; return html`<${Tag} color=${c} size="small">${t}<//>`; };
   const JOB_ST = { queued: ['grey', '排队中'], running: ['blue', '运行中'], done: ['green', '完成'], failed: ['red', '失败'], cancelled: ['grey', '已取消'], need_human: ['orange', '需要人工'] };
   const jobTag = (s) => { const [c, t] = JOB_ST[s] || ['grey', s]; return html`<${Tag} color=${c} size="small">${t}<//>`; };
@@ -174,6 +174,10 @@
   function followState(f) {
     if (!f || !f.enabled) return ['grey', '已关闭', '审核通过后不会自动采图片'];
     if (f.paused) return ['orange', '已暂停', f.message ? `原因：${f.message}` : '队列保留着，点「继续采集」接着采'];
+    if (f.cool_until) {
+      const left = Math.max(0, Math.round(f.cool_until - Date.now() / 1000));
+      return ['orange', `冷却 ${Math.floor(left / 60)}:${String(left % 60).padStart(2, '0')}`, `${f.cool_reason || '疑似限流，暂停中'}；到时间自动继续，也可以点「继续」提前开始`];
+    }
     if (f.current) return ['blue', '采集中', `正在采 ${f.current}`];
     if (f.pending) return ['blue', '排队中', `还有 ${f.pending} 个景区等着采`];
     return ['green', '空闲', '审核通过（含规则自动通过、AI 通过）的景区会自动开始采'];
@@ -193,8 +197,9 @@
   function FollowControls({ follow, refresh }) {
     const f = follow || {};
     const [c, t, desc] = followState(f);
-    const toggle = () => setFollow(f.paused ? { resume: true } : { pause: true }, refresh);
-    const action = !f.enabled ? '' : f.paused ? '继续' : '暂停';
+    const waiting = f.paused || !!f.cool_until;
+    const toggle = () => setFollow(waiting ? { resume: true } : { pause: true }, refresh);
+    const action = !f.enabled ? '' : waiting ? '继续' : '暂停';
     return html`<span className="fc">
       <${Switch} size="small" checked=${!!f.enabled} onChange=${(v) => setFollow({ enabled: v }, refresh)} />
       <b className="fc-name">边核对边采集</b>
@@ -202,13 +207,14 @@
       <${Tooltip} content=${f.enabled ? `${desc}；点击${action}采集` : desc}>
         <button className=${'fc-btn ' + c} disabled=${!f.enabled} onClick=${toggle}>
           <span className="st"><i></i>${t}</span>
-          ${action && html`<span className="act">${f.paused ? html`<${Ic.IconPlay} size="small" />` : html`<${Ic.IconPause} size="small" />`}${action}</span>`}
+          ${action && html`<span className="act">${waiting ? html`<${Ic.IconPlay} size="small" />` : html`<${Ic.IconPause} size="small" />`}${action}</span>`}
         </button>
       <//>
       <span className="fc-sep"></span>
       <span className="fc-chip"><em>队列</em><b>${fmt(f.pending || 0)}</b> 个景区</span>
       <${Tooltip} content="本次启动服务以来的累计，重启后从 0 开始"><span className="fc-chip"><em>本次已采</em><b>${fmt(f.done || 0)}</b> 个景区 · 新增 <b>${fmt(f.images || 0)}</b> 张图</span><//>
       ${f.failed ? html`<span className="fc-chip bad"><em>失败</em><b>${fmt(f.failed)}</b> 个景区</span>` : null}
+      ${f.limited ? html`<${Tooltip} content="页面 / 接口没给数据，可能被携程限流；这些 POI 不算采过，之后会重采"><span className="fc-chip bad"><em>疑似限流</em><b>${fmt(f.limited)}</b> 个 POI</span><//>` : null}
     </span>`;
   }
 
@@ -416,7 +422,7 @@
           <a onClick=${() => go('gallery', { scenic_id: r.scenic_id, poi_id: r.poi_id })}>看图片</a>
           ${r.poi_uri && html`<a className="sec" href=${r.poi_uri} target="_blank" rel="noreferrer">携程页面</a>`}</span>` },
     ];
-    const statusOpts = [{ value: '', label: '全部' }, { value: 'done', label: '完成' }, { value: 'empty', label: '无图' }, { value: 'partial', label: '部分' }, { value: 'failed', label: '失败' }, { value: 'running', label: '采集中' }];
+    const statusOpts = [{ value: '', label: '全部' }, { value: 'done', label: '完成' }, { value: 'empty', label: '无图' }, { value: 'limited', label: '疑似限流' }, { value: 'partial', label: '部分' }, { value: 'failed', label: '失败' }, { value: 'running', label: '采集中' }];
     return html`<div className="page">
       <div className="row2 even" style=${{ flex: 'none' }}>
         <${Card} title="批量采集" sub="已审核景区保留的 POI"
@@ -711,6 +717,176 @@
     </div>`;
   }
 
+  // ------------------------------------------------------------ 客服数据（大模型改写原始客服问答 → 在线客服会话）
+  const CS_INTENTS = ['门票', '门票价格', '预约', '预约购票', '开放时间', '交通', '游玩建议', '退改', '退改规则', '住宿', '餐饮', '其他'];
+  const CS_KIND = { ok: ['green', '成功'], rejected: ['orange', '不合格'], failed: ['red', '调用失败'], cancelled: ['grey', '未处理'] };
+
+  function Bubble({ t }) {
+    const user = t.role === 'user' || t.role === '游客';
+    return html`<div className=${'bubble ' + (user ? 'u' : 'a')}>
+      <div className="meta">${user ? '游客' : (t.agent_id === 'ROBOT' ? '机器人' : t.agent_id ? `客服 ${t.agent_id}` : (t.role || '客服'))}${t.ts ? ' · ' + t.ts : ''}${t.msg_type === 'card' ? ' · 卡片' : ''}</div>
+      <div className=${'txt' + (t.msg_type === 'card' ? ' card' : '')}>${t.text}</div></div>`;
+  }
+
+  function CsItemSheet({ jobId, n, onClose }) {
+    const [d, setD] = useState(null);
+    useEffect(() => { setD(null); if (n) api(`/api/cs/item/${jobId}/${n}`).then(setD).catch((e) => setD({ error: e.message })); }, [jobId, n]);
+    const rec = d && d.record, src = d && d.source, ex = (d && d.exchange) || {};
+    return html`<${SideSheet} visible=${!!n} onCancel=${onClose} closeOnEsc width=${1100} title=${d && src ? `数据交换 · ${src.dialogue_id} 第 ${d.variant} 版` : '数据交换'}>
+      ${!d ? html`<${Spin} />` : d.error && !src ? html`<${Banner} type="danger" description=${d.error} />` : html`
+      <div className="xchg">
+        <div className="col">
+          <h4>① 原始对话 <span className="muted">${src.dialogue_id} · ${src.data_type} · ${src.split}</span></h4>
+          <div className="kv sm"><span>原始景点</span><div>${src.attraction_name}（${src.attraction_id}）</div><span>城市</span><div>${src.city}</div>
+            <span>意图 / 场景</span><div>${src.intent} / ${src.scene}</div><span>来源</span><div>${src.url ? html`<a href=${src.url} target="_blank" rel="noreferrer">打开原文</a>` : '—'}</div></div>
+          <div className="chat">${(src.turns && src.turns.length ? src.turns : (src.full || '').split('\n').filter(Boolean).map((x) => ({ role: x.startsWith('游客') ? '游客' : '客服', text: x.replace(/^(游客|客服)：/, '') })))
+            .map((t, i) => html`<${Bubble} key=${i} t=${t} />`)}</div>
+        </div>
+        <div className="col">
+          <h4>② 发给模型 <span className="muted">${ex.channel || ''} · 人设：${ex.persona || ''}</span></h4>
+          <pre className="log" style=${{ maxHeight: 300 }}>${ex.prompt || '—'}</pre>
+          <h4>③ 模型返回 <span className="muted">${ex.elapsed != null ? `用时 ${ex.elapsed} 秒` : ''}${ex.request_id ? ` · request_id ${ex.request_id}` : ''}</span></h4>
+          <pre className="log" style=${{ maxHeight: 260 }}>${ex.response || d.error || '—'}</pre>
+        </div>
+        <div className="col">
+          <h4>④ 生成结果 ${rec ? html`<span className="muted">${rec.session_id}${d.mysql ? ' · 已写 MySQL' : ''}</span>` : ''}</h4>
+          ${rec ? html`
+            ${rec.source.needs_review && html`<${Banner} type="warning" closeIcon=${null} style=${{ marginBottom: 8 }} description=${'需复核：' + rec.source.check_flags.join('；')} />`}
+            <div className="kv sm"><span>我们的景区</span><div>${rec.scenic_name} <span className="muted">${rec.scenic_id || '未对到'}</span></div>
+              <span>渠道 / 访客</span><div>${rec.channel} · ${rec.visitor_id}</div><span>开始 / 时长</span><div>${rec.start_time} · ${rec.session_duration_sec} 秒</div>
+              <span>订单 / 结束</span><div>${rec.related_order_id || '—'} · ${rec.end_type} · 满意度 ${rec.satisfaction_score ?? '未评'}</div></div>
+            <div className="chat">${rec.turns.map((t) => html`<${Bubble} key=${t.turn} t=${t} />`)}</div>
+            <details style=${{ marginTop: 8 }}><summary className="muted">完整 JSON（目标格式 + source）</summary><pre className="log" style=${{ maxHeight: 320 }}>${JSON.stringify(rec, null, 2)}</pre></details>`
+            : html`<${Banner} type="danger" closeIcon=${null} description=${d.error || '没有生成结果'} />`}
+        </div>
+      </div>`}
+    <//>`;
+  }
+
+  function CsPage({ cities }) {
+    const [p, setP] = useState({ data_dir: '', data_type: '真实', split: 'train', city: '', intent: [], scenic: '', scenic_city: '', limit: 20, variants: 1,
+      workers: 3, mysql: true, allow_unmapped: false });
+    useEffect(() => { api('/api/settings').then((st) => { if (st.cs_data_dir) setP((o) => ({ ...o, data_dir: o.data_dir || st.cs_data_dir })); }).catch(() => {}); }, []);
+    const [pv, setPv] = useState(null);
+    const [pvBusy, setPvBusy] = useState(false);
+    const [jobId, setJobId] = useState(0);
+    const [st, refresh] = usePoll(() => api(`/api/cs/state${jobId ? `?job_id=${jobId}` : ''}`), 1500, [jobId]);
+    const [bt, refreshBt] = usePoll(() => api('/api/cs/batches'), 10000);
+    const [cur, setCur] = useState(0);
+    const set = (k) => (v) => setP((o) => ({ ...o, [k]: v }));
+    const body = () => ({ ...p, intent: (p.intent || []).join(',') });
+    const job = st && st.job, stats = (job && job.stats) || {};
+    const running = job && ['queued', 'running'].includes(job.status);
+    const doPreview = async () => {
+      setPvBusy(true);
+      try { setPv(await post('/api/cs/preview', body())); } catch (e) { Toast.error(e.message); }
+      setPvBusy(false);
+    };
+    const start = async () => {
+      try { const j = await post('/api/cs/start', body()); setJobId(j.id); Toast.success(`已开始 #${j.id}`); refresh(); } catch (e) { Toast.error(e.message); }
+    };
+    const stop = async () => { try { await post('/api/cs/stop'); Toast.info('正在停止…'); refresh(); } catch (e) { Toast.error(e.message); } };
+    const loadMysql = async (batch) => {
+      Modal.confirm({ title: `把 ${batch} 写入 MySQL？`, content: `写进 ${bt && bt.session_table} 和 ${bt && bt.turn_table}；同一会话重复写会覆盖，不会重复。`, okText: '写入', cancelText: '取消',
+        onOk: async () => { try { const j = await post('/api/cs/load_mysql', { batch }); setJobId(j.id); refresh(); } catch (e) { Toast.error(e.message); } } });
+    };
+    const elapsed = job && job.started ? Math.max(0, Math.round(((job.finished ? new Date(job.finished.replace(' ', 'T')) : new Date()) - new Date(job.started.replace(' ', 'T'))) / 1000)) : 0;
+    const speed = elapsed && job.done ? (job.done / elapsed * 60).toFixed(1) : null;
+    const cols = [
+      { title: '#', dataIndex: 'n', width: 56, render: (v) => html`<span className="num muted">${v}</span>` },
+      { title: '状态', dataIndex: 'kind', width: 92, render: (v, r) => { const [c, t] = CS_KIND[v] || ['grey', v]; return html`<${Tag} color=${r.needs_review ? 'amber' : c} size="small">${r.needs_review ? '需复核' : t}<//>`; } },
+      { title: '我们的景区 / 原始景点', dataIndex: 'scenic_name', render: (v, r) => html`<div className="cell-2"><div className="t ell">${v || '—'}</div>
+          <div className="d ell">${r.attraction_name !== v ? r.attraction_name + ' · ' : ''}${r.intent || ''} · ${r.source_id}${r.variant > 1 ? ` · 第 ${r.variant} 版` : ''}</div></div>` },
+      { title: '会话', dataIndex: 'session_id', width: 190, render: (v, r) => html`<div className="cell-2"><div className="num sm">${v || '—'}</div><div className="d">${r.turns ? r.turns + ' 条消息' : ''}</div></div>` },
+      { title: '说明', dataIndex: 'flags', render: (v, r) => html`<div className="ell sm" style=${{ color: r.error ? '#c62828' : r.needs_review ? '#9a5b00' : undefined }} title=${r.error || v.join('；')}>${r.error || v.join('；') || '—'}</div>` },
+      { title: '用时', dataIndex: 'elapsed', width: 64, align: 'right', render: (v) => html`<span className="num sm">${v != null ? v + 's' : ''}</span>` },
+    ];
+    const box = useRef(null); const h = useHeight(box);
+    return html`<div className="page">
+      <div className="row2 even" style=${{ flex: 'none' }}>
+        <${Card} title="生成客服对话" help="把包里的原始客服问答交给大模型（设置页的 AI 配置，非流式、关闭深度思考），改写成在线客服会话。只用能对到我们已审核景区的原始对话（原始景点 → 携程主档 → 我们景区的 ctrip_poi_info），scenic_id / scenic_name 取我们的景区。输出字段和目标格式一致，多一个 source 指回原始对话。">
+          <div className="form">
+            <${Field} label="原始数据"><${Input} value=${p.data_dir} onChange=${set('data_dir')} placeholder="服务所在电脑上的目录，如 D:\\data\\文旅包\\data（含 dwd.dwd_cus_service_dialogue_df.csv）" style=${{ flex: 1 }} /><//>
+            <${Field} label="原始范围">
+              <${Select} value=${p.data_type} onChange=${set('data_type')} style=${{ width: 110 }} optionList=${['真实', '改写', '合成', '真实,改写'].map((x) => ({ value: x, label: x }))} />
+              <${Select} value=${p.split} onChange=${set('split')} style=${{ width: 130 }} optionList=${[{ value: 'train', label: '只用训练集' }, { value: 'all', label: '不限数据集' }]} />
+              <${Select} value=${p.intent} onChange=${set('intent')} multiple maxTagCount=${2} placeholder="全部意图" style=${{ width: 240 }} optionList=${CS_INTENTS.map((x) => ({ value: x, label: x }))} showClear />
+            <//>
+            <${Field} label="我们的景区">
+              <${CitySelect} value=${p.scenic_city} onChange=${set('scenic_city')} cities=${cities} style=${{ width: 140 }} />
+              <${Input} value=${p.scenic} onChange=${set('scenic')} placeholder="景区ID 或名称，逗号分隔（空 = 全部已审核景区）" style=${{ flex: 1, minWidth: 220 }} showClear />
+            <//>
+            <${Field} label="数量">
+              <span className="lbl">取</span><${InputNumber} hideButtons value=${p.limit} onChange=${set('limit')} min=${0} style=${{ width: 100 }} suffix="通" />
+              <span className="lbl">每通改写</span><${InputNumber} hideButtons value=${p.variants} onChange=${set('variants')} min=${1} max=${10} style=${{ width: 90 }} suffix="版" />
+              <span className="lbl">并发</span><${InputNumber} hideButtons value=${p.workers} onChange=${set('workers')} min=${1} max=${16} style=${{ width: 80 }} />
+            <//>
+            <${Field} label="选项">
+              <${Checkbox} checked=${p.mysql} onChange=${(e) => set('mysql')(e.target.checked)}>同时写入 MySQL<//>
+              <${Checkbox} checked=${p.allow_unmapped} onChange=${(e) => set('allow_unmapped')(e.target.checked)}>对不到我们景区的也生成<//>
+              <span style=${{ flex: 1 }}></span>
+              <${Button} onClick=${doPreview} loading=${pvBusy} icon=${html`<${Ic.IconSearch} />`}>预估（不调模型）<//>
+              ${running ? html`<${Button} type="danger" theme="solid" icon=${html`<${Ic.IconStop} />`} onClick=${stop} disabled=${job.cancel}>停止<//>`
+                : html`<${Button} theme="solid" icon=${html`<${Ic.IconPlay} />`} onClick=${start}>开始生成<//>`}
+            <//>
+          </div>
+        <//>
+        <${Card} title=${job ? `#${job.id} ${job.type_name}` : '进度'} extra=${job && jobTag(job.status)} bodyClass="scroll">
+          ${job ? html`<div>
+            <div style=${{ display: 'flex', alignItems: 'center', gap: 12 }}>
+              <${Progress} percent=${job.total ? pct(job.done, job.total) : 0} showInfo=${false} style=${{ flex: 1, margin: 0, height: 10 }} stroke="#6c4dff" />
+              <b className="num">${fmt(job.done)} / ${fmt(job.total)}</b>
+            </div>
+            <div className="cs-stats">
+              <span><em>成功</em><b>${fmt(stats.ok || 0)}</b></span><span className="warn"><em>需复核</em><b>${fmt(stats.review || 0)}</b></span>
+              <span className="warn"><em>不合格</em><b>${fmt(stats.rejected || 0)}</b></span><span className="bad"><em>调用失败</em><b>${fmt(stats.failed || 0)}</b></span>
+              ${stats.cancelled ? html`<span><em>停止未处理</em><b>${fmt(stats.cancelled)}</b></span>` : ''}
+              <span><em>用时</em><b>${elapsed}s</b></span>${speed && html`<span><em>速度</em><b>${speed}</b> 条/分</span>`}
+            </div>
+            ${job.error && html`<${Banner} type="danger" closeIcon=${null} description=${job.error} style=${{ marginTop: 8 }} />`}
+            ${(stats.out || (job.result && job.result.out)) && html`<div className="muted sm" style=${{ marginTop: 6 }}>输出目录：${stats.out || job.result.out}</div>`}
+          </div>` : html`<div className="muted">还没有任务。先「预估」看看能用多少，再「开始生成」。</div>`}
+          ${pv && html`<div className="cs-pv">
+            <div className="hd2">预估：原始 <b>${fmt(pv.source_total)}</b> 通符合条件，其中对到我们 <b>${fmt(pv.scenics)}</b> 个景区的 <b>${fmt(pv.usable)}</b> 通可用
+              <span className="muted">（意图：${pv.by_intent.slice(0, 6).map(([k, v]) => `${k} ${v}`).join(' · ')}）</span></div>
+            <div className="cs-sc">${pv.by_scenic.slice(0, 40).map((x) => html`<${Tooltip} key=${x.scenic_id || 'none'} content=${`原始景点：${x.spots.join('、')}`}>
+              <span className="chip2" onClick=${() => x.scenic_id && go('data', { q: x.scenic_id })}>${x.scenic_name}<b>${x.n}</b></span><//>`)}</div>
+          </div>`}
+        <//>
+      </div>
+      <div className="row2 fill">
+        <${Card} title="处理记录" sub=${st ? `${fmt(st.total_items)} 条 · 点一行看数据交换` : ''} bodyClass="flush"
+          extra=${st && st.history && st.history.length > 1 && html`<${Select} size="small" value=${job && job.id} style=${{ width: 220 }} onChange=${setJobId}
+            optionList=${st.history.map((x) => ({ value: x.id, label: `#${x.id} ${x.type_name} · ${(x.started || x.created || '').slice(5, 16)}` }))} />`}>
+          <div className="fill" ref=${box}>${h > 0 && html`<${Table} size="small" columns=${cols} dataSource=${(st && st.items) || []} rowKey="n" pagination=${false}
+            scroll=${{ y: h - 41 }} empty=${html`<${Empty} description="还没有处理记录" />`} onRow=${(r) => ({ onClick: () => setCur(r.n), style: { cursor: 'pointer' } })} />`}</div>
+        <//>
+        <div className="page" style=${{ gap: 14 }}>
+          <${Card} title="导出" sub=${bt ? `${bt.items.length} 个批次` : ''} bodyClass="scroll" style=${{ flex: 'none', maxHeight: '55%' }}
+            help=${`每次生成按日期放在 out/cs_synth_<日期>/。dialogs = 目标格式 + source；mapping = 会话 ↔ 原始对话 ↔ 景区 ↔ 质检；source_extract = 用到的原始对话（原表整行 + 逐轮发言）。写入 MySQL：${bt ? bt.session_table + ' / ' + bt.turn_table : ''}`}
+            extra=${html`<${Button} size="small" icon=${html`<${Ic.IconRefresh} />`} onClick=${refreshBt} />`}>
+            ${bt && bt.items.length ? bt.items.map((b) => html`<div className="cs-batch" key=${b.name}>
+              <div className="t"><b>${b.name}</b><span className="muted">${b.mtime} · 会话 ${fmt(b.files['dialogs.jsonl'] || 0)} · 需复核 ${fmt(b.review)}${b.files['rejected.jsonl'] ? ` · 不合格/失败 ${b.files['rejected.jsonl']}` : ''}</span></div>
+              <div className="links">
+                <a href=${`/api/cs/download?batch=${b.name}&file=dialogs.jsonl`}>会话 JSONL</a>
+                <a href=${`/api/cs/download?batch=${b.name}&file=dialogs.json`}>会话 JSON</a>
+                <a href=${`/api/cs/download?batch=${b.name}&file=dialogs.jsonl&only=ok`}>只要合格</a>
+                <a href=${`/api/cs/download?batch=${b.name}&file=dialogs.jsonl&only=review`}>只要需复核</a>
+                <a href=${`/api/cs/download?batch=${b.name}&file=mapping.csv`}>对照表 CSV</a>
+                <a href=${`/api/cs/download?batch=${b.name}&file=source_extract.jsonl`}>原始数据</a>
+                ${b.files['rejected.jsonl'] ? html`<a href=${`/api/cs/download?batch=${b.name}&file=rejected.jsonl`}>不合格/失败</a>` : ''}
+                <a onClick=${() => loadMysql(b.name)}>写入 MySQL</a>
+              </div></div>`) : html`<div className="muted">还没有生成过</div>`}
+          <//>
+          <${Card} title="日志" className="fill" bodyClass="flush">
+            <div style=${{ flex: 1, minHeight: 0, padding: '0 16px 14px', display: 'flex' }}><${LogBox} lines=${job && job.log} style=${{ flex: 1 }} /></div>
+          <//>
+        </div>
+      </div>
+      <${CsItemSheet} jobId=${job && job.id} n=${cur} onClose=${() => setCur(0)} />
+    </div>`;
+  }
+
   // ------------------------------------------------------------ 任务中心
   function JobsPage({ query, cities }) {
     const [jobs, refresh] = usePoll(() => api('/api/jobs'), 2500);
@@ -849,7 +1025,7 @@
         const body = {};
         for (const k of [...AI_FIELDS, 'reviewer', 'throttle_ms', 'auto_search', 'auto_keep_similar', 'auto_approve', 'auto_approve_delay_ms', 'idle_skip',
           'idle_skip_sec', 'search_more', 'search_core_spots', 'max_extra', 'auto_address', 'auto_collect', 'collect_max_pages', 'collect_max_images',
-          'collect_empty_pages']) body[k] = st[k];
+          'collect_empty_pages', 'collect_limit_streak', 'collect_cooldown_min', 'collect_daily_poi_cap']) body[k] = st[k];
         if (key.trim()) body.ai_api_key = key.trim();
         const r = await post('/api/settings', body);
         setSt(r); setKey('');
@@ -921,6 +1097,9 @@
               <${Field} label="每个 POI"><span className="lbl">最多</span><${InputNumber} hideButtons value=${st.collect_max_pages} onChange=${set('collect_max_pages')} min=${1} style=${{ width: 90 }} suffix="页" />
                 <${InputNumber} hideButtons value=${st.collect_max_images} onChange=${set('collect_max_images')} min=${0} style=${{ width: 100 }} suffix="张" />
                 <span className="lbl">连续</span><${InputNumber} hideButtons value=${st.collect_empty_pages} onChange=${set('collect_empty_pages')} min=${0} style=${{ width: 90 }} suffix="页" /><span className="lbl">无新图换下一个</span><//>
+              <${Field} label="被限流时"><span className="lbl">连续</span><${InputNumber} hideButtons value=${st.collect_limit_streak} onChange=${set('collect_limit_streak')} min=${1} style=${{ width: 80 }} suffix="个" />
+                <span className="lbl">POI 疑似限流就暂停</span><${InputNumber} hideButtons value=${st.collect_cooldown_min} onChange=${set('collect_cooldown_min')} min=${1} style=${{ width: 100 }} suffix="分钟" /><span className="lbl">，到时间自动继续</span><//>
+              <${Field} label="每日上限"><span className="lbl">每天最多采</span><${InputNumber} hideButtons value=${st.collect_daily_poi_cap} onChange=${set('collect_daily_poi_cap')} min=${0} style=${{ width: 110 }} suffix="个 POI" /><span className="lbl">0 = 不限；到了暂停到第二天</span><//>
             </div>
             <div style=${{ marginTop: 14, textAlign: 'right' }}><${Button} theme="solid" onClick=${save} loading=${busy}>保存<//></div>
           <//>
@@ -937,11 +1116,12 @@
     data: ['数据预览', '客户景区表 + ctrip_poi_info + approval，点一行看详情'],
     gallery: ['图片预览', '按城市 / 景区 / POI 筛选，点开看大图和图片信息'],
     jobs: ['任务中心', '任务按提交顺序逐个执行；遇到登录 / 验证会停在「需要人工」'],
+    cs: ['客服数据', '用大模型把原始客服问答改写成在线客服会话，对到我们的景区'],
     settings: ['设置', 'AI 判断、核对、图片采集的开关和参数'],
   };
   const NAV = [
     ['overview', '总览', Ic.IconHome], ['review', '核对', Ic.IconCheckboxTick], ['images', '图片采集', Ic.IconCamera],
-    ['data', '数据预览', Ic.IconGridView], ['gallery', '图片预览', Ic.IconGallery], ['jobs', '任务中心', Ic.IconList],
+    ['data', '数据预览', Ic.IconGridView], ['gallery', '图片预览', Ic.IconGallery], ['cs', '客服数据', Ic.IconComment], ['jobs', '任务中心', Ic.IconList],
   ];
 
   /** 左侧深色图标栏：导航 + 搜索 / 提醒 / 核对人（不再单独占一行顶栏，页面用满高度） */
@@ -1013,6 +1193,7 @@
     else if (route === 'data') page = html`<${DataPage} ...${props} />`;
     else if (route === 'gallery') page = html`<${GalleryPage} ...${props} />`;
     else if (route === 'jobs') page = html`<${JobsPage} ...${props} />`;
+    else if (route === 'cs') page = html`<${CsPage} ...${props} />`;
     else if (route === 'settings') page = html`<${SettingsPage} refreshHealth=${refreshHealth} />`;
     useEffect(() => { document.title = `${PAGES[route][0]} · 景区 POI 数据工作台`; }, [route]);
     return html`<div className="frame">
