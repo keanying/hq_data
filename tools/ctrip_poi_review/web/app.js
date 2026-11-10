@@ -166,11 +166,13 @@
   }
 
   // ------------------------------------------------------------ 采集状态（边核对边采集 + 正在采集的 POI）
+  /** 边核对边采集的状态：[颜色, 短状态, 说明] */
   function followState(f) {
-    if (!f || !f.enabled) return ['grey', '已关闭'];
-    if (f.paused) return ['orange', '已暂停'];
-    if (f.current) return ['blue', '采集中'];
-    return ['green', '待命'];
+    if (!f || !f.enabled) return ['grey', '已关闭', '审核通过后不会自动采图片'];
+    if (f.paused) return ['orange', '已暂停', f.message ? `原因：${f.message}` : '队列保留着，点「继续采集」接着采'];
+    if (f.current) return ['blue', '采集中', `正在采 ${f.current}`];
+    if (f.pending) return ['blue', '排队中', `还有 ${f.pending} 个景区等着采`];
+    return ['green', '空闲', '审核通过（含规则自动通过、AI 通过）的景区会自动开始采'];
   }
   async function skipPoi(source, refresh) {
     try {
@@ -186,15 +188,19 @@
 
   function FollowControls({ follow, refresh }) {
     const f = follow || {};
-    const [c, t] = followState(f);
-    return html`<span className="toolbar" style=${{ gap: 8 }}>
+    const [c, t, desc] = followState(f);
+    return html`<span className="fc">
       <${Switch} size="small" checked=${!!f.enabled} onChange=${(v) => setFollow({ enabled: v }, refresh)} />
-      <${Text} strong>边核对边采集<//>
-      <${Tag} color=${c} size="small">${t}<//>
-      <${Text} type="tertiary" size="small">排队 ${f.pending || 0} · 已采景区 ${f.done || 0} · 新增图片 ${fmt(f.images || 0)}${f.failed ? ` · 失败 ${f.failed}` : ''}<//>
+      <b className="fc-name">边核对边采集</b>
+      <${Help} text="打开后，核对页里审核通过（含规则自动通过、AI 通过）的景区会自动排进队列，服务在后台另一个标签页里打开它保留的携程 POI，翻点评、把图片写进 MySQL。下面的数字是本次启动服务以来的累计，重启后从 0 开始。" />
+      <${Tooltip} content=${desc}><span className=${'fc-state ' + c}><i></i>${t}</span><//>
+      <span className="fc-sep"></span>
+      <span className="fc-chip"><em>队列</em><b>${fmt(f.pending || 0)}</b> 个景区</span>
+      <${Tooltip} content="本次启动服务以来的累计，重启后从 0 开始"><span className="fc-chip"><em>本次已采</em><b>${fmt(f.done || 0)}</b> 个景区 · 新增 <b>${fmt(f.images || 0)}</b> 张图</span><//>
+      ${f.failed ? html`<span className="fc-chip bad"><em>失败</em><b>${fmt(f.failed)}</b> 个景区</span>` : null}
       ${f.enabled && (f.paused
-        ? html`<${Button} size="small" theme="solid" icon=${html`<${Ic.IconPlay} />`} onClick=${() => setFollow({ resume: true }, refresh)}>继续<//>`
-        : html`<${Button} size="small" type="tertiary" icon=${html`<${Ic.IconPause} />`} onClick=${() => setFollow({ pause: true }, refresh)}>暂停<//>`)}
+        ? html`<${Button} size="small" theme="solid" icon=${html`<${Ic.IconPlay} />`} onClick=${() => setFollow({ resume: true }, refresh)}>继续采集<//>`
+        : html`<${Button} size="small" type="tertiary" icon=${html`<${Ic.IconPause} />`} onClick=${() => setFollow({ pause: true }, refresh)}>暂停采集<//>`)}
     </span>`;
   }
 
@@ -363,7 +369,7 @@
           <${Spin} size="small" />
           <span className="txt">正在采：<b>${a.scenic_name} / ${a.poi_name}</b> · 第 ${a.pages}/${a.max_pages} 页 · 新增 ${a.images} 张</span>
           <${Button} size="small" type="primary" theme="light" icon=${html`<${Ic.IconChevronRight} />`} iconPosition="right" onClick=${() => skipPoi('follow', refreshFollow)}>下一个 POI<//>`
-          : html`<${Text} type="tertiary" size="small">审核完成（含自动通过）的景区会自动排进图片采集<//>`}</div>
+          : html`<${Text} type="tertiary" size="small">${followState(follow)[2]}<//>`}</div>
       </div>
       <div className="card review-card"><div id="review-host" ref=${host}></div></div>
     </div>`;
@@ -737,6 +743,33 @@
   }
 
   // ------------------------------------------------------------ 设置
+  /** AI 调用记录：每次调用的结果 / 失败原因 / 用时 / request id；完整日志在 logs/ai_calls.jsonl */
+  function AILog() {
+    const [d, refresh] = usePoll(() => api('/api/ai/log?limit=200'), 5000);
+    const [cur, setCur] = useState(null);
+    const box = useRef(null); const h = useHeight(box);
+    const items = (d && d.items) || [];
+    const cols = [
+      { title: '时间', dataIndex: 'time', width: 120, render: (v) => html`<span className="num nw sm">${(v || '').slice(5)}</span>` },
+      { title: '景区', dataIndex: 'scenic_name', width: 200, render: (v, r) => html`<div className="cell-2"><div className="t ell">${v || r.scenic_id || '—'}</div>
+          <div className="d">${r.model || ''}${r.web_search ? ' · 联网' : ''}${r.items != null ? ` · ${r.items} 个候选` : ''}</div></div>` },
+      { title: '结果', dataIndex: 'ok', width: 70, render: (v) => (v ? html`<${Tag} color="green" size="small">成功<//>` : html`<${Tag} color="red" size="small">失败<//>`) },
+      { title: '用时', dataIndex: 'elapsed', width: 64, align: 'right', render: (v) => html`<span className="num sm">${v != null ? v + 's' : '—'}</span>` },
+      { title: '说明', dataIndex: 'error', render: (v, r) => html`<div className=${'ell sm ' + (r.ok ? 'muted' : '')} style=${{ color: r.ok ? undefined : '#c62828' }}
+          title=${v || r.summary || ''}>${r.ok ? `${r.approve ? '可通过' : '拿不准'} · 置信度 ${Number(r.confidence || 0).toFixed(2)} · ${r.summary || r.raw || ''}` : v}</div>` },
+    ];
+    return html`<${Card} title="AI 调用记录" sub=${items.length ? `最近 ${items.length} 次` : ''} className="fill" bodyClass="flush"
+        help=${`每次调用 AI 的结果都会记下来（成功 / 失败原因 / 用时 / request id / 返回片段），点一行看详情。完整日志：${(d && d.file) || 'logs/ai_calls.jsonl'}`}
+        extra=${html`<${Button} size="small" icon=${html`<${Ic.IconRefresh} />`} onClick=${refresh} />`}>
+      <div className="fill" ref=${box} style=${{ minHeight: 160 }}>${h > 0 && html`<${Table} size="small" columns=${cols} dataSource=${items}
+        rowKey=${(r) => (r.time || '') + (r.scenic_id || '') + (r.elapsed || '')} pagination=${false} scroll=${{ y: h - 41 }}
+        onRow=${(r) => ({ onClick: () => setCur(r), style: { cursor: 'pointer' } })} empty=${html`<${Empty} description="还没有调用过 AI" />`} />`}</div>
+      <${Modal} title="AI 调用详情" visible=${!!cur} onCancel=${() => setCur(null)} footer=${null} width=${720}>
+        ${cur && html`<pre className="log" style=${{ maxHeight: 480 }}>${JSON.stringify(cur, null, 2)}</pre>`}
+      <//>
+    <//>`;
+  }
+
   function SettingsPage({ refreshHealth }) {
     const [st, setSt] = useState(null);
     const [key, setKey] = useState('');
@@ -775,7 +808,8 @@
     const keyHint = st.ai_key_set ? `已设置（${st.ai_api_key || '环境变量'}，来自${st.ai_key_source || '设置页'}）；留空表示不修改` : '填写火山方舟 API Key（也可用环境变量 ARK_API_KEY）';
     return html`<div className="page">
       <div className="row2" style=${{ gridTemplateColumns: 'minmax(0, 1.15fr) minmax(0, 1fr)', flex: 1 }}>
-        <${Card} title="AI 判断" sub=${st.ai_enabled ? (st.ai_key_set ? '已启用' : '已启用，缺 API Key') : '未启用'} bodyClass="scroll"
+        <div className="page" style=${{ gap: 14 }}>
+        <${Card} title="AI 判断" sub=${st.ai_enabled ? (st.ai_key_set ? '已启用' : '已启用，缺 API Key') : '未启用'} bodyClass="scroll" style=${{ flex: 'none', maxHeight: '62%' }}
           help="规则判不了的景区（名称不一致、同名不同区、地址对不上…），把景区名称 / 别名 / 省市区 / 地址 / 坐标 / 核心景点和携程候选的名称 / 类型 / 城市区县 / 地址 / 距离发给大模型，判断每个 POI 是否属于这个景区。有把握（置信度达到下限）就自动保留并通过，备注以「AI审核：」开头，最后在核对页筛「AI 通过（待复核）」由人复核。结果按景区缓存，不重复调用。">
           <div className="form" style=${{ gridTemplateColumns: '96px minmax(0, 1fr)' }}>
             <${Field} label="启用">${sw('ai_enabled')}<span className="lbl">核对页搜完规则判不了时自动调用；任务中心的批量自动审核也会用</span><//>
@@ -797,8 +831,11 @@
             <//>
           </div>
           ${test && !test.loading && html`<${Banner} style=${{ marginTop: 14 }} type=${test.ok ? 'success' : 'danger'} closeIcon=${null}
-            description=${test.ok ? `连通了：${test.model}${test.web_search ? '（联网搜索）' : ''}，用时 ${test.elapsed} 秒；返回：${test.text}` : `没连通：${test.error}`} />`}
+            description=${test.ok ? `连通了：${test.model}${test.web_search ? '（联网搜索）' : ''}，用时 ${test.elapsed} 秒；返回：${test.text}${test.request_id ? `；request_id ${test.request_id}` : ''}`
+              : `没连通：${test.error}${test.request_id ? `（request_id ${test.request_id}）` : ''}${test.raw ? `；原始返回：${test.raw}` : ''}`} />`}
         <//>
+        <${AILog} />
+        </div>
         <div className="page" style=${{ gap: 14 }}>
           <${Card} title="核对" bodyClass="scroll" className="fill">
             <div className="form" style=${{ gridTemplateColumns: '96px minmax(0, 1fr)' }}>

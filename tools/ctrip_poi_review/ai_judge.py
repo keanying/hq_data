@@ -15,19 +15,54 @@
 发送给模型的只有：景区名称 / 别名 / 省市区 / 地址 / 坐标 / 等级 / 核心景点，和携程候选的名称 / 类型 / 城市区县 / 地址 / 距离。
 同一景区、同一组候选的结果会缓存在 MySQL（scenic_ai_judge），重复打开不重复调用。
 """
+import collections
 import hashlib
 import json
 import os
 import re
+import socket
+import threading
 import time
 import urllib.error
 import urllib.request
+from pathlib import Path
 
 import match
 
 DEFAULTS = dict(ai_enabled=False, ai_base_url="https://ark.cn-beijing.volces.com/api/v3", ai_model="glm-5-3-flash-260828",
                 ai_api_key="", ai_web_search=False, ai_max_keyword=3, ai_min_confidence=0.8, ai_auto_approve=True, ai_timeout_s=60)
 MAX_ITEMS = 30  # 一次最多给模型看的候选数
+
+# 调用日志：每次调用（成功 / 失败）一行 JSON，写 logs/ai_calls.jsonl，内存里留最近 300 条给设置页看
+LOG_PATH = Path(__file__).resolve().parent / "logs" / "ai_calls.jsonl"
+RECENT = collections.deque(maxlen=300)
+_log_lock = threading.Lock()
+
+
+def log_call(entry):
+    entry = dict(time=time.strftime("%Y-%m-%d %H:%M:%S"), **entry)
+    RECENT.append(entry)
+    with _log_lock:
+        try:
+            LOG_PATH.parent.mkdir(parents=True, exist_ok=True)
+            with LOG_PATH.open("a", encoding="utf-8") as f:
+                f.write(json.dumps(entry, ensure_ascii=False) + "\n")
+        except OSError:
+            pass
+    if not entry.get("ok"):
+        print(f"[AI] {entry.get('scenic_id') or ''} {entry.get('scenic_name') or ''} 调用失败：{entry.get('error')}"
+              + (f"（request_id {entry['request_id']}）" if entry.get("request_id") else ""), flush=True)
+    return entry
+
+
+def recent_calls(limit=100):
+    if not RECENT and LOG_PATH.exists():  # 服务刚启动：从日志文件尾部读
+        try:
+            for line in LOG_PATH.read_text(encoding="utf-8").splitlines()[-300:]:
+                RECENT.append(json.loads(line))
+        except (OSError, ValueError):
+            pass
+    return list(RECENT)[-limit:][::-1]
 
 
 def config(prefs):
@@ -97,7 +132,9 @@ approve=true 表示：至少有一个 keep=true 且 relation=本体 的 POI，�
 
 # ---------------------------------------------------------------- 调用
 class AIError(RuntimeError):
-    pass
+    def __init__(self, msg, http_status=None, request_id=None, raw=None):
+        super().__init__(msg)
+        self.http_status, self.request_id, self.raw = http_status, request_id, raw
 
 
 def _extract_text(js):
@@ -119,27 +156,62 @@ def _extract_text(js):
     raise AIError("模型没有返回文字结果：" + json.dumps(js, ensure_ascii=False)[:300])
 
 
+def _rid(headers):
+    for k in ("x-request-id", "X-Request-Id", "x-tt-logid", "X-Tt-Logid"):
+        v = headers.get(k) if headers else None
+        if v:
+            return v
+    return None
+
+
 def call(cfg, text):
+    """返回 (文字结果, 用时秒, 附加信息 {request_id, usage, raw})；失败抛 AIError（带 HTTP 状态码、request id、原始返回片段）。"""
     if not cfg.get("ai_api_key"):
         raise AIError("没有配置 API Key（设置页填写，或设置环境变量 ARK_API_KEY）")
     body = dict(model=cfg["ai_model"], stream=False,
                 input=[dict(role="user", content=[dict(type="input_text", text=text)])])
     if cfg.get("ai_web_search"):
         body["tools"] = [dict(type="web_search", max_keyword=int(cfg.get("ai_max_keyword") or 3))]
-    req = urllib.request.Request(cfg["ai_base_url"] + "/responses", data=json.dumps(body, ensure_ascii=False).encode("utf-8"),
+    url = cfg["ai_base_url"] + "/responses"
+    req = urllib.request.Request(url, data=json.dumps(body, ensure_ascii=False).encode("utf-8"),
                                  headers={"Authorization": f"Bearer {cfg['ai_api_key']}", "Content-Type": "application/json"})
     t0 = time.time()
+    timeout = float(cfg.get("ai_timeout_s") or 60)
     try:
-        with urllib.request.urlopen(req, timeout=float(cfg.get("ai_timeout_s") or 60)) as r:
-            js = json.loads(r.read().decode("utf-8"))
+        with urllib.request.urlopen(req, timeout=timeout) as r:
+            rid = _rid(r.headers)
+            raw = r.read().decode("utf-8", "replace")
     except urllib.error.HTTPError as e:
-        detail = e.read().decode("utf-8", "replace")[:300]
-        raise AIError(f"接口返回 HTTP {e.code}：{detail}") from e
+        raw = e.read().decode("utf-8", "replace")
+        rid = _rid(e.headers)
+        msg = raw[:300]
+        try:  # 方舟的错误格式：{"error": {"code": "...", "message": "...", "type": "..."}}
+            ej = json.loads(raw).get("error") or {}
+            msg = f"{ej.get('code') or ''} {ej.get('message') or ''}".strip() or msg
+        except (ValueError, AttributeError):
+            pass
+        hint = {401: "（API Key 不对或已失效）", 403: "（没有这个模型的权限，或账号未开通）", 404: "（接口地址或模型名不对）",
+                429: "（请求太频繁或额度用完）"}.get(e.code, "")
+        raise AIError(f"接口返回 HTTP {e.code}{hint}：{msg}", e.code, rid, raw[:1000]) from e
+    except (socket.timeout, TimeoutError) as e:
+        raise AIError(f"AI 接口 {timeout:.0f} 秒没返回（超时；开了联网搜索会更慢，可在设置里调大超时）") from e
     except urllib.error.URLError as e:
-        raise AIError(f"连不上 AI 接口：{e.reason}") from e
-    except TimeoutError as e:
-        raise AIError(f"AI 接口超时（{cfg.get('ai_timeout_s')} 秒）") from e
-    return _extract_text(js), round(time.time() - t0, 1)
+        if isinstance(e.reason, (socket.timeout, TimeoutError)):
+            raise AIError(f"AI 接口 {timeout:.0f} 秒没返回（超时）") from e
+        raise AIError(f"连不上 AI 接口 {url}：{e.reason}") from e
+    try:
+        js = json.loads(raw)
+    except ValueError as e:
+        raise AIError("AI 接口返回的不是 JSON：" + raw[:200], None, rid, raw[:1000]) from e
+    if isinstance(js, dict) and js.get("error"):
+        ej = js["error"] if isinstance(js["error"], dict) else {"message": str(js["error"])}
+        raise AIError(f"AI 接口返回错误：{ej.get('code') or ''} {ej.get('message') or ''}".strip(), None, rid, raw[:1000])
+    try:
+        out = _extract_text(js)
+    except AIError as e:
+        e.request_id, e.raw = rid, raw[:1000]
+        raise
+    return out, round(time.time() - t0, 1), dict(request_id=rid, usage=js.get("usage") if isinstance(js, dict) else None)
 
 
 def parse(text):
@@ -174,8 +246,19 @@ def judge(cfg, scenic, items, rule=None, cache_get=None, cache_put=None):
         hit = cache_get(scenic["id"], sig)
         if hit:
             return dict(hit, cached=True)
-    text, elapsed = call(cfg, build_prompt(scenic, items, rule))
-    js = parse(text)
+    base = dict(scenic_id=scenic.get("id"), scenic_name=scenic.get("name"), model=cfg.get("ai_model"),
+                web_search=bool(cfg.get("ai_web_search")), items=len(items))
+    t0 = time.time()
+    try:
+        text, elapsed, meta = call(cfg, build_prompt(scenic, items, rule))
+        js = parse(text)
+    except AIError as e:
+        log_call(dict(base, ok=False, elapsed=round(time.time() - t0, 1), error=str(e), http_status=e.http_status,
+                      request_id=e.request_id, raw=(e.raw or "")[:500]))
+        raise
+    except Exception as e:  # noqa: BLE001
+        log_call(dict(base, ok=False, elapsed=round(time.time() - t0, 1), error=f"{type(e).__name__}: {e}"))
+        raise
     dec = {}
     for d in js.get("decisions") or []:
         try:
@@ -188,11 +271,23 @@ def judge(cfg, scenic, items, rule=None, cache_get=None, cache_put=None):
     res = dict(decisions=dec, approve=bool(js.get("approve")) and any(v["keep"] for v in dec.values()),
                confidence=_num(js.get("confidence")), summary=str(js.get("summary") or "")[:120], model=cfg.get("ai_model"),
                elapsed=elapsed, cached=False)
+    log_call(dict(base, ok=True, elapsed=elapsed, request_id=meta.get("request_id"), usage=meta.get("usage"),
+                  approve=res["approve"], confidence=res["confidence"], summary=res["summary"],
+                  kept=sum(1 for v in dec.values() if v["keep"]), raw=text[:500]))
     if cache_put:
         cache_put(scenic["id"], sig, res)
     return res
 
 
 def ping(cfg):
-    text, elapsed = call(cfg, '只回复 JSON：{"ok":true}')
-    return dict(ok=True, text=text[:200], elapsed=elapsed, model=cfg.get("ai_model"), web_search=bool(cfg.get("ai_web_search")))
+    base = dict(scenic_id="(测试连接)", model=cfg.get("ai_model"), web_search=bool(cfg.get("ai_web_search")))
+    t0 = time.time()
+    try:
+        text, elapsed, meta = call(cfg, '只回复 JSON：{"ok":true}')
+    except AIError as e:
+        log_call(dict(base, ok=False, elapsed=round(time.time() - t0, 1), error=str(e), http_status=e.http_status,
+                      request_id=e.request_id, raw=(e.raw or "")[:500]))
+        raise
+    log_call(dict(base, ok=True, elapsed=elapsed, request_id=meta.get("request_id"), usage=meta.get("usage"), raw=text[:200]))
+    return dict(ok=True, text=text[:200], elapsed=elapsed, model=cfg.get("ai_model"), web_search=bool(cfg.get("ai_web_search")),
+                request_id=meta.get("request_id"))

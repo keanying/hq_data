@@ -321,9 +321,18 @@ def create_app(args):
             prefs["ai_api_key"] = payload["ai_api_key"].strip()
         cfg = ai_judge.config(prefs)
         try:
-            return await asyncio.to_thread(ai_judge.ping, cfg)
+            return await asyncio.wait_for(asyncio.to_thread(ai_judge.ping, cfg), timeout=float(cfg.get("ai_timeout_s") or 60) + 10)
+        except asyncio.TimeoutError:
+            return dict(ok=False, error=f"超过 {float(cfg.get('ai_timeout_s') or 60) + 10:.0f} 秒没返回")
+        except ai_judge.AIError as e:
+            return dict(ok=False, error=str(e), http_status=e.http_status, request_id=e.request_id, raw=(e.raw or "")[:500])
         except Exception as e:  # noqa: BLE001
-            return dict(ok=False, error=str(e))
+            return dict(ok=False, error=f"{type(e).__name__}: {e}")
+
+    @app.get("/api/ai/log")
+    def ai_log(limit: int = 100):
+        """最近的 AI 调用记录（成功 / 失败、原因、用时、request id），完整日志在 logs/ai_calls.jsonl。"""
+        return dict(items=ai_judge.recent_calls(min(max(limit, 1), 300)), file=str(ai_judge.LOG_PATH))
 
     @app.get("/api/crawl")
     def crawl_state():
