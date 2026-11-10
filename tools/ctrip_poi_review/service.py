@@ -13,6 +13,7 @@ import asyncio
 import collections
 import contextlib
 import itertools
+import json
 import re
 import time
 import traceback
@@ -27,12 +28,13 @@ from fastapi.staticfiles import StaticFiles
 
 import ai_judge
 import crawler
+import cs_synth
 import db
 import review
 
 HERE = Path(__file__).resolve().parent
 WEB = HERE / "web"
-JOB_TYPES = {"auto_review": "自动审核", "images": "采集点评图片"}
+JOB_TYPES = {"auto_review": "自动审核", "images": "采集点评图片", "cs_synth": "客服对话生成", "cs_load": "客服对话写入 MySQL"}
 
 
 class Job:
@@ -288,6 +290,162 @@ def create_app(args):
         if payload.get("pause"):
             svc.follow["paused"] = True
         return follow_state()
+
+    # ---------------- 智能客服对话数据（大模型改写，单独运行，不占核对 / 采集的任务队列）
+    CS_DEFAULTS = dict(data_dir="", data_type="真实", split="train", city="", intent="", scenic="", scenic_city="", limit=20, variants=1,
+                       workers=3, allow_unmapped=False, no_db=False, mysql=True, out="", seed=7)
+
+    def cs_args(p):
+        a = dict(CS_DEFAULTS)
+        a.update({k: v for k, v in (p or {}).items() if k in CS_DEFAULTS and v is not None})
+        a["data_dir"] = a["data_dir"] or svc.prefs.get("cs_data_dir") or ""
+        if not a["data_dir"]:
+            raise HTTPException(400, "先填原始数据目录（解压后包含 dwd.dwd_cus_service_dialogue_df.csv 的目录）")
+        for k in ("limit", "variants", "workers", "seed"):
+            a[k] = int(a[k] or 0)
+        return SimpleNamespace(**a)
+
+    def cs_current():
+        return next((j for j in sorted(svc.jobs.values(), key=lambda j: -j.id) if j.type in ("cs_synth", "cs_load") and j.status in ("queued", "running")), None)
+
+    async def cs_launch(job, fn):
+        svc.jobs[job.id] = job
+        job.status, job.started = "running", time.strftime("%Y-%m-%d %H:%M:%S")
+
+        def progress(done, total):
+            job.done, job.total = done, total
+        try:
+            job.result = await asyncio.to_thread(fn, progress)
+            job.status = "cancelled" if job.cancel else "done"
+        except Exception as e:  # noqa: BLE001
+            job.status, job.error = "failed", f"{type(e).__name__}: {e}"
+            job.write(f"失败：{job.error}")
+        finally:
+            job.finished = time.strftime("%Y-%m-%d %H:%M:%S")
+
+    @app.post("/api/cs/preview")
+    async def cs_preview(payload: dict = Body(default={})):
+        """不调用模型：按条件能用多少原始对话、分别对到我们哪些景区。"""
+        a = cs_args(payload)
+        logs = []
+        try:
+            res = await asyncio.to_thread(cs_synth.preview, a, logs.append)
+        except FileNotFoundError as e:
+            raise HTTPException(400, str(e)) from e
+        if payload.get("data_dir"):
+            svc.prefs["cs_data_dir"] = payload["data_dir"]
+            svc.prefs.save()
+        return dict(res, log=logs)
+
+    @app.post("/api/cs/start")
+    async def cs_start(payload: dict = Body(default={})):
+        if cs_current():
+            raise HTTPException(409, "已经有一个客服对话任务在跑，先停止它")
+        a = cs_args(payload)
+        cfg = ai_judge.config(svc.prefs)
+        if not cfg.get("ai_api_key"):
+            raise HTTPException(400, "没有 AI 的 API Key：先在「设置 → AI 判断」里填")
+        svc.prefs["cs_data_dir"] = a.data_dir
+        svc.prefs.save()
+        job = Job("cs_synth", {k: v for k, v in vars(a).items()})
+        job.items = collections.deque(maxlen=1000)
+        job.stats = {}
+        job.write(f"开始：模型 {cfg['ai_model']}（非流式，深度思考{'开' if cfg.get('ai_thinking') else '关'}）{'，写入 MySQL' if a.mysql else ''}")
+
+        def on_item(it):
+            it["n"] = len(job.items) + 1 if not job.items else job.items[-1]["n"] + 1
+            it["time"] = time.strftime("%H:%M:%S")
+            job.items.append(it)
+            k = it["kind"]
+            job.stats[k] = job.stats.get(k, 0) + 1
+            if k == "ok" and it["record"]["source"].get("needs_review"):
+                job.stats["review"] = job.stats.get("review", 0) + 1
+
+        def fn(progress):
+            st = cs_synth.run(a, cfg, log=job.write, should_stop=lambda: job.cancel, progress=progress, on_item=on_item)
+            job.stats.update(out=st.get("out"), cancelled=st.get("cancelled") or 0)
+            return st
+        asyncio.get_running_loop().create_task(cs_launch(job, fn))
+        return job.brief()
+
+    @app.post("/api/cs/stop")
+    def cs_stop():
+        j = cs_current()
+        if not j:
+            return dict(ok=False, message="当前没有在跑的任务")
+        j.cancel = True
+        j.write("已请求停止：正在请求的几条返回后停止，没开始的不再请求")
+        return dict(ok=True, job=j.brief())
+
+    def cs_light(it):
+        rec, src = it.get("record") or {}, it["source"]
+        return dict(n=it["n"], time=it["time"], kind=it["kind"], variant=it["variant"], error=it.get("error"), session_id=rec.get("session_id"),
+                    scenic_id=rec.get("scenic_id"), scenic_name=rec.get("scenic_name") or src.get("attraction_name"), source_id=src["dialogue_id"],
+                    attraction_name=src.get("attraction_name"), intent=src.get("intent"), turns=len(rec.get("turns") or []),
+                    needs_review=bool((rec.get("source") or {}).get("needs_review")), flags=(rec.get("source") or {}).get("check_flags") or [],
+                    elapsed=(it.get("exchange") or {}).get("elapsed"))
+
+    @app.get("/api/cs/state")
+    def cs_state(job_id: int = 0, offset: int = 0, limit: int = 100):
+        """当前（或指定）客服对话任务：状态、进度、统计、最近处理的条目（新的在前）、日志。"""
+        jobs = sorted([j for j in svc.jobs.values() if j.type in ("cs_synth", "cs_load")], key=lambda j: -j.id)
+        j = svc.jobs.get(job_id) if job_id else (jobs[0] if jobs else None)
+        if not j:
+            return dict(job=None, history=[], items=[], total_items=0)
+        items = list(getattr(j, "items", []) or [])[::-1]
+        return dict(job=dict(j.brief(), stats=getattr(j, "stats", {}), log=list(j.log)[-200:]), history=[x.brief() for x in jobs[:20]],
+                    items=[cs_light(x) for x in items[offset:offset + limit]], total_items=len(items))
+
+    @app.get("/api/cs/item/{job_id}/{n}")
+    def cs_item(job_id: int, n: int):
+        """一条的完整过程：原始对话 → 发给模型的提示词 → 模型原始返回 → 生成结果（或失败原因）。"""
+        j = svc.jobs.get(job_id)
+        it = next((x for x in getattr(j, "items", []) or [] if x["n"] == n), None) if j else None
+        if not it:
+            raise HTTPException(404, "没有这条（只保留最近 1000 条）")
+        return it
+
+    @app.get("/api/cs/batches")
+    def cs_batches():
+        return dict(items=cs_synth.batches(), session_table=cs_synth.SESSION_TABLE, turn_table=cs_synth.TURN_TABLE)
+
+    @app.get("/api/cs/download")
+    def cs_download(batch: str, file: str = "dialogs.jsonl", only: str = ""):
+        """导出：dialogs.jsonl / dialogs.json（数组）/ mapping.csv / source_extract.jsonl / rejected.jsonl；only=review 只要需复核的，ok 只要不需复核的。"""
+        try:
+            d = cs_synth.batch_dir(batch)
+        except FileNotFoundError as e:
+            raise HTTPException(404, str(e)) from e
+        name = "dialogs.jsonl" if file == "dialogs.json" else file
+        if name not in cs_synth.BATCH_FILES or not (d / name).exists():
+            raise HTTPException(404, f"这个批次没有 {file}")
+        if name == "dialogs.jsonl" and (only or file == "dialogs.json"):
+            recs = [json.loads(x) for x in (d / name).read_text(encoding="utf-8").splitlines() if x.strip()]
+            if only:
+                recs = [r for r in recs if bool(r.get("source", {}).get("needs_review")) == (only == "review")]
+            body = (json.dumps(recs, ensure_ascii=False, indent=2) if file == "dialogs.json"
+                    else "\n".join(json.dumps(r, ensure_ascii=False) for r in recs) + "\n")
+            fname = f"{batch}_{'review_' if only == 'review' else 'ok_' if only == 'ok' else ''}{file}"
+        else:
+            body, fname = (d / name).read_bytes(), f"{batch}_{name}"
+        mt = "text/csv; charset=utf-8" if fname.endswith(".csv") else "application/json; charset=utf-8"
+        return Response(body, media_type=mt, headers={"Content-Disposition": f"attachment; filename={fname}"})
+
+    @app.post("/api/cs/load_mysql")
+    async def cs_load_mysql(payload: dict = Body(...)):
+        """把某个批次的 dialogs.jsonl 写进 MySQL 两张表（重复写会覆盖）。"""
+        if cs_current():
+            raise HTTPException(409, "已经有一个客服对话任务在跑")
+        try:
+            d = cs_synth.batch_dir(payload.get("batch") or "")
+        except FileNotFoundError as e:
+            raise HTTPException(404, str(e)) from e
+        job = Job("cs_load", dict(batch=d.name))
+        job.items, job.stats = collections.deque(maxlen=1), {}
+        job.write(f"写入 MySQL：{d.name}/dialogs.jsonl → {cs_synth.SESSION_TABLE} / {cs_synth.TURN_TABLE}")
+        asyncio.get_running_loop().create_task(cs_launch(job, lambda progress: cs_synth.load_jsonl(
+            d / "dialogs.jsonl", log=job.write, should_stop=lambda: job.cancel, progress=progress)))
+        return job.brief()
 
     # ---------------- 设置（AI 配置 + 核对 / 采集开关）
     SETTING_KEYS = ["reviewer", "throttle_ms", "auto_search", "auto_keep_similar", "auto_approve", "auto_approve_delay_ms", "idle_skip",
