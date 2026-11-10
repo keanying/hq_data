@@ -12,6 +12,7 @@ import argparse
 import asyncio
 import collections
 import itertools
+import re
 import time
 import traceback
 from pathlib import Path
@@ -229,11 +230,27 @@ def create_app(args):
 
     @app.get("/", response_class=HTMLResponse)
     def index():
-        return (WEB / "index.html").read_text(encoding="utf-8")
+        # 给页面里引用的 css/js 加上版本号（文件修改时间），升级后浏览器不会用旧缓存
+        def ver(m):
+            f = WEB / m.group(2) if m.group(1) == "/web/" else HERE / m.group(2)
+            try:
+                return f"{m.group(1)}{m.group(2)}?v={int(f.stat().st_mtime)}"
+            except OSError:
+                return m.group(0)
+        page = re.sub(r"(/web/|/)((?:vendor/)?[\w.-]+\.(?:css|js))(?=\")", ver, (WEB / "index.html").read_text(encoding="utf-8"))
+        return HTMLResponse(page, headers={"Cache-Control": "no-cache"})
 
     @app.get("/panel.js")
     def panel_js():
-        return FileResponse(HERE / "panel.js", media_type="application/javascript")
+        return FileResponse(HERE / "panel.js", media_type="application/javascript", headers={"Cache-Control": "no-cache"})
+
+    @app.middleware("http")
+    async def no_stale_assets(request, call_next):
+        """网页文件每次都向服务确认是否有更新（没变会返回 304，不重复下载），避免升级后浏览器用旧的 app.js。"""
+        resp = await call_next(request)
+        if request.url.path.startswith("/web/"):
+            resp.headers["Cache-Control"] = "no-cache"
+        return resp
 
     app.mount("/web", StaticFiles(directory=WEB), name="web")
 

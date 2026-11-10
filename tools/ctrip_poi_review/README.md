@@ -199,9 +199,19 @@ python review.py images --channel chrome --grade 5A,4A
 | 表 | 说明 |
 |---|---|
 | `ods_prd_poi_image_di`（交付表，你们建好的分区天表） | 字段与样例一致；`travel_date` = 采集日期；`lon/lat` 按表注释换算成 WGS84（客户景区坐标实为 GCJ02；`ODS_COORD=gcj02` 则原样写）；当天没有分区时自动 `ADD PARTITION p<次日> VALUES LESS THAN (<次日>)`（`ODS_AUTO_PARTITION=0` 关闭）|
-| `scenic_poi_image`（工具自己的表） | 去重、生成 `record_id`（`img_<采集日期>_<序号>`），多存缩略图、点评分、点评发布时间、点评总数 |
+| `scenic_poi_image`（工具自己的表） | 去重（同一景区 + POI + 图片只存一条），多存缩略图、点评分、点评发布时间、点评总数、携程 imageId（`ctrip_image_id`） |
 
-字段来源：`poi_id/poi_name` 来自 `ctrip_poi_info`；`scenic_*`、省市区、`lon/lat` 来自客户景区表；`review_id`=commentId，`image_id/width/height/image_url`=点评图片；
+**`image_id` / `record_id` 由图片链接算出，能定位、不会重复：**
+
+- `image_id`：图片链接的文件名（去掉 `_W_640_10000` 这类尺寸后缀和扩展名，如 `0100v1200091giq9766D4`）做 SHA1，取前 16 位十六进制转十进制、保留 63 位（BIGINT 正数）。
+  同一张图不管哪个尺寸、哪个域名（dimg02 / dimg04）都是同一个数。SQL 里也能算：
+  `CAST(CONV(LEFT(SHA1('0100v1200091giq9766D4'), 16), 16, 10) AS UNSIGNED) & 9223372036854775807`
+- `record_id`：`img_<景区ID>_<image_id>`，如 `img_PFTSCB01001668_6970138373123004569`。同一景区同一张图永远是同一个 record_id；
+  带景区ID 是因为同一个 POI 可能被多个景区保留，每个景区各一行。
+- 再次采集同一景区：已有的 record_id 不再写（工具表和交付表都先按 record_id 查，交付表查所有日期的分区），所以不会重复。
+- 旧版数据（`img_<采集日期>_<序号>`、携程 imageId）在启动时自动改成新 ID，交付表里对应的行一起改；旧 record_id 留在工具表的 `old_record_id`。
+
+字段来源：`poi_id/poi_name` 来自 `ctrip_poi_info`；`scenic_*`、省市区、`lon/lat` 来自客户景区表；`review_id`=commentId，`width/height/image_url`=点评图片；
 `total_count` = POI 图片总数（主页 `__NEXT_DATA__` 的 `poiDetail.imageInfo.imageCount`）；`collect_time` 采集时间，`data_source`=`OTA-图片爬取`，`is_modified`=0。
 
 交付表不存在时只写 `scenic_poi_image`；之后建好交付表，用下面的命令补写（重复的会被忽略）：

@@ -12,6 +12,25 @@
 </head>
 <body>
 <div id="root"><div class="boot">加载中…</div></div>
+<script>
+  // 页面没能启动时显示原因（而不是一直「加载中…」）
+  (function () {
+    function show(msg) {
+      var b = document.querySelector('#root .boot');
+      if (b) b.innerHTML = '页面加载失败：' + msg + '<br>请按 Ctrl+F5 强制刷新；仍不行请把这段文字发给开发。';
+    }
+    window.addEventListener('error', function (e) {
+      var t = e.target;
+      if (t && (t.src || t.href)) show('文件没能加载 ' + (t.src || t.href)); else show(e.message || String(e));
+    }, true);
+    setTimeout(function () {
+      if (document.querySelector('#root .boot')) {
+        var miss = ['React', 'ReactDOM', 'htm', 'SemiUI', 'SemiIcons'].filter(function (k) { return !window[k]; });
+        show(miss.length ? '前端库没加载成功：' + miss.join('、') : '启动超时');
+      }
+    }, 20000);
+  })();
+</script>
 <script src="/web/vendor/react.production.min.js"></script>
 <script src="/web/vendor/react-dom.production.min.js"></script>
 <script src="/web/vendor/htm.umd.js"></script>

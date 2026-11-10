@@ -126,3 +126,4 @@ a:hover { color: var(--semi-color-link-hover); }
   .row2 { grid-template-columns: minmax(0, 1fr) 380px; }
 }
 .semi-table-thead > .semi-table-row > .semi-table-row-head { white-space: nowrap; }
+.boot { line-height: 1.8; }

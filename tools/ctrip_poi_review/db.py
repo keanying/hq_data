@@ -2,6 +2,7 @@
 
 连接与表名全部走环境变量，见 README.md。
 """
+import hashlib
 import json
 import os
 import re
@@ -88,7 +89,7 @@ DDL = [
 DDL += [
     f"""CREATE TABLE IF NOT EXISTS {IMAGE_TABLE} (
   id BIGINT AUTO_INCREMENT PRIMARY KEY,
-  record_id VARCHAR(32) NULL COMMENT '记录ID：img_<采集日期>_<序号>',
+  record_id VARCHAR(64) NULL COMMENT '记录ID：img_<景区ID>_<image_id>，由图片链接算出，同一景区同一张图永远相同',
   poi_id BIGINT NOT NULL COMMENT '携程 poiId',
   poi_name VARCHAR(255) NULL COMMENT '携程 POI 名称',
   scenic_id VARCHAR(64) NOT NULL COMMENT '客户景区ID',
@@ -100,7 +101,9 @@ DDL += [
   total_count BIGINT NULL COMMENT '该 POI 图片总数（主页 __NEXT_DATA__ poiDetail.imageInfo.imageCount）',
   comment_total INT NULL COMMENT '该 POI 点评总数（getCommentCollapseList.totalCount）',
   review_id BIGINT NULL COMMENT '点评 commentId',
-  image_id BIGINT NOT NULL COMMENT '携程图片 imageId',
+  image_id BIGINT NOT NULL COMMENT '图片ID：由图片链接的文件名算出（sha1 前 16 位十六进制转十进制，取 63 位）',
+  ctrip_image_id BIGINT NULL COMMENT '携程接口里的 imageId',
+  old_record_id VARCHAR(64) NULL COMMENT '旧版 record_id（img_<采集日期>_<序号>），迁移时保留',
   width INT NULL, height INT NULL,
   review_score DOUBLE NULL COMMENT '点评评分', review_publish_time DATETIME NULL COMMENT '点评发布时间',
   collect_time DATETIME NOT NULL COMMENT '采集时间',
@@ -199,6 +202,8 @@ def init_db():
                        (CACHE_TABLE, "keyword"), (ADDR_TABLE, "ctrip_key"), (IMAGE_TABLE, "scenic_id"), (CRAWL_TABLE, "scenic_id")):
             align_collation(cur, t, col)
     ensure_poi_info_column()
+    ensure_image_columns()
+    migrate_image_ids()
     with cursor() as cur:  # 旧版「已完成」状态同步到 approval
         cur.execute(f"""UPDATE {SCENIC_TABLE} s JOIN {STATUS_TABLE} st ON st.scenic_id = s.{C['id']}
                         SET s.{APPROVAL} = 1 WHERE st.status = 'done' AND COALESCE(s.{APPROVAL}, 0) = 0""")
@@ -648,27 +653,117 @@ def crawl_put(sid, poi_id, **kw):
                     [sid, int(poi_id)] + list(vals.values()))
 
 
-IMAGE_COLS = ["poi_id", "poi_name", "scenic_id", "scenic_name", "image_url", "image_thumb_url", "lon", "lat", "province", "city",
+IMAGE_COLS = ["record_id", "ctrip_image_id", "poi_id", "poi_name", "scenic_id", "scenic_name", "image_url", "image_thumb_url", "lon", "lat", "province", "city",
               "district", "total_count", "comment_total", "review_id", "image_id", "width", "height", "review_score",
               "review_publish_time", "collect_time", "data_source", "is_modified"]
 
 
+def image_key(url):
+    """图片链接里的文件名（去掉尺寸后缀和扩展名），同一张图不同尺寸 / 不同域名得到同一个 key。
+    https://dimg04.c-ctrip.com/images/0100v1200091giq9766D4_W_640_10000.jpg?proc=autoorient → 0100v1200091giq9766D4"""
+    path = str(url or "").split("?", 1)[0].split("#", 1)[0].rstrip("/")
+    name = path.rsplit("/", 1)[-1]
+    key = re.sub(r"(_[A-Za-z]{1,3}_\d+_\d+)?(\.[A-Za-z0-9]{2,5})?$", "", name)
+    return key or path
+
+
+def image_num(url):
+    """由图片链接算出的数字 ID（BIGINT 正数，最多 19 位）。
+    SQL 里同样可算：CAST(CONV(LEFT(SHA1('<文件名>'), 16), 16, 10) AS UNSIGNED) & 9223372036854775807"""
+    return int(hashlib.sha1(image_key(url).encode("utf-8")).hexdigest()[:16], 16) & 0x7FFFFFFFFFFFFFFF
+
+
+def make_record_id(scenic_id, image_id):
+    return f"img_{scenic_id}_{image_id}"
+
+
 def images_insert(rows):
-    """写入图片：先进工具自己的 scenic_poi_image（同一景区+POI+图片只存一条，生成 record_id = img_<采集日期>_<id 6位>），
-    新增的再同步写进交付表 ods_prd_poi_image_di。返回新增条数。"""
+    """写入图片：先进工具自己的 scenic_poi_image（同一景区 + POI + 图片只存一条），新增的再同步写进交付表 ods_prd_poi_image_di。
+    image_id / record_id 由图片链接算出，同一景区再次采集同一张图得到同一个 record_id，不会重复。返回新增条数。"""
     if not rows:
         return 0
+    for r in rows:
+        r["image_id"] = image_num(r["image_url"])
+        r["record_id"] = make_record_id(r["scenic_id"], r["image_id"])
+    uniq = {}
+    for r in rows:
+        uniq.setdefault((r["scenic_id"], r["poi_id"], r["image_id"]), r)
+    rows = list(uniq.values())
     with cursor() as cur:
+        rids = [r["record_id"] for r in rows]
+        cur.execute(f"SELECT record_id FROM {IMAGE_TABLE} WHERE record_id IN ({','.join(['%s'] * len(rids))})", rids)
+        have = {x["record_id"] for x in cur.fetchall()}
+        todo = [r for r in rows if r["record_id"] not in have]
+        if not todo:
+            return 0
         n = cur.executemany(f"INSERT IGNORE INTO {IMAGE_TABLE} ({','.join(IMAGE_COLS)}) VALUES ({','.join(['%s'] * len(IMAGE_COLS))})",
-                            [[r.get(c) for c in IMAGE_COLS] for r in rows])
-        cur.execute(f"SELECT id FROM {IMAGE_TABLE} WHERE record_id IS NULL")
-        new_ids = [r["id"] for r in cur.fetchall()]
-        if new_ids:
-            cur.execute(f"""UPDATE {IMAGE_TABLE} SET record_id = CONCAT('img_', DATE_FORMAT(collect_time, %s), '_', LPAD(id, 6, '0'))
-                            WHERE record_id IS NULL""", ("%Y%m%d",))
+                            [[r.get(c) for c in IMAGE_COLS] for r in todo]) or 0
+        new_rids = [r["record_id"] for r in todo]
+        cur.execute(f"SELECT id FROM {IMAGE_TABLE} WHERE record_id IN ({','.join(['%s'] * len(new_rids))})", new_rids)
+        new_ids = [x["id"] for x in cur.fetchall()]
     if new_ids:
         ods_sync(new_ids)
-    return n or 0
+    return n
+
+
+OLD_RECORD_RE = r"^img_[0-9]{8}_[0-9]+$"
+
+
+def migrate_image_ids(batch=2000, log=print):
+    """旧版 record_id = img_<采集日期>_<序号>、image_id = 携程 imageId 的记录，改成由图片链接算出的 ID；
+    交付表里对应的行（按旧 record_id 找）一起改。重复的图片（同景区同 POI 同一张图）只留一条。可重复执行。"""
+    if not table_exists_q(IMAGE_TABLE):
+        return 0
+    ods = ods_exists()
+    done = dup = 0
+    while True:
+        with cursor() as cur:
+            cur.execute(f"""SELECT id, record_id, scenic_id, poi_id, image_id, image_url FROM {IMAGE_TABLE}
+                            WHERE old_record_id IS NULL AND (record_id IS NULL OR record_id REGEXP %s) ORDER BY id LIMIT %s""",
+                        (OLD_RECORD_RE, batch))
+            rows = list(cur.fetchall())
+            if not rows:
+                break
+            for r in rows:
+                old = r["record_id"] or ""
+                nid = image_num(r["image_url"])
+                nrid = make_record_id(r["scenic_id"], nid)
+                cur.execute(f"SELECT id FROM {IMAGE_TABLE} WHERE scenic_id=%s AND poi_id=%s AND image_id=%s AND id<>%s",
+                            (r["scenic_id"], r["poi_id"], nid, r["id"]))
+                if cur.fetchone():  # 同一张图已经有一条：删掉这条重复的
+                    cur.execute(f"DELETE FROM {IMAGE_TABLE} WHERE id=%s", (r["id"],))
+                    if ods and old:
+                        cur.execute(f"DELETE FROM {ODS_TABLE} WHERE record_id=%s", (old,))
+                    dup += 1
+                    continue
+                cur.execute(f"""UPDATE {IMAGE_TABLE} SET ctrip_image_id = COALESCE(ctrip_image_id, image_id), image_id=%s, record_id=%s,
+                                old_record_id=%s WHERE id=%s""", (nid, nrid, old or "-", r["id"]))
+                if ods and old:
+                    cur.execute(f"UPDATE IGNORE {ODS_TABLE} SET record_id=%s, image_id=%s WHERE record_id=%s", (nrid, nid, old))
+                    cur.execute(f"DELETE FROM {ODS_TABLE} WHERE record_id=%s", (old,))  # 改不了的（新 ID 已存在）就是重复行
+                done += 1
+    if done or dup:
+        log(f"图片 ID 已改为由图片链接算出：更新 {done} 条，去掉重复 {dup} 条" + (f"（交付表 {ODS_TABLE} 同步修改）" if ods else ""))
+    return done
+
+
+def table_exists_q(quoted):
+    with cursor() as cur:
+        return table_exists(cur, quoted)
+
+
+def ensure_image_columns():
+    with cursor() as cur:
+        if not table_exists(cur, IMAGE_TABLE):
+            return
+        cur.execute(f"SHOW COLUMNS FROM {IMAGE_TABLE}")
+        cols = {c["Field"]: c for c in cur.fetchall()}
+        if "varchar(64)" not in str(cols.get("record_id", {}).get("Type", "")).lower():
+            cur.execute(f"ALTER TABLE {IMAGE_TABLE} MODIFY record_id VARCHAR(64) NULL COMMENT '记录ID：img_<景区ID>_<image_id>'")
+        if "ctrip_image_id" not in cols:
+            cur.execute(f"ALTER TABLE {IMAGE_TABLE} ADD COLUMN ctrip_image_id BIGINT NULL COMMENT '携程接口里的 imageId' AFTER image_id")
+        if "old_record_id" not in cols:
+            cur.execute(f"ALTER TABLE {IMAGE_TABLE} ADD COLUMN old_record_id VARCHAR(64) NULL COMMENT '旧版 record_id' AFTER ctrip_image_id")
 
 
 _ods_warned = False
@@ -739,6 +834,12 @@ def ods_sync(ids=None, batch=2000):
                             None if lon is None else round(lon, 6), None if lat is None else round(lat, 6),
                             r["province"], r["city"], r["district"], r["total_count"], r["review_id"], r["image_id"],
                             r["width"], r["height"], ct, r["data_source"], r["is_modified"], int(ct.strftime("%Y%m%d"))])
+            # record_id 由图片链接算出：交付表里已有（任意一天的分区）就不再写，再次采集不会重复
+            cur.execute(f"SELECT record_id FROM {ODS_TABLE} WHERE record_id IN ({','.join(['%s'] * len(out))})", [o[0] for o in out])
+            have = {x["record_id"] for x in cur.fetchall()}
+            out = [o for o in out if o[0] not in have]
+            if not out:
+                continue
             _ensure_partitions(cur, [o[-1] for o in out])
             written += cur.executemany(f"INSERT IGNORE INTO {ODS_TABLE} ({','.join(cols)}) VALUES ({','.join(['%s'] * len(cols))})", out) or 0
     return written

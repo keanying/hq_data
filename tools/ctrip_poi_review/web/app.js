@@ -267,7 +267,7 @@
       panelLoaded = true;
       window.hqCall = (m, p) => post('/api/rpc/' + m, p).catch((e) => ({ error: e.message }));
       window.HQ_EMBED = host.current;
-      const sc = document.createElement('script'); sc.src = '/panel.js'; document.body.appendChild(sc);
+      const sc = document.createElement('script'); sc.src = '/panel.js?v=' + Date.now(); document.body.appendChild(sc);
     }, [visible]);
     useEffect(() => {
       if (visible && query.scenic_id) {
