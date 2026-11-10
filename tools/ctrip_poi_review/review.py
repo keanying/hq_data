@@ -438,7 +438,7 @@ class CtripSearcher:
 class Prefs(dict):
     def __init__(self, path):
         super().__init__(reviewer="", throttle_ms=2500, sight_only=False, auto_search=True, input_selector="",
-                         panel_width=560, push_page=False, auto_address=False, auto_keep_similar=True, auto_approve=True, auto_approve_delay_ms=2000, search_more=True, search_core_spots=False, max_extra=8, idle_skip=True, idle_skip_sec=10,
+                         panel_width=560, push_page=False, auto_address=False, auto_keep_similar=True, auto_approve=True, auto_approve_delay_ms=2000, auto_collect=True, collect_max_pages=20, collect_max_images=300, search_more=True, search_core_spots=False, max_extra=8, idle_skip=True, idle_skip_sec=10,
                          filters=dict(city="", grade="", status="todo", q=""))
         self.path = path
         if path.exists():
@@ -491,68 +491,86 @@ async def launch(pw, args):
     return ctx, page, Prefs(profile / "hq_prefs.json")
 
 
+def make_rpc(get_searcher, prefs, export_url=None):
+    """核对面板的后端方法（注入携程页面的面板和服务网页共用）。get_searcher: async 函数，返回 CtripSearcher。"""
+    async def rpc(method, payload=None):
+        payload = payload or {}
+        if method == "hello":
+            return dict(main=True, prefs=dict(prefs), health=db.health(), cities=db.cities())
+        if method == "list":
+            return db.scenic_list(payload.get("filters") or {}, payload.get("offset", 0), payload.get("limit", 200))
+        if method == "detail":
+            d = db.scenic_detail(payload["scenic_id"])
+            enrich(d["candidates"], "ctrip_poi_id", "ctrip_business_id")
+            d["spots"] = match.core_spots(d["scenic"])
+            return d
+        if method == "fetch_address":
+            searcher = await get_searcher()
+            res = await searcher.fetch_address(payload.get("url"))
+            if not res or not res.get("address"):
+                raise ValueError(f"详情页里没找到地址（页面标题：{(res or {}).get('title')}；可能要登录或验证）")
+            db.addr_put(payload.get("poiId"), payload.get("businessId"), payload.get("name"), res["address"], payload.get("url"))
+            return dict(address=res["address"], addressSource="详情页")
+        if method == "poi":
+            return db.set_poi(payload)
+        if method == "cities":
+            return db.cities()
+        if method == "status":
+            return db.set_status(payload)
+        if method == "prefs":
+            prefs.update({k: v for k, v in payload.items() if k in prefs})
+            prefs.save()
+            return dict(prefs)
+        if method == "locate_input":
+            searcher = await get_searcher()
+            sel = await searcher.locate_input()
+            prefs.save()
+            return dict(selector=sel)
+        if method == "search":
+            kwd = payload["keyword"].strip()
+            hit = None if payload.get("force") else db.cache_get(kwd)
+            if hit and hit.get("result") and hit["result"].get("capture") != "dom":
+                res = dict(hit["result"], cached=True, searched_at=hit["searched_at"])
+            else:
+                searcher = await get_searcher()
+                res = await searcher.search(kwd)
+                if res["capture"] != "dom":  # 只读到下拉文字（没有ID）的不缓存，下次重新搜
+                    db.cache_put(kwd, res)
+            enrich(res["items"])
+            if payload.get("scenic_id"):
+                d = db.scenic_detail(payload["scenic_id"])
+                enrich(d["candidates"], "ctrip_poi_id", "ctrip_business_id")
+                res["judge"] = judge_scenic(d, res["items"])
+            return res
+        if method == "export":
+            if export_url:
+                return dict(url=export_url)
+            out = HERE / f"scenic_ctrip_poi_mapping_{time.strftime('%Y%m%d_%H%M%S')}.csv"
+            write_csv(out, db.export_rows())
+            return dict(path=str(out))
+        raise ValueError(f"未知方法 {method}")
+    return rpc
+
+
 async def setup_run(pw, args):
     """打开浏览器、注入核对面板，返回 (context, page)。"""
     check_db()
     ctx, page, prefs = await launch(pw, args)
     searcher = CtripSearcher(page, prefs, args.start_url, args.pattern)
 
+    async def get_searcher():
+        return searcher
+
+    rpc = make_rpc(get_searcher, prefs)
+
     async def handler(source, method, payload=None):
-        payload = payload or {}
+        if method == "hello" and (source["page"] is not page or source["frame"] is not page.main_frame):
+            return dict(main=False)
         try:
+            res = await rpc(method, payload)
             if method == "hello":
-                if source["page"] is not page or source["frame"] is not page.main_frame:
-                    return dict(main=False)
-                res = dict(main=True, prefs=dict(prefs), health=db.health(), cities=db.cities())
                 print(f"[hq] 面板已加载：{page.url}（右下角点「POI核对」）", flush=True)
-                return res
-            if method == "list":
-                return db.scenic_list(payload.get("filters") or {}, payload.get("offset", 0), payload.get("limit", 200))
-            if method == "detail":
-                d = db.scenic_detail(payload["scenic_id"])
-                enrich(d["candidates"], "ctrip_poi_id", "ctrip_business_id")
-                d["spots"] = match.core_spots(d["scenic"])
-                return d
-            if method == "fetch_address":
-                res = await searcher.fetch_address(payload.get("url"))
-                if not res or not res.get("address"):
-                    raise ValueError(f"详情页里没找到地址（页面标题：{(res or {}).get('title')}；可能要登录或验证）")
-                db.addr_put(payload.get("poiId"), payload.get("businessId"), payload.get("name"), res["address"], payload.get("url"))
-                return dict(address=res["address"], addressSource="详情页")
-            if method == "poi":
-                return db.set_poi(payload)
-            if method == "cities":
-                return db.cities()
-            if method == "status":
-                return db.set_status(payload)
-            if method == "prefs":
-                prefs.update({k: v for k, v in payload.items() if k in prefs})
-                prefs.save()
-                return dict(prefs)
-            if method == "locate_input":
-                sel = await searcher.locate_input()
-                prefs.save()
-                return dict(selector=sel)
-            if method == "search":
-                kwd = payload["keyword"].strip()
-                hit = None if payload.get("force") else db.cache_get(kwd)
-                if hit and hit.get("result") and hit["result"].get("capture") != "dom":
-                    res = dict(hit["result"], cached=True, searched_at=hit["searched_at"])
-                else:
-                    res = await searcher.search(kwd)
-                    if res["capture"] != "dom":  # 只读到下拉文字（没有ID）的不缓存，下次重新搜
-                        db.cache_put(kwd, res)
-                enrich(res["items"])
-                if payload.get("scenic_id"):
-                    d = db.scenic_detail(payload["scenic_id"])
-                    enrich(d["candidates"], "ctrip_poi_id", "ctrip_business_id")
-                    res["judge"] = judge_scenic(d, res["items"])
-                return res
-            if method == "export":
-                out = HERE / f"scenic_ctrip_poi_mapping_{time.strftime('%Y%m%d_%H%M%S')}.csv"
-                write_csv(out, db.export_rows())
-                return dict(path=str(out))
-            raise ValueError(f"未知方法 {method}")
+            return res
         except Exception as e:  # 错误回传到面板显示，同时打印到终端
             print(f"[面板调用 {method} 出错] {type(e).__name__}: {e}", file=sys.stderr, flush=True)
             return dict(error=f"{type(e).__name__}: {e}")
@@ -619,7 +637,8 @@ async def cmd_prefetch(args):
             await ctx.close()
 
 
-async def auto_review(args, get_searcher, log=print, should_stop=lambda: False, progress=lambda done, total: None):
+async def auto_review(args, get_searcher, log=print, should_stop=lambda: False, progress=lambda done, total: None,
+                      on_approved=lambda scenic_id: None):
     """批量自动审核核心：名称一致且（地址相近/门牌一致/同省市区）的景区直接通过，其余留给人工。
     搜索结果优先用缓存；需要现搜时才调用 get_searcher()（async，返回 CtripSearcher）。CLI 和服务共用。"""
     filters = dict(city=args.city or "", grade=args.grade or "", status="todo", q=args.q or "")
@@ -690,6 +709,7 @@ async def auto_review(args, get_searcher, log=print, should_stop=lambda: False, 
                                 poiName=it.get("name"), poiUri=it.get("url"), addr=it.get("address"), lat=it.get("lat"), lon=it.get("lng")))
         if not args.dry_run:
             db.set_status(dict(scenic_id=s["id"], status="done", note=j["reason"], reviewer=args.reviewer))
+            on_approved(s["id"])
         stats["approved"] += 1
         log(f"[{i}/{total}] {s['id']} {s['name']}：{'(试运行) ' if args.dry_run else ''}自动通过，保留 {len(seen)} 个 {'、'.join(names)}")
     log(f"完成：自动通过 {stats['approved']}，留给人工 {stats['pending']}，现搜 {stats['searched']} 次，失败 {stats['failed']}"
@@ -698,17 +718,25 @@ async def auto_review(args, get_searcher, log=print, should_stop=lambda: False, 
 
 
 class LazyBrowser:
-    """需要时才启动浏览器；CLI 的 auto / images 用。"""
-    def __init__(self, args):
-        self.args, self.pw, self.ctx, self.page, self.prefs, self.searcher = args, None, None, None, None, None
+    """需要时才启动浏览器；CLI 的 auto / images 和服务用。prefs 可传入共用的设置对象。"""
+    def __init__(self, args, prefs=None):
+        self.args, self.pw, self.ctx, self.page, self.searcher = args, None, None, None, None
+        self.prefs, self._prefs_override = prefs, prefs
+        self._lock = asyncio.Lock()
 
     async def get_page(self):
-        if self.page is None:
-            self.pw = await async_playwright().start()
-            self.ctx, self.page, self.prefs = await launch(self.pw, self.args)
-            if getattr(self.args, "throttle_ms", 0):
-                self.prefs["throttle_ms"] = self.args.throttle_ms
+        async with self._lock:
+            if self.page is None:
+                self.pw = await async_playwright().start()
+                self.ctx, self.page, prefs = await launch(self.pw, self.args)
+                self.prefs = self._prefs_override or prefs
+                if getattr(self.args, "throttle_ms", 0):
+                    self.prefs["throttle_ms"] = self.args.throttle_ms
         return self.page
+
+    async def new_page(self):
+        await self.get_page()
+        return await self.ctx.new_page()
 
     async def get_searcher(self):
         if self.searcher is None:

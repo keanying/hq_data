@@ -1,11 +1,12 @@
-"""携程 POI 核对 / 景点图像采集 —— 常驻服务。
+"""景区 POI 数据工作台 —— 常驻服务（网页 + 接口）。
 
-    python service.py --channel chrome            # 默认 http://127.0.0.1:8800 ，浏览器打开控制台
+    python service.py --channel chrome            # 默认 http://127.0.0.1:8800 ，浏览器打开即是工作台
     python service.py --all-cities --port 8800
 
-- 任务队列：自动审核（auto_review）、点评图片采集（images）按提交顺序逐个执行（共用一个浏览器，避免并发被限流）
-- 每个任务有进度、日志、可取消；遇到登录/验证会停在「需要人工」，浏览器窗口保持打开，处理后重新提交即可
-- 人工核对仍用 `python review.py run`（带面板的浏览器）；服务用独立的浏览器目录，两者可以同时开
+- 网页：总览 / 核对 / 图片采集 / 数据预览 / 图片预览 / 任务中心（web/ 目录，无需构建）
+- 核对：网页里的核对面板（与 panel.js 同一份代码），搜索由服务端浏览器在携程搜索框里输入、读下拉结果
+- 任务队列：自动审核（auto_review）、点评图片采集（images）逐个执行；进度、日志、取消；遇到登录/验证停在「需要人工」
+- 服务端浏览器两个标签页：一个给核对搜索，一个给后台任务，互不打断；浏览器目录和 `review.py run` 分开，可以同时开
 """
 import argparse
 import asyncio
@@ -18,13 +19,15 @@ from types import SimpleNamespace
 
 import uvicorn
 from fastapi import Body, FastAPI, HTTPException
-from fastapi.responses import HTMLResponse
+from fastapi.responses import FileResponse, HTMLResponse, Response
+from fastapi.staticfiles import StaticFiles
 
 import crawler
 import db
 import review
 
 HERE = Path(__file__).resolve().parent
+WEB = HERE / "web"
 JOB_TYPES = {"auto_review": "自动审核", "images": "采集点评图片"}
 
 
@@ -56,8 +59,81 @@ class Service:
         self.args = args
         self.jobs: dict[int, Job] = {}
         self.queue: asyncio.Queue = asyncio.Queue()
-        self.browser = review.LazyBrowser(args)
+        profile = Path(args.profile)
+        profile.mkdir(parents=True, exist_ok=True)
+        self.prefs = review.Prefs(profile / "hq_prefs.json")
+        self.browser = review.LazyBrowser(args, prefs=self.prefs)
         self.current: Job | None = None
+        self.review_searcher = None
+        self._rs_lock = asyncio.Lock()
+        self._rpc = review.make_rpc(self.get_review_searcher, self.prefs, export_url="/api/export.csv")
+        # 边核对边采集：审核通过的景区排进采图队列，用单独的标签页在后台采
+        self.follow_q: asyncio.Queue = asyncio.Queue()
+        self.follow_pending: list[str] = []
+        self.follow = dict(paused=False, current=None, done=0, images=0, failed=0, message="")
+        self.follow_log = collections.deque(maxlen=300)
+        self.follow_page = None
+
+    async def rpc(self, method, payload):
+        res = await self._rpc(method, payload)
+        if method == "status" and (payload or {}).get("status") == "done":
+            self.enqueue_follow(payload.get("scenic_id"))
+        return res
+
+    def follow_enabled(self):
+        return self.prefs.get("auto_collect", True) is not False
+
+    def enqueue_follow(self, scenic_id):
+        if scenic_id and self.follow_enabled() and scenic_id not in self.follow_pending:
+            self.follow_pending.append(scenic_id)
+            self.follow_q.put_nowait(scenic_id)
+
+    def flog(self, msg):
+        self.follow_log.append(f"{time.strftime('%H:%M:%S')} {msg}")
+
+    async def follow_worker(self):
+        while True:
+            sid = await self.follow_q.get()
+            while self.follow["paused"]:
+                await asyncio.sleep(2)
+            try:
+                if sid in self.follow_pending:
+                    self.follow_pending.remove(sid)
+                targets = db.crawl_targets(dict(scenic_id=sid))
+                if not targets:
+                    continue
+                if self.follow_page is None:
+                    self.follow_page = await self.browser.new_page()
+                mp = int(self.prefs.get("collect_max_pages") or 20)
+                mi = int(self.prefs.get("collect_max_images") if self.prefs.get("collect_max_images") is not None else 300)
+                for t in targets:
+                    name = f"{t['scenic']['name']} / {t['poi'].get('poiName')}"
+                    self.follow["current"] = name
+                    c = crawler.CommentImageCrawler(self.follow_page, max_pages=mp, max_images=mi, log=self.flog)
+                    st = await c.crawl(t)
+                    self.follow["images"] += st["images"]
+                    self.flog(f"{name}：{st['pages']} 页，新增图片 {st['images']}；{st['stop']}")
+                self.follow["done"] += 1
+            except crawler.NeedHuman as e:
+                self.follow.update(paused=True, message=str(e))
+                self.flog(f"暂停：{e}")
+                self.follow_pending.insert(0, sid)
+                self.follow_q.put_nowait(sid)
+            except Exception as e:  # noqa: BLE001
+                self.follow["failed"] += 1
+                self.flog(f"{sid} 采集失败：{type(e).__name__}: {e}")
+            finally:
+                self.follow["current"] = None
+
+    async def get_review_searcher(self):
+        """核对用的搜索：服务端浏览器里单独一个标签页，不和后台任务抢。"""
+        async with self._rs_lock:
+            if self.review_searcher is None:
+                page = await self.browser.new_page()
+                self.review_searcher = review.CtripSearcher(page, self.prefs, self.args.start_url, self.args.pattern)
+                await page.goto(self.args.start_url, wait_until="domcontentloaded")
+                await page.wait_for_timeout(1500)
+            return self.review_searcher
 
     async def worker(self):
         while True:
@@ -88,12 +164,14 @@ class Service:
             job.done, job.total = done, total
 
         if job.type == "auto_review":
+            on_ok = self.enqueue_follow if not p.get("dry_run") else (lambda sid: None)
             ns = SimpleNamespace(city=p.get("city") or "", grade=p.get("grade") or "", q=p.get("q") or "",
                                  limit=int(p.get("limit") or 0), no_alias=bool(p.get("no_alias")), spots=bool(p.get("spots")),
                                  max_extra=int(p.get("max_extra") or 8), cache_only=bool(p.get("cache_only")),
                                  dry_run=bool(p.get("dry_run")), verbose=bool(p.get("verbose", True)),
                                  reviewer=p.get("reviewer") or "auto", max_fail=5)
-            return await review.auto_review(ns, self.browser.get_searcher, log=job.write, should_stop=stop, progress=progress)
+            return await review.auto_review(ns, self.browser.get_searcher, log=job.write, should_stop=stop, progress=progress,
+                                            on_approved=on_ok)
         if job.type == "images":
             f = dict(city=p.get("city") or "", grade=p.get("grade") or "", q=p.get("q") or "")
             return await crawler.crawl_all(self.browser.get_page, f, max_pages=int(p.get("max_pages") or 20),
@@ -111,22 +189,75 @@ def create_app(args):
     async def _start():
         review.check_db()
         asyncio.get_running_loop().create_task(svc.worker())
+        asyncio.get_running_loop().create_task(svc.follow_worker())
 
     @app.on_event("shutdown")
     async def _stop():
         await svc.browser.close()
 
     @app.get("/", response_class=HTMLResponse)
-    def dashboard():
-        return (HERE / "dashboard.html").read_text(encoding="utf-8")
+    def index():
+        return (WEB / "index.html").read_text(encoding="utf-8")
+
+    @app.get("/panel.js")
+    def panel_js():
+        return FileResponse(HERE / "panel.js", media_type="application/javascript")
+
+    app.mount("/web", StaticFiles(directory=WEB), name="web")
 
     @app.get("/api/health")
     def health():
-        return dict(db.health(), current_job=svc.current.id if svc.current else None, queued=svc.queue.qsize())
+        return dict(db.health(), current_job=svc.current.id if svc.current else None, queued=svc.queue.qsize(),
+                    need_human=sum(1 for j in svc.jobs.values() if j.status == "need_human"), reviewer=svc.prefs.get("reviewer") or "")
+
+    @app.post("/api/rpc/{method}")
+    async def rpc(method: str, payload: dict = Body(default={})):
+        """核对面板的后端方法（hello / list / detail / search / poi / status / prefs / fetch_address / locate_input / export）。"""
+        try:
+            return await svc.rpc(method, payload)
+        except Exception as e:  # noqa: BLE001  错误以 {error} 返回给面板显示
+            return dict(error=f"{type(e).__name__}: {e}")
+
+    @app.get("/api/follow")
+    def follow_state():
+        return dict(svc.follow, enabled=svc.follow_enabled(), pending=len(svc.follow_pending), log=list(svc.follow_log)[-50:])
+
+    @app.post("/api/follow")
+    def follow_set(payload: dict = Body(default={})):
+        if "enabled" in payload:
+            svc.prefs["auto_collect"] = bool(payload["enabled"])
+            svc.prefs.save()
+        if payload.get("resume"):
+            svc.follow.update(paused=False, message="")
+        if payload.get("pause"):
+            svc.follow["paused"] = True
+        return follow_state()
+
+    @app.get("/api/overview")
+    def overview():
+        return db.overview()
 
     @app.get("/api/stats")
     def stats():
         return dict(cities=db.cities(), images=db.image_stats())
+
+    @app.get("/api/scenic_table")
+    def scenic_table(city: str = "", grade: str = "", status: str = "all", q: str = "", limit: int = 50, offset: int = 0):
+        return db.scenic_table(dict(city=city, grade=grade, status=status, q=q), max(offset, 0), min(max(limit, 1), 200))
+
+    @app.get("/api/export.csv")
+    def export_csv():
+        import csv
+        import io
+        rows = db.export_rows()
+        buf = io.StringIO()
+        buf.write("\ufeff")
+        cols = ["scenic_id", "scenic_name", "city_name", "approval", "kept_qty", "ctrip_poi_id_list", "ctrip_poi_name_list", "ctrip_poi_info", "note"]
+        w = csv.DictWriter(buf, fieldnames=cols, extrasaction="ignore")
+        w.writeheader()
+        w.writerows(rows)
+        return Response(buf.getvalue(), media_type="text/csv; charset=utf-8",
+                        headers={"Content-Disposition": f"attachment; filename=scenic_ctrip_poi_mapping_{time.strftime('%Y%m%d')}.csv"})
 
     @app.post("/api/jobs")
     async def submit(payload: dict = Body(...)):
@@ -162,8 +293,8 @@ def create_app(args):
         return j.brief()
 
     @app.get("/api/images")
-    def images(scenic_id: str = "", poi_id: str = "", limit: int = 60, offset: int = 0):
-        return db.images_query(scenic_id or None, poi_id or None, min(max(limit, 1), 500), max(offset, 0))
+    def images(scenic_id: str = "", poi_id: str = "", city: str = "", q: str = "", limit: int = 60, offset: int = 0):
+        return db.images_query(scenic_id or None, poi_id or None, min(max(limit, 1), 500), max(offset, 0), city or None, q or None)
 
     @app.get("/api/scenic/{scenic_id}")
     def scenic(scenic_id: str):
@@ -191,7 +322,7 @@ def main():
     args.pattern = review.DEFAULT_PATTERNS
     if args.all_cities:
         db.DEFAULT_CITIES = []
-    print(f"服务启动：http://{args.host}:{args.port}  （浏览器打开即是控制台）", flush=True)
+    print(f"服务启动：http://{args.host}:{args.port}  （浏览器打开即是工作台）", flush=True)
     uvicorn.run(create_app(args), host=args.host, port=args.port, log_level="warning")
 
 

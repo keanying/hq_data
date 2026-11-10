@@ -384,7 +384,7 @@ def cities():
 
 def _filters(f):
     where, params = [], []
-    cities_ = [c for c in (f.get("city") or "").split(",") if c] or DEFAULT_CITIES
+    cities_ = [c for c in (f.get("city") or "").split(",") if c] or ([] if f.get("scenic_id") else DEFAULT_CITIES)
     if cities_:
         where.append(f"s.{C['city']} IN ({','.join(['%s'] * len(cities_))})"); params += cities_
     if f.get("province"):
@@ -401,6 +401,8 @@ def _filters(f):
         where.append(f"NOT {APPROVED} AND st.status = 'skip'")
     elif st == "auto":  # 自动审核通过的（备注以「自动审核」开头），供抽查
         where.append(f"{APPROVED} AND st.note LIKE %s"); params.append("自动审核%")
+    if f.get("scenic_id"):
+        where.append(f"s.{C['id']} = %s"); params.append(f["scenic_id"])
     if f.get("q"):
         where.append(f"(s.{C['name']} LIKE %s OR s.{C['alias']} LIKE %s OR s.{C['id']} = %s)")
         params += [f"%{f['q']}%", f"%{f['q']}%", f["q"]]
@@ -755,18 +757,79 @@ def image_stats(f=None):
     return dict(image_total=total, crawl=crawl, by_city=[dict(city=k, poi_qty=v["poi_qty"], image_qty=v["image_qty"]) for k, v in imgs.items()])
 
 
-def images_query(scenic_id=None, poi_id=None, limit=50, offset=0):
+def images_query(scenic_id=None, poi_id=None, limit=50, offset=0, city=None, q=None):
     where, params = [], []
     if scenic_id:
         where.append("scenic_id=%s"); params.append(scenic_id)
     if poi_id:
         where.append("poi_id=%s"); params.append(int(poi_id))
+    if city:
+        where.append("city=%s"); params.append(city)
+    if q:
+        where.append("(scenic_name LIKE %s OR poi_name LIKE %s OR scenic_id=%s)"); params += [f"%{q}%", f"%{q}%", q]
     w = ("WHERE " + " AND ".join(where)) if where else ""
     with cursor() as cur:
         cur.execute(f"SELECT COUNT(*) n FROM {IMAGE_TABLE} {w}", params)
         total = cur.fetchone()["n"]
         cur.execute(f"""SELECT record_id, poi_id, poi_name, scenic_id, scenic_name, image_url, image_thumb_url, lon, lat, province, city,
-                        district, total_count, comment_total, review_id, image_id, width, height, collect_time, data_source, is_modified
-                        FROM {IMAGE_TABLE} {w} ORDER BY id LIMIT %s OFFSET %s""", params + [int(limit), int(offset)])
+                        district, total_count, comment_total, review_id, image_id, width, height, review_score, review_publish_time,
+                        collect_time, data_source, is_modified
+                        FROM {IMAGE_TABLE} {w} ORDER BY id DESC LIMIT %s OFFSET %s""", params + [int(limit), int(offset)])
         rows = _jsonable(list(cur.fetchall()))
     return dict(total=total, items=rows)
+
+
+def overview():
+    """总览页：审核、自动通过、图片采集的汇总和分城市数据。"""
+    cs = cities()
+    with cursor() as cur:
+        where, params = _filters(dict(status="done"))
+        cur.execute(f"""SELECT COUNT(*) n, CAST(SUM(st.note LIKE %s) AS SIGNED) auto_n
+                        FROM {SCENIC_TABLE} s LEFT JOIN {STATUS_TABLE} st ON st.scenic_id = s.{C['id']} {where}""",
+                    ["自动审核%"] + params)
+        r = cur.fetchone()
+        approved, auto_n = r["n"] or 0, r["auto_n"] or 0
+        cur.execute(f"SELECT status, COUNT(*) n FROM {CRAWL_TABLE} GROUP BY status")
+        crawl = {x["status"]: x["n"] for x in cur.fetchall()}
+        cur.execute(f"""SELECT city, COUNT(*) images, COUNT(DISTINCT poi_id) pois FROM {IMAGE_TABLE} GROUP BY city""")
+        img_city = {x["city"]: x for x in cur.fetchall()}
+        cur.execute(f"SELECT COUNT(*) n FROM {IMAGE_TABLE}")
+        images = cur.fetchone()["n"]
+        ods = None
+        if table_exists(cur, ODS_TABLE):
+            cur.execute(f"SELECT COUNT(*) n FROM {ODS_TABLE}")
+            ods = cur.fetchone()["n"]
+    crawlable = sum(1 for _ in crawl_targets({}, refresh=True))
+    total = sum(int(c["n"] or 0) for c in cs)
+    skipped = sum(int(c.get("skipped") or 0) for c in cs)
+    return dict(total=total, approved=approved, auto_approved=auto_n, manual_approved=approved - auto_n, skipped=skipped,
+                todo=total - approved - skipped, crawl=crawl, crawlable_pois=crawlable, images=images, ods_rows=ods,
+                ods_table=ODS_TABLE.replace("`", ""), cities=[dict(c, images=int((img_city.get(c["city"]) or {}).get("images") or 0),
+                                                                   pois=int((img_city.get(c["city"]) or {}).get("pois") or 0)) for c in cs])
+
+
+def scenic_table(f, offset=0, limit=50):
+    """数据预览：景区列表（审核状态、保留的 POI、图片数）。"""
+    where, params = _filters(f)
+    base = f"FROM {SCENIC_TABLE} s LEFT JOIN {STATUS_TABLE} st ON st.scenic_id = s.{C['id']} {where}"
+    with cursor() as cur:
+        cur.execute(f"SELECT COUNT(*) n {base}", params)
+        total = cur.fetchone()["n"]
+        cur.execute(f"""SELECT {_select()}, COALESCE(s.{APPROVAL}, 0) approval, s.{POI_INFO} poi_info, st.status, st.note, st.reviewer,
+                        st.updated_at {base} ORDER BY s.{C['city']}, {GRADE_ORDER}, s.{C['id']} LIMIT %s OFFSET %s""",
+                    params + [int(limit), int(offset)])
+        rows = list(cur.fetchall())
+        ids = [r["id"] for r in rows]
+        counts = {}
+        if ids:
+            cur.execute(f"""SELECT scenic_id, poi_id, COUNT(*) n FROM {IMAGE_TABLE}
+                            WHERE scenic_id IN ({','.join(['%s'] * len(ids))}) GROUP BY scenic_id, poi_id""", ids)
+            for x in cur.fetchall():
+                counts.setdefault(x["scenic_id"], {})[str(x["poi_id"])] = x["n"]
+    for r in rows:
+        r["pois"] = _normalize(_parse_info(r.pop("poi_info")))
+        c = counts.get(r["id"], {})
+        for p in r["pois"]:
+            p["images"] = c.get(str(p["poiId"]), 0)
+        r["images"] = sum(c.values())
+    return dict(total=total, items=_jsonable(rows))

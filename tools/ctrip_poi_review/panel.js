@@ -1,8 +1,10 @@
-// 核对面板：由 review.py 通过 Playwright add_init_script 注入携程页面。
-// 与 Python 的通信只走 window.hqCall(method, payload)（Playwright expose_binding）。
+// 核对面板，两种用法（同一份代码）：
+//  1. review.py run：通过 Playwright add_init_script 注入携程页面，右侧浮层；通信走 window.hqCall（expose_binding）
+//  2. 服务网页（service.py）：页面先设置 window.HQ_EMBED = 容器元素、window.hqCall = 调 /api/rpc 的函数，再加载本文件，面板嵌在容器里
 (() => {
   'use strict';
-  if (window.top !== window || window.__hqPanel) return;
+  const EMBED = window.HQ_EMBED || null;
+  if ((!EMBED && window.top !== window) || window.__hqPanel) return;
   window.__hqPanel = true;
 
   const call = async (method, payload) => {
@@ -48,11 +50,34 @@
     let hello = null, bootError = null;
     const host = document.createElement('div');
     host.id = 'hq-poi-review-host';
-    document.documentElement.appendChild(host);
+    (EMBED || document.documentElement).appendChild(host);
+    if (EMBED) host.classList.add('embed');
     const root = host.attachShadow({ mode: 'open' });
     root.innerHTML = `
 <style>
   :host { all: initial; }
+  :host(.embed) { display: block; height: 100%; }
+  :host(.embed) .fab, :host(.embed) #close, :host(.embed) .grip, :host(.embed) .push-opt { display: none !important; }
+  :host(.embed) .panel { position: relative; top: auto; right: auto; width: 100% !important; height: 100%; z-index: auto; border: 0; box-shadow: none;
+    background: transparent; border-radius: 22px; font-size: 13px; }
+  :host(.embed) header, :host(.embed) .prog, :host(.embed) .filters, :host(.embed) .settings { background: transparent; border: 0; }
+  :host(.embed) header b { font-size: 16px; color: #2b2250; }
+  :host(.embed) .filters { padding: 4px 16px 10px; }
+  :host(.embed) .body { padding: 6px 16px 90px; }
+  :host(.embed) .card { background: #fff; border: 0; border-radius: 20px; box-shadow: 0 10px 30px rgba(108, 82, 255, .08); padding: 14px 18px; }
+  :host(.embed) .row { border: 0; border-radius: 16px; box-shadow: 0 6px 18px rgba(108, 82, 255, .07); padding: 10px 12px; margin-bottom: 8px; }
+  :host(.embed) .row.keep { border-left: 4px solid #7b5cff; background: #f7f4ff; }
+  :host(.embed) .idx { color: #7b5cff; }
+  :host(.embed) button { border-radius: 10px; border-color: #e4dcff; }
+  :host(.embed) button.primary, :host(.embed) button.keep.on { background: linear-gradient(135deg, #9a7bff, #6c4dff); border-color: #6c4dff; color: #fff; }
+  :host(.embed) button.link { color: #6c4dff; }
+  :host(.embed) .chip.active { background: #7b5cff; border-color: #7b5cff; color: #fff; }
+  :host(.embed) .tag.sight { background: #efeaff; color: #6c4dff; }
+  :host(.embed) .prog .bar { height: 8px; background: #eee9ff; }
+  :host(.embed) .prog .bar i { background: linear-gradient(90deg, #ff8cc6, #8b6cff); }
+  :host(.embed) select, :host(.embed) input[type=text], :host(.embed) input[type=number] { border-color: #e4dcff; border-radius: 10px; padding: 6px 8px; background: #fff; }
+  :host(.embed) footer { background: rgba(255, 255, 255, .85); backdrop-filter: blur(6px); border-top: 1px solid #eee9ff; border-radius: 0 0 22px 22px; }
+  :host(.embed) .auto-banner { border-radius: 14px; } :host(.embed) .idle-banner { border-radius: 14px; }
   * { box-sizing: border-box; font-family: -apple-system, "PingFang SC", "Microsoft YaHei", Arial, sans-serif; }
   .fab.err { background: #cf222e; }
   .fab { position: fixed; right: 16px; bottom: 16px; z-index: 2147483646; background: #0b6bcb; color: #fff; border: 0; border-radius: 20px; padding: 9px 14px; font-size: 13px; cursor: pointer; box-shadow: 0 2px 8px rgba(0,0,0,.25); }
@@ -149,7 +174,7 @@
     <label>核对人</label><input type="text" id="s-reviewer" style="width:100%" placeholder="写入 reviewer 字段">
     <label>两次搜索最小间隔（毫秒，实际会随机加 0–40%）</label><input type="number" id="s-throttle" min="500" step="100">
     <label><input type="checkbox" id="s-auto"> 打开景区时自动搜索景区名</label>
-    <label><input type="checkbox" id="s-push"> 打开面板时把携程页面往左挤（页面较窄时可能出现横向滚动条）</label>
+    <label class="push-opt"><input type="checkbox" id="s-push"> 打开面板时把携程页面往左挤（页面较窄时可能出现横向滚动条）</label>
     <label><input type="checkbox" id="s-autoapprove"> 名称一致且（地址相近或同省市区）时自动审核通过（倒计时可按 Esc 取消）</label>
     <label><input type="checkbox" id="s-more"> 景区名没搜到「名称一致且地址相近」时，自动接着搜别名 / 城市+名称</label>
     <label style="padding-left:18px"><input type="checkbox" id="s-spots"> 还不行再搜核心景点（默认不搜，只用来比对；跳过大雄宝殿等通用名；每个景区最多再搜 8 个词）</label>
@@ -188,6 +213,7 @@
     const savePrefs = async (p) => { prefs = await call('prefs', p); };
     const panelWidth = () => Math.min(Math.max(Number(prefs.panel_width) || 560, 440), Math.max(480, window.innerWidth - 360));
     function applyLayout() {
+      if (EMBED) return; // 嵌在网页里：大小由页面决定
       const open = !$('#panel').classList.contains('hidden');
       const w = panelWidth();
       $('#panel').style.width = w + 'px';
@@ -715,7 +741,7 @@
         else if (t.id === 'done') await finish('done');
         else if (t.id === 'skip') await finish('skip');
         else if (t.id === 'f-apply') { await savePrefs({ filters: { city: $('#f-city').value, grade: $('#f-grade').value, status: $('#f-status').value, q: $('#f-q').value.trim() } }); await start(); }
-        else if (t.id === 'export') { const r = await call('export'); toast('已导出：' + r.path); }
+        else if (t.id === 'export') { const r = await call('export'); if (r.url) window.open(r.url, '_blank'); else toast('已导出：' + r.path); }
         else if (t.id === 's-save') {
           await savePrefs({ reviewer: $('#s-reviewer').value.trim(), throttle_ms: Number($('#s-throttle').value || 2500), auto_search: $('#s-auto').checked,
             push_page: $('#s-push').checked, auto_address: $('#s-autoaddr').checked, auto_keep_similar: $('#s-autokeep').checked, auto_approve: $('#s-autoapprove').checked,
@@ -762,6 +788,7 @@
     }, true);
     document.addEventListener('keydown', async (ev) => {
       if ($('#panel').classList.contains('hidden') || !ev.isTrusted) return;
+      if (EMBED && host.offsetParent === null) return; // 网页里切到别的页面时，快捷键不生效
       const path = ev.composedPath ? ev.composedPath() : [ev.target];
       const inField = path.some((el) => el && (el.tagName === 'INPUT' || el.tagName === 'TEXTAREA' || el.tagName === 'SELECT' || el.isContentEditable));
       if (ev.key === 'Escape' && S.autoApprove) { ev.preventDefault(); cancelAutoApprove(); return; }
@@ -808,8 +835,20 @@
       }
     }
 
+    // 网页其他页面「去核对」：window.dispatchEvent(new CustomEvent('hq:open', { detail: { scenic_id } }))
+    window.addEventListener('hq:open', async (e) => {
+      const sid = e.detail && e.detail.scenic_id;
+      if (!sid || !hello) return;
+      await savePrefs({ filters: Object.assign({}, prefs.filters || {}, { q: sid, status: 'all', city: '' }) });
+      $('#panel').classList.remove('hidden'); $('#fab').style.display = 'none';
+      await start();
+    });
+
     return {
-      ready(h) { hello = h; $('#fab').title = '景区 ↔ 携程POI 核对'; },
+      ready(h) {
+        hello = h; $('#fab').title = '景区 ↔ 携程POI 核对';
+        if (EMBED) $('#fab').click(); // 嵌在网页里：直接打开
+      },
       fail(msg) { bootError = msg; const f = $('#fab'); f.classList.add('err'); f.textContent = 'POI核对（出错，点我看原因）'; },
       remove() { host.remove(); },
     };

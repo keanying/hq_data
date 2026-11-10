@@ -218,32 +218,51 @@ python dump_page.py https://you.ctrip.com/sight/beijing1/229.html --channel chro
 打开页面、滚到点评区、点一次「下一页」，保存整页 HTML、截图、点评接口请求/返回、「下一页」附近的 HTML、像「图片总数」的文字，
 打包成 `debug/page_dump_<时间>.zip` 发给开发即可（不含请求头和 Cookie，请求体里 token 之类字段已打码）。
 
-## 8. 服务化（常驻服务 + 网页控制台）
+## 8. 服务化：数据工作台（推荐的日常用法）
 
 ```bash
 python service.py --channel chrome
 ```
 
-浏览器打开 <http://127.0.0.1:8800>：
+浏览器打开 <http://127.0.0.1:8800>。服务自己开一个 Chrome（携程登录态保存在 `.pw-profile-service`，第一次在那个窗口里登录一下即可），
+网页上的所有操作都通过这个浏览器完成：在携程搜索框里模拟输入、读下拉框结果（F12 式被动感知）、进 POI 主页点「下一页」读点评图片。不直接调用携程接口。
 
-- 审核进度（按城市）、图片采集进度（按城市）
-- 新建任务：「自动审核」「采集点评图片」，带筛选和上限；任务按提交顺序逐个执行（共用一个浏览器，避免并发被限流）
-- 任务列表：进度、实时日志、取消；遇到登录/验证会停在「需要人工」，在服务打开的浏览器里处理后重新提交即可（已完成的不会重做）
-- 图片预览：按景区ID / poiId 看已采的图片
+| 页面 | 说明 |
+|---|---|
+| 总览 | 审核完成度、自动/人工通过数、各城市审核进度和图片数、POI 采集进度、最近任务、边核对边采集状态 |
+| 核对 | 原来的核对面板嵌在工作台里：规则、自动选中、自动通过、10 秒无人接管跳过、按城市依次跑完、快捷键都一样。`#/review?scenic_id=PFTSCB01001668` 直接打开某个景区 |
+| 图片采集 | 批量采集（城市/等级/景区、每个 POI 最多页数/张数）、边核对边采集的实时日志、各城市图片、POI 采集状态 |
+| 数据预览 | 客户景区表 + `ctrip_poi_info` + `approval`，按城市/状态/等级/名称筛选；点一行看详情：保留的 POI、每个 POI 的图片数、去核对 / 看图片 |
+| 图片预览 | 按城市、景区名/POI 名、景区ID、poiId 浏览已采图片（瀑布流），点开大图可用 ← → 翻、Esc 关闭 |
+| 任务中心 | 提交「自动审核」「采集点评图片」任务，看进度和日志、取消 |
+
+### 边核对边采集
+
+核对页里点「审核完成」（或自动通过）后，这个景区会自动排进图片采集队列，服务在另一个标签页里打开保留的每个 POI 主页、翻点评、写库
+（`scenic_poi_image` + 同步到 `ods_prd_poi_image_di`）。任务中心里跑的「自动审核」通过的景区也一样会排进去（试运行除外）。
+
+- 开关、暂停/继续：总览、核对页、图片采集页上的「边核对边采集」卡片；也可 `POST /api/follow {"enabled":false}`
+- 每个 POI 最多翻几页、最多几张：默认 20 页 / 300 张，可改 `.pw-profile-service/hq_prefs.json` 的 `collect_max_pages` / `collect_max_images`，或 `POST /api/rpc/prefs {"collect_max_pages":30}`
+- 页面上的 poiId 和链接里的不一致时不采（日志里会提示「poiUri 可能指向了别的 POI」）
+- 遇到登录/验证会暂停并在顶部铃铛上提示，在服务打开的浏览器里处理完点「继续」
 
 参数：`--port 8800`、`--host 127.0.0.1`（默认只本机可访问）、`--all-cities`、`--headless`（不建议）、`--profile`（默认 `.pw-profile-service`，和 `review.py run` 分开，可以同时开）。
-
-接口（给其他系统调用）：
+接口文档：<http://127.0.0.1:8800/docs>。
 
 | 方法 | 路径 | 说明 |
 |---|---|---|
-| GET | `/api/health` | 服务状态、当前任务、排队数 |
+| GET | `/api/health` | 服务状态、当前任务、排队数、是否需要人工 |
+| GET | `/api/overview` | 总览数字：总数、已审核（自动/人工）、跳过、待核对、图片数、ODS 行数、各城市 |
 | GET | `/api/stats` | 各城市审核进度、图片采集统计 |
+| GET | `/api/scenic_table?city=&status=&grade=&q=&offset=&limit=` | 景区 + 保留 POI + 每个 POI 的图片数 |
+| GET | `/api/scenic/{scenic_id}` | 景区详情和已保留的 POI |
+| GET | `/api/images?city=&q=&scenic_id=&poi_id=&limit=&offset=` | 查询已采图片 |
+| GET | `/api/export.csv` | 导出核对结果 |
+| POST | `/api/rpc/{method}` | 核对面板用的接口（list / detail / search / poi / status …） |
+| GET/POST | `/api/follow` | 边核对边采集：状态 / `{"enabled":true\|false}`、`{"pause":true}`、`{"resume":true}` |
 | POST | `/api/jobs` | 提交任务：`{"type":"images","params":{"city":"北京市","grade":"5A","max_pages":20}}`；`type` 可为 `auto_review` / `images` |
 | GET | `/api/jobs`、`/api/jobs/{id}` | 任务列表 / 详情（含日志） |
 | POST | `/api/jobs/{id}/cancel` | 取消任务 |
-| GET | `/api/images?scenic_id=&poi_id=&limit=&offset=` | 查询已采图片 |
-| GET | `/api/scenic/{scenic_id}` | 景区详情和已保留的 POI |
 
 ## 其他参数
 
@@ -260,12 +279,13 @@ python service.py --channel chrome
 | 文件 | 说明 |
 |---|---|
 | `review.py` | 主程序：Playwright 浏览器 + 模拟输入搜索 + 预搜索 + 导出 |
-| `panel.js` | 注入携程页面的核对面板 |
+| `panel.js` | 核对面板（注入携程页面，或嵌在工作台里） |
 | `db.py` | MySQL 读写 |
 | `import_candidates.py` | 导入离线候选 CSV |
 | `import_ctrip_master.py` | 导入携程景区主档（用于显示地址/等级） |
 | `match.py` | 名称/地址比对与自动审核判定、坐标换算 |
 | `crawler.py` | 点评图片采集（翻页、解析、入库） |
-| `service.py` + `dashboard.html` | 常驻服务和网页控制台 |
+| `service.py` | 常驻服务（FastAPI）：核对接口、任务队列、边核对边采集 |
+| `web/` | 数据工作台前端（`index.html` / `app.css` / `app.js`，无需构建） |
 | `dump_page.py` | 抓 POI 主页结构，供核对采集规则 |
 | `schema.sql` | 表结构（程序会自动建，供 DBA 审阅） |
