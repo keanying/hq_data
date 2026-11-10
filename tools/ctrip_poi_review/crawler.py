@@ -1,0 +1,232 @@
+"""景点图像识别数据：进入已审核 POI 的携程主页，在「用户点评」里一页页点「下一页」，
+旁路读取页面自己发出的 getCommentCollapseList 返回，把点评图片写进 MySQL（scenic_poi_image）。
+
+不自己调接口：翻页都是点页面上的「下一页」，请求由携程页面发出，这里只读返回。
+"""
+import asyncio
+import random
+import re
+import time
+from datetime import datetime, timedelta, timezone
+
+import db
+
+COMMENT_API = "getCommentCollapseList"
+DATA_SOURCE = "OTA-图片爬取"
+CN_TZ = timezone(timedelta(hours=8))
+
+
+class NeedHuman(RuntimeError):
+    """页面要求登录/验证，需要人处理后再继续。"""
+
+
+def _num(v):
+    try:
+        f = float(v)
+        return f if f == f else None
+    except (TypeError, ValueError):
+        return None
+
+
+def parse_ms_date(v):
+    """'/Date(1731476439000+0800)/' → '2024-11-13 13:40:39'（北京时间）。"""
+    m = re.search(r"(\d{10,13})", str(v or ""))
+    if not m:
+        return None
+    ts = int(m.group(1))
+    if ts > 1e12:
+        ts /= 1000
+    return datetime.fromtimestamp(ts, CN_TZ).strftime("%Y-%m-%d %H:%M:%S")
+
+
+def comment_result(js):
+    """getCommentCollapseList 返回 → (items, totalCount)。"""
+    res = (js or {}).get("result") or {}
+    return res.get("items") or [], res.get("totalCount")
+
+
+def rows_from_items(items, total, scenic, poi, collect_time, image_total=None):
+    rows = []
+    for it in items:
+        for im in it.get("images") or []:
+            if not im.get("imageId") or not im.get("imageSrcUrl"):
+                continue
+            rows.append(dict(
+                poi_id=int(poi["poiId"]), poi_name=poi.get("poiName"),
+                scenic_id=scenic["id"], scenic_name=scenic.get("name"),
+                image_url=im.get("imageSrcUrl"), image_thumb_url=im.get("imageThumbUrl"),
+                lon=_num(scenic.get("lng")), lat=_num(scenic.get("lat")),
+                province=scenic.get("province"), city=scenic.get("city"), district=scenic.get("district"),
+                total_count=image_total, comment_total=total, review_id=it.get("commentId"), image_id=im.get("imageId"),
+                width=im.get("width"), height=im.get("height"),
+                review_score=_num(it.get("score")), review_publish_time=parse_ms_date(it.get("publishTime")),
+                collect_time=collect_time, data_source=DATA_SOURCE, is_modified=0,
+            ))
+    return rows
+
+
+# POI 主页上的图片总数（如「全部图片(105685)」「105685张图片」）。真实页面结构以 dump_page.py 抓到的为准，必要时在这里加规则
+JS_IMAGE_TOTAL = """() => {
+  const t = (document.body && document.body.innerText || '').replace(/\\s+/g, ' ');
+  const pats = [/全部图片\\s*[（(]?\\s*(\\d[\\d,]*)/, /(\\d[\\d,]*)\\s*张图片/, /图片\\s*[（(]\\s*(\\d[\\d,]*)\\s*[)）]/,
+                /相册\\s*[（(]?\\s*(\\d[\\d,]*)/, /查看全部\\s*(\\d[\\d,]*)\\s*张/];
+  for (const p of pats) { const m = t.match(p); if (m) return parseInt(m[1].replace(/,/g, ''), 10); }
+  return null;
+}"""
+
+JS_NEXT_STATE = """(el) => {
+  const dis = (e) => e && ((e.className || '').toString().toLowerCase().includes('disabled') || e.getAttribute('aria-disabled') === 'true' || e.disabled);
+  return { disabled: dis(el) || dis(el.parentElement) || dis(el.closest('li')), visible: !!(el.offsetWidth || el.offsetHeight) };
+}"""
+
+
+class CommentImageCrawler:
+    def __init__(self, page, max_pages=20, max_images=300, page_delay=(1.5, 3.0), timeout_s=15.0, log=print):
+        self.page, self.max_pages, self.max_images = page, max_pages, max_images
+        self.page_delay, self.timeout_s, self.log = page_delay, timeout_s, log
+
+    async def _check_blocked(self):
+        url = self.page.url.lower()
+        title = (await self.page.title()) or ""
+        if any(k in url for k in ("verify", "captcha", "passport.ctrip.com", "/login")) or any(k in title for k in ("验证", "登录")):
+            raise NeedHuman(f"页面要求登录或验证（{self.page.url}），请在浏览器里处理后重新开始")
+
+    async def _wait_new(self, captured, seen_n):
+        """等到有新的 getCommentCollapseList 返回（可解析且带 result），返回其 JSON。"""
+        deadline = time.monotonic() + self.timeout_s
+        while time.monotonic() < deadline:
+            while seen_n[0] < len(captured):
+                resp = captured[seen_n[0]]
+                seen_n[0] += 1
+                try:
+                    js = await resp.json()
+                except Exception:
+                    continue
+                if isinstance(js, dict) and isinstance(js.get("result"), dict):
+                    return js
+            await asyncio.sleep(0.2)
+        return None
+
+    async def _next_button(self):
+        for loc in (self.page.get_by_text("下一页", exact=True), self.page.locator("text=下一页")):
+            n = await loc.count()
+            for i in range(n - 1, -1, -1):  # 一般页面上只有一个；有多个时取最后一个（在点评区底部）
+                el = loc.nth(i)
+                try:
+                    st = await el.evaluate(JS_NEXT_STATE)
+                except Exception:
+                    continue
+                if st["visible"]:
+                    return el, st["disabled"]
+        return None, True
+
+    async def crawl(self, target, should_stop=lambda: False):
+        """target = {scenic: {...}, poi: {poiId, poiName, poiUri, ...}}；返回统计。"""
+        scenic, poi = target["scenic"], target["poi"]
+        sid, pid = scenic["id"], int(poi["poiId"])
+        page = self.page
+        captured, seen_n = [], [0]
+        on_resp = lambda r: captured.append(r) if COMMENT_API in r.url else None  # noqa: E731
+        page.on("response", on_resp)
+        stat = dict(pages=0, reviews=0, images=0, total=None, stop="")
+        db.crawl_put(sid, pid, poi_name=poi.get("poiName"), poi_uri=poi.get("poiUri"), status="running", message=None)
+        try:
+            await page.goto(poi["poiUri"], wait_until="domcontentloaded", timeout=30000)
+            await self._check_blocked()
+            # 往下滚到「用户点评」，触发第一页点评加载
+            js = None
+            for _ in range(20):
+                js = await self._wait_new(captured, seen_n) if captured[seen_n[0]:] else None
+                if js:
+                    break
+                await page.mouse.wheel(0, random.randint(600, 1000))
+                await page.wait_for_timeout(random.randint(300, 600))
+            if not js:
+                js = await self._wait_new(captured, seen_n)
+            if not js:
+                stat["stop"] = "没读到点评接口返回（页面没有点评，或结构变了：可用 dump_page.py 抓页面结构）"
+                return stat
+            last_ids = None
+            collect_time = datetime.now(CN_TZ).strftime("%Y-%m-%d %H:%M:%S")
+            try:
+                image_total = await page.evaluate(JS_IMAGE_TOTAL)
+            except Exception:
+                image_total = None
+            stat["image_total"] = image_total
+            while True:
+                items, total = comment_result(js)
+                ids = [it.get("commentId") for it in items]
+                if not items or ids == last_ids:
+                    stat["stop"] = "没有更多点评" if not items else "翻页后内容没变，停止"
+                    break
+                last_ids = ids
+                stat["pages"] += 1
+                stat["reviews"] += len(items)
+                stat["total"] = total
+                stat["images"] += db.images_insert(rows_from_items(items, total, scenic, poi, collect_time, image_total))
+                db.crawl_put(sid, pid, pages_done=stat["pages"], total_count=total, review_qty=stat["reviews"], image_qty=stat["images"])
+                if stat["pages"] >= self.max_pages:
+                    stat["stop"] = f"到达最大页数 {self.max_pages}"
+                    break
+                if self.max_images and stat["images"] >= self.max_images:
+                    stat["stop"] = f"到达最大图片数 {self.max_images}"
+                    break
+                if should_stop():
+                    stat["stop"] = "已取消"
+                    break
+                btn, disabled = await self._next_button()
+                if btn is None or disabled:
+                    stat["stop"] = "已是最后一页"
+                    break
+                await asyncio.sleep(random.uniform(*self.page_delay))
+                await btn.scroll_into_view_if_needed()
+                await btn.click()
+                js = await self._wait_new(captured, seen_n)
+                if not js:
+                    await self._check_blocked()
+                    stat["stop"] = "点「下一页」后没等到点评返回"
+                    break
+            return stat
+        finally:
+            page.remove_listener("response", on_resp)
+            ok = stat["stop"] and not stat["stop"].startswith(("没读到", "点「下一页」后", "已取消"))
+            db.crawl_put(sid, pid, status="done" if ok else ("failed" if stat["pages"] == 0 else "partial"),
+                         message=stat["stop"] or "中断")
+
+
+async def crawl_all(get_page, f, max_pages=20, max_images=300, limit=0, refresh=False, poi_delay=(2.0, 4.0),
+                    log=print, should_stop=lambda: False, progress=lambda done, total: None):
+    """对筛选范围内已审核的景区，逐个 POI 采集点评图片。get_page 为 async 函数，返回可用的 Playwright page。"""
+    targets = db.crawl_targets(f, refresh=refresh)
+    if limit:
+        targets = targets[:limit]
+    total = len(targets)
+    log(f"待采集 POI：{total} 个（每个最多 {max_pages} 页 / {max_images} 张）")
+    stats = dict(pois=0, images=0, failed=0)
+    page = None
+    for i, t in enumerate(targets, 1):
+        if should_stop():
+            log("已取消")
+            break
+        page = page or await get_page()
+        crawler = CommentImageCrawler(page, max_pages=max_pages, max_images=max_images, log=log)
+        name = f"{t['scenic']['name']} / {t['poi'].get('poiName')}（poiId {t['poi']['poiId']}）"
+        try:
+            st = await crawler.crawl(t, should_stop)
+            stats["pois"] += 1
+            stats["images"] += st["images"]
+            log(f"[{i}/{total}] {name}：{st['pages']} 页，点评 {st['reviews']}/{st['total']}，新增图片 {st['images']}"
+                f"（主页图片总数 {st.get('image_total') if st.get('image_total') is not None else '未读到'}）；{st['stop']}")
+        except NeedHuman as e:
+            log(f"[{i}/{total}] {name}：{e}")
+            raise
+        except Exception as e:
+            stats["failed"] += 1
+            log(f"[{i}/{total}] {name}：失败 {type(e).__name__}: {e}")
+        progress(i, total)
+        await asyncio.sleep(random.uniform(*poi_delay))
+    log(f"完成：POI {stats['pois']} 个，新增图片 {stats['images']} 张，失败 {stats['failed']}")
+    return stats
+
+
+__all__ = ["CommentImageCrawler", "crawl_all", "rows_from_items", "comment_result", "parse_ms_date", "NeedHuman"]

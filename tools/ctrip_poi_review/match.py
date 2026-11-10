@@ -74,6 +74,42 @@ def distance_m(lat1, lng1, lat2, lng2):
     return 6371000 * 2 * math.asin(math.sqrt(h))
 
 
+# ---------------------------------------------------------------- 坐标系
+_A, _EE = 6378245.0, 0.00669342162296594323
+
+
+def _tlat(x, y):
+    r = -100 + 2 * x + 3 * y + 0.2 * y * y + 0.1 * x * y + 0.2 * math.sqrt(abs(x))
+    r += (20 * math.sin(6 * x * math.pi) + 20 * math.sin(2 * x * math.pi)) * 2 / 3
+    r += (20 * math.sin(y * math.pi) + 40 * math.sin(y / 3 * math.pi)) * 2 / 3
+    r += (160 * math.sin(y / 12 * math.pi) + 320 * math.sin(y * math.pi / 30)) * 2 / 3
+    return r
+
+
+def _tlng(x, y):
+    r = 300 + x + 2 * y + 0.1 * x * x + 0.1 * x * y + 0.1 * math.sqrt(abs(x))
+    r += (20 * math.sin(6 * x * math.pi) + 20 * math.sin(2 * x * math.pi)) * 2 / 3
+    r += (20 * math.sin(x * math.pi) + 40 * math.sin(x / 3 * math.pi)) * 2 / 3
+    r += (150 * math.sin(x / 12 * math.pi) + 300 * math.sin(x / 30 * math.pi)) * 2 / 3
+    return r
+
+
+def gcj02_to_wgs84(lng, lat):
+    """GCJ02（火星坐标，国内地图/携程/客户景区表）→ WGS84，精度约 1~2 米。境外坐标原样返回。"""
+    lng, lat = _num(lng), _num(lat)
+    if lng is None or lat is None:
+        return lng, lat
+    if not (72.004 <= lng <= 137.8347 and 0.8293 <= lat <= 55.8271):
+        return lng, lat
+    dlat, dlng = _tlat(lng - 105, lat - 35), _tlng(lng - 105, lat - 35)
+    rl = lat / 180 * math.pi
+    mg = 1 - _EE * math.sin(rl) ** 2
+    sm = math.sqrt(mg)
+    dlat = dlat * 180 / ((_A * (1 - _EE)) / (mg * sm) * math.pi)
+    dlng = dlng * 180 / (_A / sm * math.cos(rl) * math.pi)
+    return lng - dlng, lat - dlat
+
+
 NEAR_M = 3000  # 区县判断不出来时，名称一致 + 同城 + 3km 内也算同一片区
 
 

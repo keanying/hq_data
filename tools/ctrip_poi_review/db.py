@@ -41,6 +41,12 @@ STATUS_TABLE = ident(ENV("STATUS_TABLE", "scenic_ctrip_review_status"))
 CACHE_TABLE = ident(ENV("CACHE_TABLE", "scenic_ctrip_search_cache"))
 MASTER_TABLE = ident(ENV("CTRIP_MASTER_TABLE", "ctrip_attraction_master"))
 ADDR_TABLE = ident(ENV("ADDR_TABLE", "ctrip_poi_address_cache"))
+IMAGE_TABLE = ident(ENV("IMAGE_TABLE", "scenic_poi_image"))
+CRAWL_TABLE = ident(ENV("CRAWL_TABLE", "scenic_poi_image_crawl"))
+# 交付表（你建好的分区天表）。不存在时只写工具自己的 scenic_poi_image
+ODS_TABLE = ident(ENV("ODS_IMAGE_TABLE", "ods_prd_poi_image_di"))
+ODS_COORD = ENV("ODS_COORD", "wgs84").lower()          # wgs84：客户景区坐标(GCJ02)换算成 WGS84 再写；gcj02：原样写
+ODS_AUTO_PARTITION = ENV("ODS_AUTO_PARTITION", "1") != "0"  # 当天没有分区时自动 ADD PARTITION
 COLS = {
     "id": "scenic_id", "name": "scenic_name", "alias": "scenic_alias",
     "province": "province_name", "city": "city_name", "district": "district_name",
@@ -78,6 +84,42 @@ DDL = [
   fetched_at DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
   KEY idx_poi (ctrip_poi_id), KEY idx_biz (ctrip_business_id)
 ) DEFAULT CHARSET=utf8mb4 COMMENT='携程 POI 地址缓存（打开详情页读取）'""",
+]
+DDL += [
+    f"""CREATE TABLE IF NOT EXISTS {IMAGE_TABLE} (
+  id BIGINT AUTO_INCREMENT PRIMARY KEY,
+  record_id VARCHAR(32) NULL COMMENT '记录ID：img_<采集日期>_<序号>',
+  poi_id BIGINT NOT NULL COMMENT '携程 poiId',
+  poi_name VARCHAR(255) NULL COMMENT '携程 POI 名称',
+  scenic_id VARCHAR(64) NOT NULL COMMENT '客户景区ID',
+  scenic_name VARCHAR(255) NULL,
+  image_url VARCHAR(512) NOT NULL COMMENT '点评图片（imageSrcUrl，W_640）',
+  image_thumb_url VARCHAR(512) NULL COMMENT '缩略图（imageThumbUrl）',
+  lon DOUBLE NULL COMMENT '景区经度（客户景区表）', lat DOUBLE NULL COMMENT '景区纬度（客户景区表）',
+  province VARCHAR(64) NULL, city VARCHAR(64) NULL, district VARCHAR(64) NULL,
+  total_count BIGINT NULL COMMENT '该 POI 图片总数（携程主页上的图片数，读不到为空）',
+  comment_total INT NULL COMMENT '该 POI 点评总数（getCommentCollapseList.totalCount）',
+  review_id BIGINT NULL COMMENT '点评 commentId',
+  image_id BIGINT NOT NULL COMMENT '携程图片 imageId',
+  width INT NULL, height INT NULL,
+  review_score DOUBLE NULL COMMENT '点评评分', review_publish_time DATETIME NULL COMMENT '点评发布时间',
+  collect_time DATETIME NOT NULL COMMENT '采集时间',
+  data_source VARCHAR(32) NOT NULL DEFAULT 'OTA-图片爬取',
+  is_modified TINYINT NOT NULL DEFAULT 0 COMMENT '是否人工修改过：0-否 1-是',
+  UNIQUE KEY uk_scenic_poi_image (scenic_id, poi_id, image_id),
+  KEY idx_poi (poi_id), KEY idx_record (record_id), KEY idx_review (review_id)
+) DEFAULT CHARSET=utf8mb4 COMMENT='景点图像识别：携程点评图片'""",
+    f"""CREATE TABLE IF NOT EXISTS {CRAWL_TABLE} (
+  scenic_id VARCHAR(64) NOT NULL, poi_id BIGINT NOT NULL,
+  poi_name VARCHAR(255) NULL, poi_uri VARCHAR(512) NULL,
+  status VARCHAR(16) NULL COMMENT 'running / done / failed',
+  pages_done INT NOT NULL DEFAULT 0 COMMENT '已翻到第几页',
+  total_count INT NULL COMMENT '点评总数', review_qty INT NOT NULL DEFAULT 0 COMMENT '已读点评数',
+  image_qty INT NOT NULL DEFAULT 0 COMMENT '已入库图片数',
+  message VARCHAR(500) NULL,
+  updated_at DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  PRIMARY KEY (scenic_id, poi_id)
+) DEFAULT CHARSET=utf8mb4 COMMENT='点评图片采集进度（断点续采）'""",
 ]
 MASTER_DDL = f"""CREATE TABLE IF NOT EXISTS {MASTER_TABLE} (
   ctrip_poi_id VARCHAR(32) PRIMARY KEY, ctrip_business_id VARCHAR(32) NULL,
@@ -154,7 +196,7 @@ def init_db():
         for ddl in DDL:
             cur.execute(ddl.replace("DEFAULT CHARSET=utf8mb4", clause))
         for t, col in ((STATUS_TABLE, "scenic_id"), (CANDIDATE_TABLE, "scenic_id"),
-                       (CACHE_TABLE, "keyword"), (ADDR_TABLE, "ctrip_key")):
+                       (CACHE_TABLE, "keyword"), (ADDR_TABLE, "ctrip_key"), (IMAGE_TABLE, "scenic_id"), (CRAWL_TABLE, "scenic_id")):
             align_collation(cur, t, col)
     ensure_poi_info_column()
     with cursor() as cur:  # 旧版「已完成」状态同步到 approval
@@ -556,3 +598,175 @@ def addr_put(poi_id, biz_id, name, address, page_url):
                             ctrip_poi_id=COALESCE(VALUES(ctrip_poi_id), ctrip_poi_id), ctrip_business_id=COALESCE(VALUES(ctrip_business_id), ctrip_business_id),
                             ctrip_poi_name=COALESCE(VALUES(ctrip_poi_name), ctrip_poi_name), fetched_at=CURRENT_TIMESTAMP""",
                         (key, poi_id or None, biz_id or None, name or None, address, page_url or None))
+
+
+# ---------------------------------------------------------------- 点评图片（景点图像识别）
+def crawl_targets(f, refresh=False):
+    """已审核通过（approval=1）的景区里，ctrip_poi_info 保留的每个 POI。默认跳过已采完的。"""
+    where, params = _filters(dict(f, status="done"))
+    city_order, city_params = ((f"FIELD(s.{C['city']}, {','.join(['%s'] * len(DEFAULT_CITIES))}), ", list(DEFAULT_CITIES)) if DEFAULT_CITIES
+                               else (f"s.{C['province']}, ", []))
+    with cursor() as cur:
+        cur.execute(f"""SELECT {_select()}, s.{POI_INFO} AS poi_info
+                        FROM {SCENIC_TABLE} s LEFT JOIN {STATUS_TABLE} st ON st.scenic_id = s.{C['id']} {where}
+                        AND s.{POI_INFO} IS NOT NULL AND s.{POI_INFO} <> '[]'
+                        ORDER BY {city_order}s.{C['city']}, {GRADE_ORDER}, s.{C['id']}""", params + city_params)
+        rows = list(cur.fetchall())
+        done = set()
+        if not refresh:
+            cur.execute(f"SELECT scenic_id, poi_id FROM {CRAWL_TABLE} WHERE status = 'done'")
+            done = {(r["scenic_id"], str(r["poi_id"])) for r in cur.fetchall()}
+    out = []
+    for r in rows:
+        for p in _parse_info(r.pop("poi_info")):
+            if not str(p.get("poiId", "")).isdigit() or not p.get("poiUri"):
+                continue
+            if (r["id"], str(p["poiId"])) in done:
+                continue
+            out.append(dict(scenic=r, poi=p))
+    return out
+
+
+def crawl_get(sid, poi_id):
+    with cursor() as cur:
+        cur.execute(f"SELECT * FROM {CRAWL_TABLE} WHERE scenic_id=%s AND poi_id=%s", (sid, int(poi_id)))
+        r = cur.fetchone()
+    return _jsonable([r])[0] if r else None
+
+
+def crawl_put(sid, poi_id, **kw):
+    cols = ["poi_name", "poi_uri", "status", "pages_done", "total_count", "review_qty", "image_qty", "message"]
+    vals = {k: kw[k] for k in cols if k in kw}
+    if "message" in vals and vals["message"]:
+        vals["message"] = str(vals["message"])[:500]
+    names = ["scenic_id", "poi_id"] + list(vals)
+    with cursor() as cur:
+        cur.execute(f"""INSERT INTO {CRAWL_TABLE} ({','.join(names)}) VALUES ({','.join(['%s'] * len(names))})
+                        ON DUPLICATE KEY UPDATE {', '.join(f'{k}=VALUES({k})' for k in vals) or 'scenic_id=scenic_id'}""",
+                    [sid, int(poi_id)] + list(vals.values()))
+
+
+IMAGE_COLS = ["poi_id", "poi_name", "scenic_id", "scenic_name", "image_url", "image_thumb_url", "lon", "lat", "province", "city",
+              "district", "total_count", "comment_total", "review_id", "image_id", "width", "height", "review_score",
+              "review_publish_time", "collect_time", "data_source", "is_modified"]
+
+
+def images_insert(rows):
+    """写入图片：先进工具自己的 scenic_poi_image（同一景区+POI+图片只存一条，生成 record_id = img_<采集日期>_<id 6位>），
+    新增的再同步写进交付表 ods_prd_poi_image_di。返回新增条数。"""
+    if not rows:
+        return 0
+    with cursor() as cur:
+        n = cur.executemany(f"INSERT IGNORE INTO {IMAGE_TABLE} ({','.join(IMAGE_COLS)}) VALUES ({','.join(['%s'] * len(IMAGE_COLS))})",
+                            [[r.get(c) for c in IMAGE_COLS] for r in rows])
+        cur.execute(f"SELECT id FROM {IMAGE_TABLE} WHERE record_id IS NULL")
+        new_ids = [r["id"] for r in cur.fetchall()]
+        if new_ids:
+            cur.execute(f"""UPDATE {IMAGE_TABLE} SET record_id = CONCAT('img_', DATE_FORMAT(collect_time, %s), '_', LPAD(id, 6, '0'))
+                            WHERE record_id IS NULL""", ("%Y%m%d",))
+    if new_ids:
+        ods_sync(new_ids)
+    return n or 0
+
+
+_ods_warned = False
+
+
+def ods_exists():
+    with cursor() as cur:
+        return table_exists(cur, ODS_TABLE)
+
+
+def _ensure_partitions(cur, dates):
+    """交付表按 travel_date RANGE 分区；写入日期 >= 现有最大上界时，按你的命名习惯 p<上界> 追加分区。"""
+    name = ODS_TABLE.replace("`", "").split(".")
+    schema, table = (name[0], name[1]) if len(name) == 2 else (DB["database"], name[0])
+    cur.execute("""SELECT partition_name AS n, partition_description AS d FROM information_schema.partitions
+                   WHERE table_schema=%s AND table_name=%s AND partition_name IS NOT NULL""", (schema, table))
+    parts = list(cur.fetchall())
+    if not parts or any(str(p["d"]).upper() == "MAXVALUE" for p in parts):
+        return
+    top = max(int(p["d"]) for p in parts)
+    from datetime import datetime as _dt, timedelta as _td
+    for d in sorted(set(dates)):
+        if d < top:
+            continue
+        lt = int((_dt.strptime(str(d), "%Y%m%d") + _td(days=1)).strftime("%Y%m%d"))
+        if not ODS_AUTO_PARTITION:
+            raise RuntimeError(f"{ODS_TABLE} 没有 travel_date={d} 的分区（现有上界 {top}），请先 ADD PARTITION p{lt} VALUES LESS THAN ({lt})")
+        cur.execute(f"ALTER TABLE {ODS_TABLE} ADD PARTITION (PARTITION p{lt} VALUES LESS THAN ({lt}))")
+        print(f"已给 {ODS_TABLE} 追加分区 p{lt} VALUES LESS THAN ({lt})", flush=True)
+        top = lt
+
+
+def ods_sync(ids=None, batch=2000):
+    """把 scenic_poi_image 的记录写进交付表（主键 record_id+travel_date，重复写会被忽略）。ids=None 表示全部（补写）。"""
+    global _ods_warned
+    import match
+    if not ods_exists():
+        if not _ods_warned:
+            print(f"提示：交付表 {ODS_TABLE} 不存在，图片只写在 {IMAGE_TABLE}", flush=True)
+            _ods_warned = True
+        return 0
+    cols = ["record_id", "poi_id", "poi_name", "scenic_id", "scenic_name", "image_url", "lon", "lat", "province", "city", "district",
+            "total_count", "review_id", "image_id", "width", "height", "collect_time", "data_source", "is_modified", "travel_date"]
+    written, offset, last = 0, 0, 0
+    while True:
+        with cursor() as cur:
+            if ids is not None:
+                chunk = ids[offset:offset + batch]
+                offset += len(chunk)
+                if not chunk:
+                    break
+                cur.execute(f"SELECT * FROM {IMAGE_TABLE} WHERE id IN ({','.join(['%s'] * len(chunk))}) AND record_id IS NOT NULL", chunk)
+            else:
+                cur.execute(f"SELECT * FROM {IMAGE_TABLE} WHERE id > %s AND record_id IS NOT NULL ORDER BY id LIMIT %s", (last, batch))
+            rows = list(cur.fetchall())
+            if not rows:
+                if ids is None:
+                    break
+                continue
+            last = rows[-1]["id"]
+            out = []
+            for r in rows:
+                lon, lat = r["lon"], r["lat"]
+                if ODS_COORD == "wgs84":
+                    lon, lat = match.gcj02_to_wgs84(lon, lat)
+                ct = r["collect_time"]
+                out.append([r["record_id"], r["poi_id"], r["poi_name"] or "", r["scenic_id"], r["scenic_name"] or "", r["image_url"],
+                            None if lon is None else round(lon, 6), None if lat is None else round(lat, 6),
+                            r["province"], r["city"], r["district"], r["total_count"], r["review_id"], r["image_id"],
+                            r["width"], r["height"], ct, r["data_source"], r["is_modified"], int(ct.strftime("%Y%m%d"))])
+            _ensure_partitions(cur, [o[-1] for o in out])
+            written += cur.executemany(f"INSERT IGNORE INTO {ODS_TABLE} ({','.join(cols)}) VALUES ({','.join(['%s'] * len(cols))})", out) or 0
+    return written
+
+
+def image_stats(f=None):
+    """按城市：可采 POI 数 / 已采完 / 图片数。"""
+    with cursor() as cur:
+        cur.execute(f"""SELECT s.{C['city']} city, COUNT(DISTINCT i.poi_id) poi_qty, COUNT(*) image_qty
+                        FROM {IMAGE_TABLE} i JOIN {SCENIC_TABLE} s ON s.{C['id']} = i.scenic_id GROUP BY 1""")
+        imgs = {r["city"]: r for r in cur.fetchall()}
+        cur.execute(f"""SELECT status, COUNT(*) n FROM {CRAWL_TABLE} GROUP BY status""")
+        crawl = {r["status"]: r["n"] for r in cur.fetchall()}
+        cur.execute(f"SELECT COUNT(*) n FROM {IMAGE_TABLE}")
+        total = cur.fetchone()["n"]
+    return dict(image_total=total, crawl=crawl, by_city=[dict(city=k, poi_qty=v["poi_qty"], image_qty=v["image_qty"]) for k, v in imgs.items()])
+
+
+def images_query(scenic_id=None, poi_id=None, limit=50, offset=0):
+    where, params = [], []
+    if scenic_id:
+        where.append("scenic_id=%s"); params.append(scenic_id)
+    if poi_id:
+        where.append("poi_id=%s"); params.append(int(poi_id))
+    w = ("WHERE " + " AND ".join(where)) if where else ""
+    with cursor() as cur:
+        cur.execute(f"SELECT COUNT(*) n FROM {IMAGE_TABLE} {w}", params)
+        total = cur.fetchone()["n"]
+        cur.execute(f"""SELECT record_id, poi_id, poi_name, scenic_id, scenic_name, image_url, image_thumb_url, lon, lat, province, city,
+                        district, total_count, comment_total, review_id, image_id, width, height, collect_time, data_source, is_modified
+                        FROM {IMAGE_TABLE} {w} ORDER BY id LIMIT %s OFFSET %s""", params + [int(limit), int(offset)])
+        rows = _jsonable(list(cur.fetchall()))
+    return dict(total=total, items=rows)
