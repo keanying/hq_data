@@ -187,6 +187,8 @@
   :host(.embed) .side .tools { gap: 6px; }
   :host(.embed) .maincol > .tools:first-child { margin-top: 0; }
   :host(.embed) .body > .muted, :host(.embed) .body > .empty-state { flex: 1; padding: 16px 20px; align-self: flex-start; }
+  :host(.embed) .approved-note { margin: 0 0 12px; padding: 12px 14px; border-radius: 12px; background: #e8f7ee; color: #1c7c3f; font-size: 13px; line-height: 1.6; }
+  :host(.embed) .approved-note .layui-icon { margin-right: 4px; }
   /* layui 图标 */
   :host(.embed) .layui-icon { font-size: 15px; line-height: 1; vertical-align: -2px; }
   :host(.embed) header .layui-icon { font-size: 16px; vertical-align: 0; }
@@ -249,6 +251,7 @@
   .row { border: 1px solid #eaeef2; border-radius: 8px; padding: 8px 10px; margin-bottom: 6px; display: grid; grid-template-columns: 22px 1fr auto; gap: 4px 8px; align-items: start; background: #fff; }
   .row.keep { border-color: #1a7f37; border-left: 4px solid #1f883d; padding-left: 7px; background: #f6fff8; }
   .row.dim { opacity: .55; }
+  .approved-note { margin: 0 0 8px; padding: 8px 10px; border-radius: 6px; background: #dafbe1; color: #1a7f37; font-size: 12px; }
   .idx { font-weight: 700; color: #0969da; text-align: center; line-height: 20px; }
   .idx.c { color: #8c959f; }
   .l1 { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; line-height: 20px; }
@@ -374,7 +377,37 @@
       S.list = add.concat(S.list); S.i += add.length; S.base = off;
       return add.length;
     }
+    // 「全部」筛选：翻页（‹ › / Enter / 自动下一个）只停在没审核的景区上，已审核的直接跳过
+    const skipApproved = () => ((prefs.filters || {}).status || 'todo') === 'all' && !(prefs.filters || {}).q;
     async function go(delta) {
+      if (skipApproved() && delta !== 0) {
+        const dir = delta > 0 ? 1 : -1;
+        let j = S.i + delta, passed = 0;
+        for (;;) {
+          if (j < 0) {
+            if ((S.base || 0) <= 0) break;
+            try { const n = await loadBefore(); j += n; } catch (e) { if (e.message === '__stale__') return; throw e; }
+            continue;
+          }
+          if (j >= S.list.length) {
+            let added = 0;
+            try { added = await loadList(false); } catch (e) { if (e.message === '__stale__') return; throw e; }
+            if (!added) break;
+            continue;
+          }
+          if (Number(S.list[j].approval) !== 1) break;
+          passed += 1; j += dir;
+        }
+        if (j < 0 || j >= S.list.length) {
+          toast(dir > 0 ? '后面没有未审核的景区了' : '前面没有未审核的景区了'); renderProgress(); return;
+        }
+        const prevCity = S.detail && S.detail.scenic.city;
+        S.i = j;
+        await openScenic(S.list[j].id);
+        if (passed) toast(`已跳过 ${passed} 个已审核的景区`);
+        else if (dir > 0 && prevCity && S.detail && S.detail.scenic.city !== prevCity) toast(`${prevCity} 已跑完，开始 ${S.detail.scenic.city}`);
+        return;
+      }
       if (S.i + delta < 0 && (S.base || 0) > 0) {
         try { await loadBefore(); } catch (e) { if (e.message === '__stale__') return; throw e; }
       }
@@ -419,7 +452,8 @@
       S.manualOff = new Set(); S.autoKept = new Set(); cancelAutoApprove(true); cancelIdleSkip(true); S.takenOver = false;
       $('#note').value = (S.detail.status && S.detail.status.note) || '';
       render();
-      if (prefs.auto_search) await autoSequence();
+      // 已审核（approval=1）的景区：不再自动搜索 / 自动保留 / 自动审核，只展示已保留的；要复核手动点搜索词或「重新搜索」
+      if (prefs.auto_search && Number(d.scenic.approval) !== 1) await autoSequence();
     }
     function renderProgress() {
       const st = { todo: '待核对', done: '已审核', skip: '已跳过', auto: '自动通过', all: '全部' }[(prefs.filters || {}).status] || '';
@@ -663,6 +697,7 @@
         toast(status === 'done' ? '已审核（approval=1）' : '已跳过');
         refreshCities();
         if ((prefs.filters || {}).status === 'todo') { S.list.splice(S.i, 1); S.total = Math.max(0, S.total - 1); S.i -= 1; }
+        else if (S.list[S.i]) { S.list[S.i].approval = status === 'done' ? 1 : S.list[S.i].approval; S.list[S.i].status = status; }
         await go(1);
       } catch (e) { toast('保存失败：' + e.message, true); }
     }
@@ -845,6 +880,7 @@
         <div class="sec side-sec"><b>搜索词</b><span class="muted">点一下在携程里搜</span></div>
         <div class="tools">${chips}</div>${spotRow}
         </aside><section class="maincol">
+        ${Number(s.approval) === 1 && !S.searches.length && !S.loading ? `<div class="approved-note">${IC('ok-circle', '✓')} 这个景区已审核（approval=1），不再自动搜索和审核。需要复核时点左侧的搜索词，或在下面输入关键词搜索；改了保留之后点「审核完成」保存。</div>` : ''}
         <div class="tools">
           <input type="text" id="kw" placeholder="自定义关键词（按 / 聚焦）" style="flex:1;min-width:140px">
           <button id="kw-go">${IC('search', '')} 搜索</button>
