@@ -1,7 +1,7 @@
 """景区 POI 数据工作台 —— 常驻服务（网页 + 接口）。
 
     python service.py --channel chrome            # 默认 http://127.0.0.1:8800 ，浏览器打开即是工作台
-    python service.py --all-cities --port 8800
+    python service.py --cities 北京市,上海市 --port 8800   # 只看部分城市（默认全国）
 
 - 网页：总览 / 核对 / 图片采集 / 数据预览 / 图片预览 / 任务中心（web/ 目录，React + Semi Design 本地副本，无需构建、不依赖 CDN）
 - 核对：网页里的核对面板（与 panel.js 同一份代码），搜索由服务端浏览器在携程搜索框里输入、读下拉结果
@@ -401,9 +401,12 @@ def main():
     ap.add_argument("--headless", action="store_true", help="无界面（遇到验证码没法人工处理，不建议）")
     ap.add_argument("--start-url", default=review.DEFAULT_START_URL)
     ap.add_argument("--throttle-ms", type=int, default=0, help="两次搜索最小间隔（毫秒），默认 2500")
-    ap.add_argument("--all-cities", action="store_true", help="全国所有城市（默认只 CITIES 的 7 城）")
+    ap.add_argument("--cities", default="", help="只看这些城市（逗号分隔，按顺序依次跑），如 北京市,上海市；默认全国")
+    ap.add_argument("--all-cities", action="store_true", help="全国（现在默认就是全国，保留兼容）")
     args = ap.parse_args()
     args.pattern = review.DEFAULT_PATTERNS
+    if args.cities:
+        db.DEFAULT_CITIES = [c.strip() for c in args.cities.split(",") if c.strip()]
     if args.all_cities:
         db.DEFAULT_CITIES = []
     print("检查 MySQL（第一次升级到新版本时会顺带升级数据，表大时要等一会，进度会打印在下面）…", flush=True)

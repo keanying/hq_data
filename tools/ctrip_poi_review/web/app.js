@@ -256,12 +256,16 @@
     const [jobs] = usePoll(() => api('/api/jobs'), 5000);
     const o = ov || {};
     const crawl = o.crawl || {};
-    const cities = (o.cities || []).filter((c) => c.city);
+    const cities = (o.cities || []).filter((c) => c.city)
+      .sort((a, b) => (a.province || '').localeCompare(b.province || '', 'zh') || (+b.n || 0) - (+a.n || 0));
     const rate = (c) => pct(+c.reviewed || 0, +c.n || 0);
-    const top = Math.max(5, ...cities.map(rate));
+    // 柱状图只放景区最多的 12 个城市（全国 300 多个城市放不下），完整的在下面的表里
+    const big = [...cities].sort((a, b) => (+b.n || 0) - (+a.n || 0)).slice(0, 12);
+    const top = Math.max(5, ...big.map(rate));
     const T = +o.total || 0, A = +o.approved || 0, S = +o.skipped || 0, R = Math.max(0, T - A - S);
     const cityCols = [
-      { title: '城市', dataIndex: 'city', width: 80, render: (v) => shortCity(v) },
+      { title: '省份', dataIndex: 'province', width: 96, render: (v) => html`<div className="ell muted" title=${v || ''}>${(v || '').replace(/(省|市|自治区|壮族|回族|维吾尔)+$/, '')}</div>` },
+      { title: '城市', dataIndex: 'city', width: 130, render: (v) => html`<div className="ell" title=${v}>${shortCity(v)}</div>` },
       { title: '景区', dataIndex: 'n', width: 64, align: 'right', render: fmt },
       { title: '审核进度', dataIndex: 'reviewed', render: (v, r) => html`<div style=${{ display: 'flex', alignItems: 'center', gap: 10 }}>
           <div className="bar-track" style=${{ flex: 1 }}><i style=${{ width: `${Math.min(100, rate(r))}%` }}></i></div>
@@ -290,11 +294,11 @@
         </div>
       </div>
       <div className="ov-right">
-        <${Card} title="各城市审核完成率" sub="已审核 / 景区数" className="chart-card">
+        <${Card} title="各城市审核完成率" sub=${cities.length > 12 ? '景区最多的 12 个城市' : '已审核 / 景区数'} className="chart-card">
           <div style=${{ flex: 1, display: 'flex', flexDirection: 'column', minHeight: 0 }}>
-            <div className="cols">${cities.map((c) => html`<${Tooltip} key=${c.city} content=${`${shortCity(c.city)}：已审核 ${fmt(c.reviewed || 0)} / ${fmt(c.n)}（${rate(c)}%）`}>
+            <div className="cols">${big.map((c) => html`<${Tooltip} key=${c.city} content=${`${shortCity(c.city)}：已审核 ${fmt(c.reviewed || 0)} / ${fmt(c.n)}（${rate(c)}%）`}>
               <div className="c"><span className="val">${rate(c)}%</span><div className="col" style=${{ height: `${(rate(c) / top) * 82}%` }}></div></div><//>`)}</div>
-            <div className="cols-x">${cities.map((c) => html`<span key=${c.city}>${shortCity(c.city)}</span>`)}</div>
+            <div className="cols-x">${big.map((c) => html`<span key=${c.city}>${shortCity(c.city)}</span>`)}</div>
           </div>
         <//>
         <${Card} title="审核完成度" sub=${`共 ${fmt(T)} 个景区`} className="chart-card">
@@ -311,7 +315,7 @@
           </div>
         <//>
       </div>
-      <${Card} title="各城市进度" sub="点一行看该城市的景区" bodyClass="flush">
+      <${Card} title="各城市进度" sub=${`${fmt(cities.length)} 个城市 · 点一行看该城市的景区`} bodyClass="flush">
         <div className="fill" ref=${box}>${h > 0 && html`<${Table} size="small" columns=${cityCols} dataSource=${cities} rowKey="city"
           pagination=${false} scroll=${{ y: h - 41 }} loading=${!ov} onRow=${(r) => ({ onClick: () => go('data', { city: r.city }), style: { cursor: 'pointer' } })} />`}</div>
       <//>

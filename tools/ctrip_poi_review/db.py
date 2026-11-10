@@ -57,7 +57,8 @@ COLS = {
 }
 COLS.update(json.loads(ENV("SCENIC_COLS", "{}")))
 C = {k: ident(v) for k, v in COLS.items()}
-DEFAULT_CITIES = [c for c in ENV("CITIES", "北京市,上海市,广州市,深圳市,杭州市,成都市,西安市").split(",") if c]
+# 默认全国（客户表全部景区）；CITIES=北京市,上海市 或 --cities 只看这些城市（按给定顺序依次跑）
+DEFAULT_CITIES = [c.strip() for c in ENV("CITIES", "ALL").split(",") if c.strip()]
 if [c.strip().lower() for c in DEFAULT_CITIES] in (["all"], ["*"], ["全部"]):  # CITIES=ALL：全国
     DEFAULT_CITIES = []
 GRADE_ORDER = f"FIELD(s.{C['grade']},'5A','4A','3A','2A','1A')"
