@@ -74,6 +74,7 @@ CREATE TABLE IF NOT EXISTS scenic_poi_image (
   review_id BIGINT NULL, image_id BIGINT NOT NULL COMMENT '由图片链接算出', ctrip_image_id BIGINT NULL COMMENT '携程 imageId',
   old_record_id VARCHAR(64) NULL COMMENT '旧版 record_id（迁移时保留）', width INT NULL, height INT NULL,
   review_score DOUBLE NULL, review_publish_time DATETIME NULL,
+  review_content TEXT NULL COMMENT '点评内容', review_url VARCHAR(512) NULL COMMENT '点评详情页', tourist_type VARCHAR(32) NULL COMMENT '出游类型',
   collect_time DATETIME NOT NULL, data_source VARCHAR(32) NOT NULL DEFAULT 'OTA-图片爬取', is_modified TINYINT NOT NULL DEFAULT 0,
   UNIQUE KEY uk_scenic_poi_image (scenic_id, poi_id, image_id), KEY idx_poi (poi_id), KEY idx_record (record_id), KEY idx_review (review_id)
 ) DEFAULT CHARSET=utf8mb4 COMMENT='景点图像识别：携程点评图片';

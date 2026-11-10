@@ -61,6 +61,8 @@ def rows_from_items(items, total, scenic, poi, collect_time, image_total=None):
                 # image_id / record_id 在 db.images_insert 里由图片链接算出
                 width=im.get("width"), height=im.get("height"),
                 review_score=_num(it.get("score")), review_publish_time=parse_ms_date(it.get("publishTime")),
+                review_content=(it.get("content") or None), review_url=(it.get("jumpH5Url") or None),
+                tourist_type=(it.get("touristTypeDisplay") or None),
                 collect_time=collect_time, data_source=DATA_SOURCE, is_modified=0,
             ))
     return rows
@@ -98,6 +100,7 @@ JS_NEXT_STATE = """(el) => {
 
 
 SKIP_MSG = "手动跳到下一个 POI"
+NO_DATA_MSG = "该 POI 没有图片数据"
 
 
 class CommentImageCrawler:
@@ -135,8 +138,9 @@ class CommentImageCrawler:
                     js = await resp.json()
                 except Exception:
                     continue
-                if isinstance(js, dict) and isinstance(js.get("result"), dict):
-                    return js
+                # 接口返回了就算数：result 为空 / items 为空 → 上层判定「没有数据」立即换下一个 POI，不再干等
+                if isinstance(js, dict) and ("result" in js or "items" in js):
+                    return js if "result" in js else {"result": js}
             await asyncio.sleep(0.2)
         return None
 
@@ -165,8 +169,11 @@ class CommentImageCrawler:
         self.skipped = False
         db.crawl_put(sid, pid, poi_name=poi.get("poiName"), poi_uri=poi.get("poiUri"), status="running", message=None)
         try:
-            await page.goto(poi["poiUri"], wait_until="domcontentloaded", timeout=30000)
+            resp = await page.goto(poi["poiUri"], wait_until="domcontentloaded", timeout=30000)
             await self._check_blocked()
+            if resp is not None and resp.status >= 400:
+                stat["stop"] = f"页面打不开（HTTP {resp.status}），换下一个 POI"
+                return stat
             if self.skipped:
                 stat["stop"] = SKIP_MSG
                 return stat
@@ -179,23 +186,36 @@ class CommentImageCrawler:
             if ssr and ssr.get("poiId") and str(ssr["poiId"]) != str(pid):
                 stat["stop"] = f"页面上的 poiId={ssr['poiId']}（{ssr.get('poiName')}）与预期 {pid} 不符，未采集（poiUri 可能指向了别的 POI）"
                 return stat
+            # 页面数据里明确没有图片 / 没有点评：不翻页，立即换下一个 POI
+            if ssr and ssr.get("imageCount") == 0:
+                stat["image_total"] = 0
+                stat["stop"] = NO_DATA_MSG + "（页面图片总数 0），换下一个 POI"
+                return stat
+            if ssr and (ssr.get("commentTotal") == 0 or ssr.get("items") == []):
+                stat["stop"] = NO_DATA_MSG + "（页面没有点评），换下一个 POI"
+                return stat
             js = None
             if ssr and ssr.get("items") is not None:
                 js = {"result": {"items": ssr["items"], "totalCount": ssr.get("commentTotal")}}
             else:
-                for _ in range(20):
+                # 页面里没有 __NEXT_DATA__ 点评：滚几下等接口返回，约 5 秒没有就放弃（不再长时间等待）
+                for _ in range(8):
                     js = await self._wait_new(captured, seen_n) if captured[seen_n[0]:] else None
-                    if js:
+                    if js or self.skipped:
                         break
                     await page.mouse.wheel(0, random.randint(600, 1000))
-                    await page.wait_for_timeout(random.randint(300, 600))
-                if not js:
-                    js = await self._wait_new(captured, seen_n)
+                    await page.wait_for_timeout(random.randint(300, 500))
+                if not js and not self.skipped:
+                    old_t, self.timeout_s = self.timeout_s, 2.0
+                    try:
+                        js = await self._wait_new(captured, seen_n)
+                    finally:
+                        self.timeout_s = old_t
             if self.skipped:
                 stat["stop"] = SKIP_MSG
                 return stat
             if not js:
-                stat["stop"] = "没读到第一页点评（页面没有点评，或结构变了：可用 dump_page.py 抓页面结构）"
+                stat["stop"] = "没读到第一页点评：页面没有返回点评数据，换下一个 POI（若很多 POI 都这样，可能是页面结构变了：用 dump_page.py 抓页面结构）"
                 return stat
             last_ids = None
             collect_time = datetime.now(CN_TZ).strftime("%Y-%m-%d %H:%M:%S")
@@ -209,8 +229,12 @@ class CommentImageCrawler:
             while True:
                 items, total = comment_result(js)
                 ids = [it.get("commentId") for it in items]
-                if not items or ids == last_ids:
-                    stat["stop"] = "没有更多点评" if not items else "翻页后内容没变，停止"
+                if not items:
+                    stat["stop"] = (NO_DATA_MSG + "（接口返回 items 为空），换下一个 POI") if stat["pages"] == 0 \
+                        else "没有更多点评（接口返回 items 为空）"
+                    break
+                if ids == last_ids:
+                    stat["stop"] = "翻页后内容没变，停止"
                     break
                 last_ids = ids
                 stat["pages"] += 1
@@ -257,7 +281,7 @@ class CommentImageCrawler:
             return stat
         finally:
             page.remove_listener("response", on_resp)
-            ok = stat["stop"] and not stat["stop"].startswith(("没读到", "点「下一页」后", "已取消", "页面上的 poiId"))
+            ok = stat["stop"] and not stat["stop"].startswith(("没读到", "点「下一页」后", "已取消", "页面上的 poiId", "页面打不开"))
             db.crawl_put(sid, pid, status="done" if ok else ("failed" if stat["pages"] == 0 else "partial"),
                          message=stat["stop"] or "中断")
 

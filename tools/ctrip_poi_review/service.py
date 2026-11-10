@@ -366,8 +366,15 @@ def create_app(args):
         return j.brief()
 
     @app.get("/api/images")
-    def images(scenic_id: str = "", poi_id: str = "", city: str = "", q: str = "", limit: int = 60, offset: int = 0):
-        return db.images_query(scenic_id or None, poi_id or None, min(max(limit, 1), 500), max(offset, 0), city or None, q or None)
+    def images(scenic_id: str = "", poi_id: str = "", city: str = "", q: str = "", score_min: str = "", sort: str = "collect",
+               limit: int = 60, offset: int = 0):
+        return db.images_query(scenic_id or None, poi_id or None, min(max(limit, 1), 500), max(offset, 0), city or None, q or None,
+                               score_min or None, sort)
+
+    @app.get("/api/image_facets")
+    def image_facets(city: str = "", scenic_id: str = "", q: str = ""):
+        """图片预览的下拉选项：有图片的城市、景区（带图片数），选了景区再给它的 POI。"""
+        return db.image_facets(city or None, scenic_id or None, q or None)
 
     @app.get("/api/crawl_records")
     def crawl_records(status: str = "", q: str = "", limit: int = 50, offset: int = 0):

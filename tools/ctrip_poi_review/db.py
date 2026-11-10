@@ -107,6 +107,7 @@ DDL += [
   old_record_id VARCHAR(64) NULL COMMENT '旧版 record_id（img_<采集日期>_<序号>），迁移时保留',
   width INT NULL, height INT NULL,
   review_score DOUBLE NULL COMMENT '点评评分', review_publish_time DATETIME NULL COMMENT '点评发布时间',
+  review_content TEXT NULL COMMENT '点评内容', review_url VARCHAR(512) NULL COMMENT '点评详情页', tourist_type VARCHAR(32) NULL COMMENT '出游类型',
   collect_time DATETIME NOT NULL COMMENT '采集时间',
   data_source VARCHAR(32) NOT NULL DEFAULT 'OTA-图片爬取',
   is_modified TINYINT NOT NULL DEFAULT 0 COMMENT '是否人工修改过：0-否 1-是',
@@ -613,7 +614,7 @@ def addr_put(poi_id, biz_id, name, address, page_url):
 
 # ---------------------------------------------------------------- 点评图片（景点图像识别）
 # 这些原因再采也一样，算「采过了」，不自动重采
-PERMANENT_FAIL = ("页面上的 poiId", "没读到第一页点评")
+PERMANENT_FAIL = ("页面上的 poiId", "没读到第一页点评", "该 POI 没有图片数据")
 
 
 def crawled_set():
@@ -684,7 +685,7 @@ def crawl_put(sid, poi_id, **kw):
 
 IMAGE_COLS = ["record_id", "ctrip_image_id", "poi_id", "poi_name", "scenic_id", "scenic_name", "image_url", "image_thumb_url", "lon", "lat", "province", "city",
               "district", "total_count", "comment_total", "review_id", "image_id", "width", "height", "review_score",
-              "review_publish_time", "collect_time", "data_source", "is_modified"]
+              "review_publish_time", "review_content", "review_url", "tourist_type", "collect_time", "data_source", "is_modified"]
 
 
 def image_key(url):
@@ -828,6 +829,11 @@ def ensure_image_columns():
         if "ctrip_image_id" not in cols:
             print(f"图片表 {IMAGE_TABLE} 增加 ctrip_image_id / old_record_id 字段（只做一次）…", flush=True)
             cur.execute(f"ALTER TABLE {IMAGE_TABLE} ADD COLUMN ctrip_image_id BIGINT NULL COMMENT '携程接口里的 imageId' AFTER image_id")
+        if "review_content" not in cols:
+            print(f"图片表 {IMAGE_TABLE} 增加点评内容字段（只做一次）…", flush=True)
+            cur.execute(f"""ALTER TABLE {IMAGE_TABLE} ADD COLUMN review_content TEXT NULL COMMENT '点评内容' AFTER review_publish_time,
+                            ADD COLUMN review_url VARCHAR(512) NULL COMMENT '点评详情页' AFTER review_content,
+                            ADD COLUMN tourist_type VARCHAR(32) NULL COMMENT '出游类型' AFTER review_url""")
         if "old_record_id" not in cols:
             cur.execute(f"ALTER TABLE {IMAGE_TABLE} ADD COLUMN old_record_id VARCHAR(64) NULL COMMENT '旧版 record_id' AFTER ctrip_image_id")
 
@@ -924,26 +930,59 @@ def image_stats(f=None):
     return dict(image_total=total, crawl=crawl, by_city=[dict(city=k, poi_qty=v["poi_qty"], image_qty=v["image_qty"]) for k, v in imgs.items()])
 
 
-def images_query(scenic_id=None, poi_id=None, limit=50, offset=0, city=None, q=None):
+IMAGE_SORTS = {"collect": "i.id DESC", "publish": "i.review_publish_time DESC, i.id DESC", "score": "i.review_score DESC, i.id DESC",
+               "size": "(i.width * i.height) DESC, i.id DESC"}
+
+
+def _image_where(scenic_id=None, poi_id=None, city=None, q=None, score_min=None):
     where, params = [], []
     if scenic_id:
-        where.append("scenic_id=%s"); params.append(scenic_id)
+        where.append("i.scenic_id=%s"); params.append(scenic_id)
     if poi_id:
-        where.append("poi_id=%s"); params.append(int(poi_id))
+        where.append("i.poi_id=%s"); params.append(int(poi_id))
     if city:
-        where.append("city=%s"); params.append(city)
+        where.append("i.city=%s"); params.append(city)
     if q:
-        where.append("(scenic_name LIKE %s OR poi_name LIKE %s OR scenic_id=%s)"); params += [f"%{q}%", f"%{q}%", q]
-    w = ("WHERE " + " AND ".join(where)) if where else ""
+        where.append("(i.scenic_name LIKE %s OR i.poi_name LIKE %s OR i.scenic_id=%s OR i.record_id=%s)"); params += [f"%{q}%", f"%{q}%", q, q]
+    if score_min not in (None, ""):
+        where.append("i.review_score >= %s"); params.append(float(score_min))
+    return ("WHERE " + " AND ".join(where)) if where else "", params
+
+
+def images_query(scenic_id=None, poi_id=None, limit=50, offset=0, city=None, q=None, score_min=None, sort="collect"):
+    w, params = _image_where(scenic_id, poi_id, city, q, score_min)
+    order = IMAGE_SORTS.get(sort or "collect", IMAGE_SORTS["collect"])
     with cursor() as cur:
-        cur.execute(f"SELECT COUNT(*) n FROM {IMAGE_TABLE} {w}", params)
+        cur.execute(f"SELECT COUNT(*) n FROM {IMAGE_TABLE} i {w}", params)
         total = cur.fetchone()["n"]
-        cur.execute(f"""SELECT record_id, poi_id, poi_name, scenic_id, scenic_name, image_url, image_thumb_url, lon, lat, province, city,
-                        district, total_count, comment_total, review_id, image_id, width, height, review_score, review_publish_time,
-                        collect_time, data_source, is_modified
-                        FROM {IMAGE_TABLE} {w} ORDER BY id DESC LIMIT %s OFFSET %s""", params + [int(limit), int(offset)])
+        cur.execute(f"""SELECT i.record_id, i.poi_id, i.poi_name, i.scenic_id, i.scenic_name, i.image_url, i.image_thumb_url, i.lon, i.lat,
+                        i.province, i.city, i.district, i.total_count, i.comment_total, i.review_id, i.image_id, i.ctrip_image_id,
+                        i.width, i.height, i.review_score, i.review_publish_time, i.review_content, i.review_url, i.tourist_type,
+                        i.collect_time, i.data_source, i.is_modified, c.poi_uri
+                        FROM {IMAGE_TABLE} i LEFT JOIN {CRAWL_TABLE} c ON c.scenic_id = i.scenic_id AND c.poi_id = i.poi_id
+                        {w} ORDER BY {order} LIMIT %s OFFSET %s""", params + [int(limit), int(offset)])
         rows = _jsonable(list(cur.fetchall()))
     return dict(total=total, items=rows)
+
+
+def image_facets(city=None, scenic_id=None, q=None, limit=200):
+    """图片预览的下拉选项：有图片的景区（按城市 / 关键词），选了景区再给它的 POI。都带图片数。"""
+    w, params = _image_where(None, None, city, None, None)
+    if q:
+        w += (" AND " if w else "WHERE ") + "(i.scenic_name LIKE %s OR i.scenic_id = %s)"
+        params += [f"%{q}%", q]
+    with cursor() as cur:
+        cur.execute(f"""SELECT i.scenic_id id, MAX(i.scenic_name) name, MAX(i.city) city, COUNT(*) n FROM {IMAGE_TABLE} i {w}
+                        GROUP BY i.scenic_id ORDER BY n DESC LIMIT %s""", params + [int(limit)])
+        scenics = list(cur.fetchall())
+        pois = []
+        if scenic_id:
+            cur.execute(f"""SELECT i.poi_id id, MAX(i.poi_name) name, COUNT(*) n FROM {IMAGE_TABLE} i WHERE i.scenic_id = %s
+                            GROUP BY i.poi_id ORDER BY n DESC""", (scenic_id,))
+            pois = list(cur.fetchall())
+        cur.execute(f"SELECT i.city, COUNT(*) n FROM {IMAGE_TABLE} i GROUP BY i.city ORDER BY n DESC")
+        cities = list(cur.fetchall())
+    return _jsonable(dict(scenics=scenics, pois=pois, cities=cities))
 
 
 def overview():
