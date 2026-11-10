@@ -10,6 +10,7 @@
   comment_api/*.json   getCommentCollapseList 的完整请求体和返回（翻页前后各一份）
   pager.html           含「下一页」的元素及其父级 HTML
   image_total.txt      页面上看起来像「图片总数」的片段
+  next_data.json       __NEXT_DATA__ 摘要：poiId、图片总数 imageCount、点评总数、第一页点评数（采集规则就靠这些）
 不会保存请求头和 Cookie；请求体里 auth / token / ticket 之类的字段会打码。
 """
 import argparse
@@ -130,6 +131,15 @@ async def main():
         else:
             print("没找到「下一页」", flush=True)
         (out / "image_total.txt").write_text(await page.evaluate(JS_IMAGE_TOTAL), encoding="utf-8")
+        import crawler
+        try:
+            ssr = await page.evaluate(crawler.JS_SSR)
+        except Exception as e:
+            ssr = {"error": str(e)}
+        if ssr and isinstance(ssr.get("items"), list):
+            ssr = dict(ssr, items=f"{len(ssr['items'])} 条，图片 {sum(len(i.get('images') or []) for i in ssr['items'])} 张")
+        (out / "next_data.json").write_text(json.dumps(ssr, ensure_ascii=False, indent=1), encoding="utf-8")
+        print(f"__NEXT_DATA__：{ssr}", flush=True)
         (out / "text.txt").write_text(await page.evaluate("() => document.body.innerText"), encoding="utf-8")
         (out / "page.html").write_text(await page.content(), encoding="utf-8")
         await page.screenshot(path=str(out / "page.png"), full_page=True)

@@ -181,8 +181,9 @@ python review.py export -o scenic_ctrip_poi_mapping.csv
 
 ## 7. 景点图像识别：采集点评图片
 
-对已审核（`approval=1`）景区 `ctrip_poi_info` 里的每个 POI：打开它的携程主页 → 往下滚到「用户点评」→ 一页页点「下一页」，
-旁路读取页面自己发出的 `getCommentCollapseList` 返回，把点评里的图片写进 MySQL。不自己调接口。
+对已审核（`approval=1`）景区 `ctrip_poi_info` 里的每个 POI：打开它的携程主页 → 第一页点评直接读页面里服务端渲染的 `__NEXT_DATA__`
+（`initialState.commentList`，这一页不会发请求）→ 一页页点「下一页」，旁路读取页面自己发出的 `getCommentCollapseList` 返回，
+把点评里的图片写进 MySQL。不自己调接口。页面上的 `poiDetail.poiId` 和 `ctrip_poi_info` 的 poiId 不一致时不采集（记录原因）。
 
 ```bash
 python review.py images --channel chrome --grade 5A,4A
@@ -200,7 +201,7 @@ python review.py images --channel chrome --grade 5A,4A
 | `scenic_poi_image`（工具自己的表） | 去重、生成 `record_id`（`img_<采集日期>_<序号>`），多存缩略图、点评分、点评发布时间、点评总数 |
 
 字段来源：`poi_id/poi_name` 来自 `ctrip_poi_info`；`scenic_*`、省市区、`lon/lat` 来自客户景区表；`review_id`=commentId，`image_id/width/height/image_url`=点评图片；
-`total_count` = POI 主页上的图片总数（读不到为空，**真实页面的读取规则需用 `dump_page.py` 核对**）；`collect_time` 采集时间，`data_source`=`OTA-图片爬取`，`is_modified`=0。
+`total_count` = POI 图片总数（主页 `__NEXT_DATA__` 的 `poiDetail.imageInfo.imageCount`）；`collect_time` 采集时间，`data_source`=`OTA-图片爬取`，`is_modified`=0。
 
 交付表不存在时只写 `scenic_poi_image`；之后建好交付表，用下面的命令补写（重复的会被忽略）：
 
