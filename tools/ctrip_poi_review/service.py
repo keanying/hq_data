@@ -3,7 +3,7 @@
     python service.py --channel chrome            # 默认 http://127.0.0.1:8800 ，浏览器打开即是工作台
     python service.py --all-cities --port 8800
 
-- 网页：总览 / 核对 / 图片采集 / 数据预览 / 图片预览 / 任务中心（web/ 目录，无需构建）
+- 网页：总览 / 核对 / 图片采集 / 数据预览 / 图片预览 / 任务中心（web/ 目录，React + Semi Design 本地副本，无需构建、不依赖 CDN）
 - 核对：网页里的核对面板（与 panel.js 同一份代码），搜索由服务端浏览器在携程搜索框里输入、读下拉结果
 - 任务队列：自动审核（auto_review）、点评图片采集（images）逐个执行；进度、日志、取消；遇到登录/验证停在「需要人工」
 - 服务端浏览器两个标签页：一个给核对搜索，一个给后台任务，互不打断；浏览器目录和 `review.py run` 分开，可以同时开
@@ -19,6 +19,7 @@ from types import SimpleNamespace
 
 import uvicorn
 from fastapi import Body, FastAPI, HTTPException
+from fastapi.middleware.gzip import GZipMiddleware
 from fastapi.responses import FileResponse, HTMLResponse, Response
 from fastapi.staticfiles import StaticFiles
 
@@ -73,6 +74,29 @@ class Service:
         self.follow = dict(paused=False, current=None, done=0, images=0, failed=0, message="")
         self.follow_log = collections.deque(maxlen=300)
         self.follow_page = None
+        # 正在采集的 POI（follow = 边核对边采集，job = 任务中心的采集任务），用于展示进度和「下一个 POI」
+        self.active: dict[str, dict] = {}
+
+    def track(self, source, c, target, job_id=None):
+        if c is None:
+            self.active.pop(source, None)
+            return
+        info = dict(source=source, job_id=job_id, scenic_id=target["scenic"]["id"], scenic_name=target["scenic"].get("name"),
+                    poi_id=target["poi"].get("poiId"), poi_name=target["poi"].get("poiName"), poi_uri=target["poi"].get("poiUri"),
+                    pages=0, images=0, empty_run=0, max_pages=c.max_pages, empty_limit=c.empty_limit,
+                    started=time.strftime("%H:%M:%S"), crawler=c)
+
+        def on_progress(stat):
+            info.update(pages=stat["pages"], images=stat["images"], empty_run=stat["empty_run"])
+        c.on_progress = on_progress
+        self.active[source] = info
+
+    def active_brief(self):
+        return [{k: v for k, v in a.items() if k != "crawler"} for a in self.active.values()]
+
+    def empty_limit(self):
+        v = self.prefs.get("collect_empty_pages")
+        return 10 if v in (None, "") else int(v)
 
     async def rpc(self, method, payload):
         res = await self._rpc(method, payload)
@@ -109,8 +133,13 @@ class Service:
                 for t in targets:
                     name = f"{t['scenic']['name']} / {t['poi'].get('poiName')}"
                     self.follow["current"] = name
-                    c = crawler.CommentImageCrawler(self.follow_page, max_pages=mp, max_images=mi, log=self.flog)
-                    st = await c.crawl(t)
+                    c = crawler.CommentImageCrawler(self.follow_page, max_pages=mp, max_images=mi, log=self.flog,
+                                                    empty_limit=self.empty_limit())
+                    self.track("follow", c, t)
+                    try:
+                        st = await c.crawl(t)
+                    finally:
+                        self.track("follow", None, None)
                     self.follow["images"] += st["images"]
                     self.flog(f"{name}：{st['pages']} 页，新增图片 {st['images']}；{st['stop']}")
                 self.follow["done"] += 1
@@ -177,13 +206,16 @@ class Service:
             return await crawler.crawl_all(self.browser.get_page, f, max_pages=int(p.get("max_pages") or 20),
                                            max_images=int(p.get("max_images") if p.get("max_images") not in (None, "") else 300),
                                            limit=int(p.get("limit") or 0), refresh=bool(p.get("refresh")),
-                                           log=job.write, should_stop=stop, progress=progress)
+                                           log=job.write, should_stop=stop, progress=progress,
+                                           empty_limit=int(p["empty_pages"]) if p.get("empty_pages") not in (None, "") else self.empty_limit(),
+                                           on_crawler=lambda c, t: self.track("job", c, t, job.id))
         raise ValueError(f"未知任务类型 {job.type}")
 
 
 def create_app(args):
     svc = Service(args)
     app = FastAPI(title="携程 POI 核对 / 景点图像采集服务")
+    app.add_middleware(GZipMiddleware, minimum_size=2048)  # web/vendor 里的前端库较大，压缩后传输
 
     @app.on_event("startup")
     async def _start():
@@ -220,7 +252,8 @@ def create_app(args):
 
     @app.get("/api/follow")
     def follow_state():
-        return dict(svc.follow, enabled=svc.follow_enabled(), pending=len(svc.follow_pending), log=list(svc.follow_log)[-50:])
+        return dict(svc.follow, enabled=svc.follow_enabled(), pending=len(svc.follow_pending), log=list(svc.follow_log)[-50:],
+                    active=svc.active_brief())
 
     @app.post("/api/follow")
     def follow_set(payload: dict = Body(default={})):
@@ -232,6 +265,25 @@ def create_app(args):
         if payload.get("pause"):
             svc.follow["paused"] = True
         return follow_state()
+
+    @app.get("/api/crawl")
+    def crawl_state():
+        """正在采集的 POI：来源、景区、POI、已翻页数、新增图片、连续无新图页数。"""
+        return dict(active=svc.active_brief())
+
+    @app.post("/api/crawl/skip")
+    def crawl_skip(payload: dict = Body(default={})):
+        """手动跳到下一个 POI。source = follow / job，不传则全部正在采集的都跳。"""
+        src = payload.get("source")
+        hit = [a for k, a in svc.active.items() if not src or k == src]
+        for a in hit:
+            a["crawler"].skip()
+            line = f"手动跳过：{a['scenic_name']} / {a['poi_name']}（已翻 {a['pages']} 页）"
+            if a["source"] == "follow":
+                svc.flog(line)
+            elif a.get("job_id") in svc.jobs:
+                svc.jobs[a["job_id"]].write(line)
+        return dict(skipped=len(hit), active=svc.active_brief())
 
     @app.get("/api/overview")
     def overview():
@@ -295,6 +347,10 @@ def create_app(args):
     @app.get("/api/images")
     def images(scenic_id: str = "", poi_id: str = "", city: str = "", q: str = "", limit: int = 60, offset: int = 0):
         return db.images_query(scenic_id or None, poi_id or None, min(max(limit, 1), 500), max(offset, 0), city or None, q or None)
+
+    @app.get("/api/crawl_records")
+    def crawl_records(status: str = "", q: str = "", limit: int = 50, offset: int = 0):
+        return db.crawl_query(status or None, q or None, max(offset, 0), min(max(limit, 1), 200))
 
     @app.get("/api/scenic/{scenic_id}")
     def scenic(scenic_id: str):

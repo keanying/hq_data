@@ -3,46 +3,20 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
+<!-- 携程图片 CDN 不认本地页面的 Referer，统一不带 -->
+<meta name="referrer" content="no-referrer">
 <title>景区 POI 数据工作台</title>
+<link rel="stylesheet" href="/web/vendor/semi.min.css">
+<link rel="stylesheet" href="/web/vendor/semi-icons.min.css">
 <link rel="stylesheet" href="/web/app.css">
 </head>
 <body>
-<div class="blob b1"></div><div class="blob b2"></div><div class="blob b3"></div><div class="ring-deco"></div>
-
-<div class="shell">
-  <nav class="side">
-    <a class="logo" href="#/" title="总览"><svg viewBox="0 0 24 24"><path d="M3 11.5 12 4l9 7.5V20a1 1 0 0 1-1 1h-5v-6H9v6H4a1 1 0 0 1-1-1z"/></svg></a>
-    <a href="#/review" data-view="review" title="核对"><svg viewBox="0 0 24 24"><path d="M9 11l3 3 8-8"/><path d="M20 12v7a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h9"/></svg></a>
-    <a href="#/images" data-view="images" title="图片采集"><svg viewBox="0 0 24 24"><path d="M4 7h3l2-3h6l2 3h3a1 1 0 0 1 1 1v11a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1V8a1 1 0 0 1 1-1z"/><circle cx="12" cy="13" r="4"/></svg></a>
-    <a href="#/data" data-view="data" title="数据预览"><svg viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="16" rx="2"/><path d="M3 10h18M9 10v10"/></svg></a>
-    <a href="#/gallery" data-view="gallery" title="图片预览"><svg viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="16" rx="2"/><circle cx="9" cy="10" r="2"/><path d="m21 16-5-5-9 9"/></svg></a>
-    <a href="#/jobs" data-view="jobs" title="任务中心"><svg viewBox="0 0 24 24"><path d="M8 6h13M8 12h13M8 18h13"/><circle cx="4" cy="6" r="1"/><circle cx="4" cy="12" r="1"/><circle cx="4" cy="18" r="1"/></svg></a>
-    <div class="grow"></div>
-    <a href="/docs" target="_blank" title="接口文档"><svg viewBox="0 0 24 24"><path d="M12 2v10"/><path d="M18.4 6.6a9 9 0 1 1-12.8 0"/></svg></a>
-  </nav>
-
-  <div class="main">
-    <header class="top">
-      <label class="search"><svg viewBox="0 0 24 24"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/></svg>
-        <input id="g-search" placeholder="搜索景区名 / 景区ID / POI…"></label>
-      <a class="icon-btn" href="#/jobs" title="任务中心"><svg viewBox="0 0 24 24"><path d="M21 12a8 8 0 0 1-11.6 7.1L4 20l1-4.4A8 8 0 1 1 21 12z"/><path d="M8 10h8M8 14h5"/></svg></a>
-      <a class="icon-btn" href="#/images" title="边核对边采集" id="bell"><svg viewBox="0 0 24 24"><path d="M6 8a6 6 0 0 1 12 0c0 7 3 9 3 9H3s3-2 3-9"/><path d="M10 21a2 2 0 0 0 4 0"/></svg><i class="dot" hidden></i></a>
-      <button class="user-chip" id="user-chip" title="点击设置核对人"><span id="reviewer">核对人</span><svg viewBox="0 0 24 24"><path d="m6 9 6 6 6-6"/></svg></button>
-      <div class="avatars" id="avatars"></div>
-    </header>
-
-    <section class="view" id="v-overview"></section>
-    <section class="view" id="v-review"></section>
-    <section class="view" id="v-images"></section>
-    <section class="view" id="v-data"></section>
-    <section class="view" id="v-gallery"></section>
-    <section class="view" id="v-jobs"></section>
-  </div>
-</div>
-
-<div class="drawer" id="drawer" hidden><div class="drawer-mask"></div><aside class="drawer-body" id="drawer-body"></aside></div>
-<div class="lightbox" id="lightbox" hidden></div>
-<div class="toast" id="toast" hidden></div>
+<div id="root"><div class="boot">加载中…</div></div>
+<script src="/web/vendor/react.production.min.js"></script>
+<script src="/web/vendor/react-dom.production.min.js"></script>
+<script src="/web/vendor/htm.umd.js"></script>
+<script src="/web/vendor/semi-icons.min.js"></script>
+<script src="/web/vendor/semi-ui.min.js"></script>
 <script src="/web/app.js"></script>
 </body>
 </html>
