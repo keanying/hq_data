@@ -187,6 +187,17 @@
   :host(.embed) .side .tools { gap: 6px; }
   :host(.embed) .maincol > .tools:first-child { margin-top: 0; }
   :host(.embed) .body > .muted, :host(.embed) .body > .empty-state { flex: 1; padding: 16px 20px; align-self: flex-start; }
+  :host(.embed) .approved-note { margin: 0 0 12px; padding: 12px 14px; border-radius: 12px; background: #e8f7ee; color: #1c7c3f; font-size: 13px; line-height: 1.6; }
+  :host(.embed) .approved-note .layui-icon { margin-right: 4px; }
+  :host(.embed) .ai-banner { margin: 4px 0 12px; padding: 10px 14px; border-radius: 12px; background: #f4f2ff; color: #3f2a99; font-size: 13px; line-height: 1.6; }
+  :host(.embed) .ai-banner.ok { background: #e8f7ee; color: #1c7c3f; }
+  :host(.embed) .ai-banner.err { background: #ffecec; color: #c62828; }
+  :host(.embed) .ai-banner .muted { margin-left: 8px; font-size: 12px; }
+  :host(.embed) .ai-banner.loading .layui-icon { display: inline-block; animation: hqspin 1s linear infinite; }
+  @keyframes hqspin { to { transform: rotate(360deg); } }
+  :host(.embed) .tag.ai { background: #f4f2ff; color: #5b3deb; }
+  :host(.embed) .tag.ai.good { background: #6c4dff; color: #fff; }
+  :host(.embed) .tag.ai.bad { background: #f4f4f6; color: #8a8a99; }
   /* layui 图标 */
   :host(.embed) .layui-icon { font-size: 15px; line-height: 1; vertical-align: -2px; }
   :host(.embed) header .layui-icon { font-size: 16px; vertical-align: 0; }
@@ -249,6 +260,9 @@
   .row { border: 1px solid #eaeef2; border-radius: 8px; padding: 8px 10px; margin-bottom: 6px; display: grid; grid-template-columns: 22px 1fr auto; gap: 4px 8px; align-items: start; background: #fff; }
   .row.keep { border-color: #1a7f37; border-left: 4px solid #1f883d; padding-left: 7px; background: #f6fff8; }
   .row.dim { opacity: .55; }
+  .ai-banner { margin: 4px 0 8px; padding: 8px 10px; border-radius: 6px; background: #ddf4ff; font-size: 12px; }
+  .ai-banner.ok { background: #dafbe1; } .ai-banner.err { background: #ffebe9; }
+  .approved-note { margin: 0 0 8px; padding: 8px 10px; border-radius: 6px; background: #dafbe1; color: #1a7f37; font-size: 12px; }
   .idx { font-weight: 700; color: #0969da; text-align: center; line-height: 20px; }
   .idx.c { color: #8c959f; }
   .l1 { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; line-height: 20px; }
@@ -310,7 +324,7 @@
   <div class="filters">
     <select id="f-city"></select>
     <select id="f-grade" title="景区等级"><option value="">全部等级</option><option>5A</option><option>4A</option><option>5A,4A</option><option>3A</option><option>2A</option><option>1A</option></select>
-    <select id="f-status" title="审核状态"><option value="todo">待核对</option><option value="done">已审核</option><option value="skip">已跳过</option><option value="auto">自动通过</option><option value="all">全部</option></select>
+    <select id="f-status" title="审核状态"><option value="todo">待核对</option><option value="done">已审核</option><option value="skip">已跳过</option><option value="auto">自动通过</option><option value="ai">AI 通过（待复核）</option><option value="all">全部</option></select>
     <input type="text" id="f-q" placeholder="景区名 / ID">
     <button id="f-apply">${IC('search', '')} 筛选</button>
     <button id="export" title="导出 CSV">${IC('export', '')} 导出</button>
@@ -374,7 +388,37 @@
       S.list = add.concat(S.list); S.i += add.length; S.base = off;
       return add.length;
     }
+    // 「全部」筛选：翻页（‹ › / Enter / 自动下一个）只停在没审核的景区上，已审核的直接跳过
+    const skipApproved = () => ((prefs.filters || {}).status || 'todo') === 'all' && !(prefs.filters || {}).q;
     async function go(delta) {
+      if (skipApproved() && delta !== 0) {
+        const dir = delta > 0 ? 1 : -1;
+        let j = S.i + delta, passed = 0;
+        for (;;) {
+          if (j < 0) {
+            if ((S.base || 0) <= 0) break;
+            try { const n = await loadBefore(); j += n; } catch (e) { if (e.message === '__stale__') return; throw e; }
+            continue;
+          }
+          if (j >= S.list.length) {
+            let added = 0;
+            try { added = await loadList(false); } catch (e) { if (e.message === '__stale__') return; throw e; }
+            if (!added) break;
+            continue;
+          }
+          if (Number(S.list[j].approval) !== 1) break;
+          passed += 1; j += dir;
+        }
+        if (j < 0 || j >= S.list.length) {
+          toast(dir > 0 ? '后面没有未审核的景区了' : '前面没有未审核的景区了'); renderProgress(); return;
+        }
+        const prevCity = S.detail && S.detail.scenic.city;
+        S.i = j;
+        await openScenic(S.list[j].id);
+        if (passed) toast(`已跳过 ${passed} 个已审核的景区`);
+        else if (dir > 0 && prevCity && S.detail && S.detail.scenic.city !== prevCity) toast(`${prevCity} 已跑完，开始 ${S.detail.scenic.city}`);
+        return;
+      }
       if (S.i + delta < 0 && (S.base || 0) > 0) {
         try { await loadBefore(); } catch (e) { if (e.message === '__stale__') return; throw e; }
       }
@@ -416,13 +460,14 @@
       syncKept();
       S.res = null; S.keyword = ''; S.rawOpen = {}; S.domOpen = false; S.othersOpen = false;
       S.searches = []; S.merged = null; stopSequence();
-      S.manualOff = new Set(); S.autoKept = new Set(); cancelAutoApprove(true); cancelIdleSkip(true); S.takenOver = false;
+      S.manualOff = new Set(); S.autoKept = new Set(); S.aiKept = new Set(); S.ai = null; cancelAutoApprove(true); cancelIdleSkip(true); S.takenOver = false;
       $('#note').value = (S.detail.status && S.detail.status.note) || '';
       render();
-      if (prefs.auto_search) await autoSequence();
+      // 已审核（approval=1）的景区：不再自动搜索 / 自动保留 / 自动审核，只展示已保留的；要复核手动点搜索词或「重新搜索」
+      if (prefs.auto_search && Number(d.scenic.approval) !== 1) await autoSequence();
     }
     function renderProgress() {
-      const st = { todo: '待核对', done: '已审核', skip: '已跳过', auto: '自动通过', all: '全部' }[(prefs.filters || {}).status] || '';
+      const st = { todo: '待核对', done: '已审核', skip: '已跳过', auto: '自动通过', ai: 'AI 通过', all: '全部' }[(prefs.filters || {}).status] || '';
       const fmtN = (v) => Number(v || 0).toLocaleString('zh-CN');
       $('#progress').textContent = S.detail ? `${st} 第 ${fmtN((S.base || 0) + S.i + 1)} / ${fmtN(S.total)}` : `${st} 共 ${fmtN(S.total)}`;
       const city = (prefs.filters || {}).city;
@@ -509,7 +554,51 @@
       }
       if (S.seq === seq) { S.seq = null; render(); }
       if (seq.stopped || !S.detail || S.detail.scenic.id !== sid) return;
-      if (!S.autoApprove) startIdleSkip((S.merged && S.merged.judge && S.merged.judge.reason) || (S.merged && S.merged.items.length ? '没有能自动通过的结果' : '没有搜到结果'));
+      const ruleReason = (S.merged && S.merged.judge && S.merged.judge.reason) || (S.merged && S.merged.items.length ? '没有能自动通过的结果' : '没有搜到结果');
+      if (S.autoApprove) return;
+      if (prefs.ai_enabled && prefs.ai_key_set) { await runAI(true, ruleReason); return; }
+      startIdleSkip(ruleReason);
+    }
+    // AI 辅助判断：规则判不了时，把景区信息和候选交给大模型（设置页配置）；有把握就自动保留 + 自动通过，否则照常等人 / 无人接管跳过
+    async function runAI(auto, ruleReason) {
+      if (!S.detail) return;
+      const sid = S.detail.scenic.id;
+      const items = ((S.merged && S.merged.items) || []).filter((it) => it.key && it.poiId)
+        .map((it) => ({ key: it.key, poiId: it.poiId, name: it.name, type: it.type, cityName: it.cityName, districtName: it.districtName,
+          address: it.address || null, lat: it.lat ?? null, lng: it.lng ?? null }));
+      S.ai = { loading: true }; render();
+      let r;
+      try {
+        r = await call('ai_judge', { scenic_id: sid, items });
+      } catch (e) {
+        if (!S.detail || S.detail.scenic.id !== sid) return;
+        S.ai = { error: e.message }; render(); toast('AI 判断失败：' + e.message, true);
+        if (auto) startIdleSkip(ruleReason || 'AI 判断失败');
+        return;
+      }
+      if (!S.detail || S.detail.scenic.id !== sid) return;
+      if (!r.enabled) { S.ai = null; render(); if (auto) startIdleSkip(ruleReason); return; }
+      S.ai = r;
+      const minc = Number(r.min_confidence) || 0.8;
+      const keepKeys = Object.entries(r.decisions || {}).filter(([, v]) => v.keep && v.confidence >= minc).map(([k]) => k);
+      const pool = [...shown().sights, ...S.detail.candidates.map((c) => Object.assign(candAsItem(c), { address: c.address }))];
+      let n = 0;
+      if (Number(S.detail.scenic.approval) !== 1) {
+        for (const key of keepKeys) {
+          if (S.decisions[key] === 'keep' || S.manualOff.has(key)) continue;
+          const it = pool.find((x) => x.key === key);
+          if (it) { try { await savePoi(it, true); S.aiKept.add(key); n++; } catch (e) { /* 写失败不影响 */ } }
+        }
+      }
+      render();
+      if (n) toast(`AI 判断保留 ${n} 条`);
+      if (!auto) return;
+      const conf = Number(r.confidence) || 0;
+      if (r.approve && conf >= minc && r.auto_approve && prefs.auto_approve !== false && keepKeys.length) {
+        maybeAutoApprove({ approve: true, reason: `AI审核：${r.summary || '可以通过'}（置信度 ${conf.toFixed(2)}）`, similar: [], name_keep: keepKeys });
+      } else {
+        startIdleSkip(`AI：${r.summary || '拿不准'}（置信度 ${conf.toFixed(2)}）`);
+      }
     }
     // 需要人工时：N 秒内无人操作（点击/按键/滚动）就记为跳过，进入下一个；有人操作即视为接管
     function cancelIdleSkip(silent) {
@@ -526,7 +615,8 @@
     function startIdleSkip(reason) {
       if (prefs.idle_skip === false || S.takenOver || !S.detail) return;
       const s = S.detail.scenic, st = S.detail.status;
-      if (Number(s.approval) === 1 || (st && st.status === 'skip')) return; // 已审核、或本来就在复看跳过的，不自动跳
+      // 已审核的不自动跳；之前跳过的，只有在「已跳过」筛选里（人在逐个处理）才不自动跳，「全部」里照常无人接管就跳过、继续下一个
+      if (Number(s.approval) === 1 || (st && st.status === 'skip' && ((prefs.filters || {}).status === 'skip'))) return;
       cancelIdleSkip(true);
       const sid = s.id, sec = Math.max(3, Number(prefs.idle_skip_sec) || 10);
       const I = { sid, reason, left: sec };
@@ -612,12 +702,12 @@
       S.autoApprove = null;
       if (!silent) { toast('已取消自动审核'); render(); }
     }
-    function maybeAutoApprove() {
-      const j = S.merged && S.merged.judge;
+    function maybeAutoApprove(override) {
+      const j = override || (S.merged && S.merged.judge);
       if (!prefs.auto_approve || !j || !j.approve || !S.detail || Number(S.detail.scenic.approval) === 1) return;
       cancelAutoApprove(true);
       const sid = S.detail.scenic.id, delay = Number(prefs.auto_approve_delay_ms) || 2000;
-      const A = { sid, reason: j.reason, left: Math.ceil(delay / 1000) };
+      const A = { sid, reason: j.reason, ai: !!override, left: Math.ceil(delay / 1000) };
       A.tick = setInterval(() => { A.left = Math.max(0, A.left - 1); const el = $('#auto-left'); if (el) el.textContent = A.left; }, 1000);
       A.timer = setTimeout(async () => {
         if (S.autoApprove !== A || !S.detail || S.detail.scenic.id !== sid) return;
@@ -634,6 +724,22 @@
       }, delay);
       S.autoApprove = A;
       render();
+    }
+    function aiTag(key) {
+      const d = key && S.ai && S.ai.decisions && S.ai.decisions[key];
+      if (!d) return '';
+      const minc = Number(S.ai.min_confidence) || 0.8;
+      const t = `${d.relation || ''}${d.reason ? '：' + d.reason : ''}（置信度 ${Number(d.confidence).toFixed(2)}）`;
+      return d.keep ? `<span class="tag ai ${d.confidence >= minc ? 'good' : ''}" title="${esc(t)}">AI 保留 ${Number(d.confidence).toFixed(2)}</span>`
+        : `<span class="tag ai bad" title="${esc(t)}">AI：${esc(d.relation || '不属于')}</span>`;
+    }
+    function aiBanner() {
+      if (!S.ai) return '';
+      if (S.ai.loading) return `<div class="ai-banner loading">${IC('loading', '')} AI 判断中…（${esc(prefs.ai_model || '')}${prefs.ai_web_search ? '，联网搜索' : ''}）</div>`;
+      if (S.ai.error) return `<div class="ai-banner err">AI 判断失败：${esc(S.ai.error)}</div>`;
+      const c = Number(S.ai.confidence) || 0;
+      return `<div class="ai-banner ${S.ai.approve ? 'ok' : ''}"><b>AI ${S.ai.approve ? '判断可以通过' : '拿不准'}</b>：${esc(S.ai.summary || '')}
+        <span class="muted">置信度 ${c.toFixed(2)} · ${esc(S.ai.model || '')} · ${S.ai.cached ? '缓存' : '用时 ' + S.ai.elapsed + ' 秒'}</span></div>`;
     }
     function candAsItem(c) {
       return {
@@ -663,6 +769,7 @@
         toast(status === 'done' ? '已审核（approval=1）' : '已跳过');
         refreshCities();
         if ((prefs.filters || {}).status === 'todo') { S.list.splice(S.i, 1); S.total = Math.max(0, S.total - 1); S.i -= 1; }
+        else if (S.list[S.i]) { S.list[S.i].approval = status === 'done' ? 1 : S.list[S.i].approval; S.list[S.i].status = status; }
         await go(1);
       } catch (e) { toast('保存失败：' + e.message, true); }
     }
@@ -773,7 +880,7 @@
           <div class="idx">${r.n}</div>
           <div>
             <div class="l1">${r.url ? `<a href="${esc(r.url)}" target="_blank" rel="noopener" title="在新标签页打开携程页面">${esc(r.name)}</a>` : `<b>${esc(r.name)}</b>`}
-              ${/^shop/i.test(r.type || '') ? '' : `<span class="tag ${poi ? 'sight' : ''}">${esc(r.type || '?')}</span>`}${S.autoKept && S.autoKept.has(r.key) && dec(r.key) === 'keep' ? '<span class="tag good" title="地址相近，或名称一致/子景点且同省市区，自动保留">自动</span>' : ''}${nameMatch.has(r.key) ? '<span class="tag good" title="去掉省市区前缀和景区等后缀后与景区名/别名一致">名称一致</span>' : ''}${spotMatch.has(r.key) ? '<span class="tag sight" title="与客户表核心景点一致">核心景点</span>' : ''}${subMatch.has(r.key) ? '<span class="tag good" title="「景区名-xx」或名字里带景区名的子景点">子景点</span>' : ''}${amb.has(r.key) ? '<span class="tag warn" title="有多个同名 POI 且不在一处，请人工确认">同名多个</span>' : ''}${elsew.has(r.key) ? '<span class="tag warn" title="同名，但不在客户地址那一处，未自动保留">同名·别处</span>' : ''}${r.level ? `<span class="tag ${r.level === '5A' ? 'g5' : ''}">${esc(r.level)}</span>` : ''}${candTag(c)}</div>
+              ${/^shop/i.test(r.type || '') ? '' : `<span class="tag ${poi ? 'sight' : ''}">${esc(r.type || '?')}</span>`}${S.autoKept && S.autoKept.has(r.key) && dec(r.key) === 'keep' ? '<span class="tag good" title="地址相近，或名称一致/子景点且同省市区，自动保留">自动</span>' : ''}${S.aiKept && S.aiKept.has(r.key) && dec(r.key) === 'keep' ? '<span class="tag good" title="AI 判断保留">AI 已保留</span>' : ''}${nameMatch.has(r.key) ? '<span class="tag good" title="去掉省市区前缀和景区等后缀后与景区名/别名一致">名称一致</span>' : ''}${spotMatch.has(r.key) ? '<span class="tag sight" title="与客户表核心景点一致">核心景点</span>' : ''}${subMatch.has(r.key) ? '<span class="tag good" title="「景区名-xx」或名字里带景区名的子景点">子景点</span>' : ''}${amb.has(r.key) ? '<span class="tag warn" title="有多个同名 POI 且不在一处，请人工确认">同名多个</span>' : ''}${elsew.has(r.key) ? '<span class="tag warn" title="同名，但不在客户地址那一处，未自动保留">同名·别处</span>' : ''}${r.level ? `<span class="tag ${r.level === '5A' ? 'g5' : ''}">${esc(r.level)}</span>` : ''}${candTag(c)}${aiTag(r.key)}</div>
             ${poi ? addrLine(r, s, `data-fetch="${r.n}"`) : ''}
             <div class="meta">
               ${[r.cityName, r.districtName].filter(Boolean).length ? `<span>${esc([...new Set([r.cityName, r.districtName].filter(Boolean))].join(' / '))}</span>` : ''}
@@ -804,7 +911,7 @@
             <div class="l1">${c.ctrip_url ? `<a href="${esc(c.ctrip_url)}" target="_blank" rel="noopener">${esc(c.ctrip_poi_name)}</a>` : `<b>${esc(c.ctrip_poi_name)}</b>`}
               ${c.level ? `<span class="tag ${c.level === '5A' ? 'g5' : ''}">${esc(c.level)}</span>` : ''}${S.autoKept && S.autoKept.has(key) && dec(key) === 'keep' ? '<span class="tag good" title="地址相近，或名称一致/子景点且同省市区，自动保留">自动</span>' : ''}${nameMatch.has(key) ? '<span class="tag good">名称一致</span>' : ''}${spotMatch.has(key) ? '<span class="tag sight">核心景点</span>' : ''}${subMatch.has(key) ? '<span class="tag good">子景点</span>' : ''}${amb.has(key) ? '<span class="tag warn">同名多个</span>' : ''}${elsew.has(key) ? '<span class="tag warn">同名·别处</span>' : ''}<span class="tag">${esc(c.relation_type)}</span><span class="tag">${esc(c.confidence)}</span>
               ${c.triage_result ? `<span class="tag ${c.triage_result === '自动删除' ? 'warn' : c.triage_result === '自动保留' ? 'good' : ''}">${esc(c.triage_result)}</span>` : ''}
-              ${searched.has(String(c.ctrip_poi_id)) ? '<span class="tag sight">搜索结果中也有</span>' : ''}</div>
+              ${searched.has(String(c.ctrip_poi_id)) ? '<span class="tag sight">搜索结果中也有</span>' : ''}${aiTag(key)}</div>
             ${addrLine(c, s, `data-cfetch="${i}"`)}
             <div class="meta"><span>poiId ${esc(c.ctrip_poi_id)}</span>${c.ctrip_business_id ? `<span>景点ID ${esc(c.ctrip_business_id)}</span>` : ''}
               ${c.dist_to_anchor_m != null ? `<span>距锚点 ${fmtDist(c.dist_to_anchor_m)}</span>` : ''}<span>图片 ${esc(c.image_qty ?? 0)}</span>
@@ -845,6 +952,7 @@
         <div class="sec side-sec"><b>搜索词</b><span class="muted">点一下在携程里搜</span></div>
         <div class="tools">${chips}</div>${spotRow}
         </aside><section class="maincol">
+        ${Number(s.approval) === 1 && !S.searches.length && !S.loading ? `<div class="approved-note">${IC('ok-circle', '✓')} 这个景区已审核（approval=1），不再自动搜索和审核。需要复核时点左侧的搜索词，或在下面输入关键词搜索；改了保留之后点「审核完成」保存。</div>` : ''}
         <div class="tools">
           <input type="text" id="kw" placeholder="自定义关键词（按 / 聚焦）" style="flex:1;min-width:140px">
           <button id="kw-go">${IC('search', '')} 搜索</button>
@@ -852,9 +960,11 @@
         </div>
         <div class="sec"><b>携程搜索</b>${S.seq ? `<span class="tag warn">依次搜索 ${S.seq.i + 1}/${S.seq.kws.length}</span><button id="stop-seq" title="不再继续搜下一个关键词">停止</button>` : ''}${S.keyword ? `<span class="muted">「${esc(S.keyword)}」${capLabel ? ' · ' + esc(capLabel) : ''}${S.res && S.res.cached ? ' · 缓存 ' + esc(S.res.searched_at) : ''}</span>
           <button id="re-search" title="在携程页面重新输入搜索 (R)">${IC('refresh', '')} 重新搜索</button>` : ''}
-          ${missingAddr ? `<button id="fill-addr" title="逐个打开携程详情页读取地址">${IC('location', '')} 补全地址（${missingAddr}）</button>` : ''}</div>
+          ${missingAddr ? `<button id="fill-addr" title="逐个打开携程详情页读取地址">${IC('location', '')} 补全地址（${missingAddr}）</button>` : ''}
+          ${prefs.ai_key_set && S.merged && !(S.ai && S.ai.loading) ? `<button id="ai-run" title="让 AI 判断这些候选是否属于这个景区（不会自动通过）">${IC('chat', '')} AI 判断</button>` : ''}</div>
+        ${aiBanner()}
         ${S.idle ? `<div class="idle-banner"><div class="txt"><b>需要人工审核</b>：${esc(S.idle.reason)}<br><span id="idle-left">${S.idle.left}</span> 秒内无人操作将跳过并进入下一个（之后可在「已跳过」里处理）</div><button id="take-over">我来处理</button></div>` : ''}
-        ${S.autoApprove ? `<div class="auto-banner"><div class="txt"><b>✓ 名称一致（地址相近 / 门牌一致 / 同省市区）</b>，<span id="auto-left">${S.autoApprove.left}</span> 秒后自动审核通过并进入下一个<br>${esc(S.autoApprove.reason)}</div><button id="cancel-auto">取消（Esc）</button></div>`
+        ${S.autoApprove ? `<div class="auto-banner"><div class="txt"><b>${S.autoApprove.ai ? IC('ok', '✓') + ' AI 判断可以通过' : IC('ok', '✓') + ' 名称一致（地址相近 / 门牌一致 / 同省市区）'}</b>，<span id="auto-left">${S.autoApprove.left}</span> 秒后自动审核通过并进入下一个<br>${esc(S.autoApprove.reason)}</div><button id="cancel-auto">取消（Esc）</button></div>`
           : (MJ.reason && !S.loading && !S.seq && !S.idle && Number(s.approval) !== 1 ? `<div class="judge-note">自动审核：${esc(MJ.approve ? '可通过（已取消或未开启）' : MJ.reason + (S.searches.length > 1 ? `（已搜 ${S.searches.length} 个词）` : ''))}</div>` : '')}
         ${capHint}${resHtml}
         ${dom.length ? `<div class="muted"><button class="link" id="dom-toggle">${S.domOpen ? '收起' : '查看'}下拉框原文（${dom.length}）</button></div>
@@ -897,6 +1007,7 @@
         }
         else if (t.id === 'close') { $('#panel').classList.add('hidden'); $('#fab').style.display = ''; applyLayout(); }
         else if (t.id === 'gear') $('#settings').classList.toggle('open');
+        else if (t.id === 'ai-run') { cancelIdleSkip(true); await runAI(false); }
         else if (t.id === 'prev') await go(-1);
         else if (t.id === 'next') await go(1);
         else if (t.id === 'done') await finish('done');

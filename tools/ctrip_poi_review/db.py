@@ -45,6 +45,7 @@ MASTER_TABLE = ident(ENV("CTRIP_MASTER_TABLE", "ctrip_attraction_master"))
 ADDR_TABLE = ident(ENV("ADDR_TABLE", "ctrip_poi_address_cache"))
 IMAGE_TABLE = ident(ENV("IMAGE_TABLE", "scenic_poi_image"))
 CRAWL_TABLE = ident(ENV("CRAWL_TABLE", "scenic_poi_image_crawl"))
+AI_TABLE = ident(ENV("AI_TABLE", "scenic_ai_judge"))
 # 交付表（你建好的分区天表）。不存在时只写工具自己的 scenic_poi_image
 ODS_TABLE = ident(ENV("ODS_IMAGE_TABLE", "ods_prd_poi_image_di"))
 ODS_COORD = ENV("ODS_COORD", "wgs84").lower()          # wgs84：客户景区坐标(GCJ02)换算成 WGS84 再写；gcj02：原样写
@@ -89,6 +90,12 @@ DDL = [
 ) DEFAULT CHARSET=utf8mb4 COMMENT='携程 POI 地址缓存（打开详情页读取）'""",
 ]
 DDL += [
+    f"""CREATE TABLE IF NOT EXISTS {AI_TABLE} (
+  scenic_id VARCHAR(64) NOT NULL, sig CHAR(40) NOT NULL COMMENT '模型 + 候选集合的签名',
+  model VARCHAR(128) NULL, result JSON NULL COMMENT 'AI 判断结果（每个 POI 保留与否、置信度、理由）',
+  created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+  PRIMARY KEY (scenic_id, sig)
+) DEFAULT CHARSET=utf8mb4 COMMENT='AI 辅助核对结果缓存'""",
     f"""CREATE TABLE IF NOT EXISTS {IMAGE_TABLE} (
   id BIGINT AUTO_INCREMENT PRIMARY KEY,
   record_id VARCHAR(64) NULL COMMENT '记录ID：img_<景区ID>_<image_id>，由图片链接算出，同一景区同一张图永远相同',
@@ -415,6 +422,8 @@ def _filters(f):
         where.append(f"NOT {APPROVED} AND st.status = 'skip'")
     elif st == "auto":  # 自动审核通过的（备注以「自动审核」开头），供抽查
         where.append(f"{APPROVED} AND st.note LIKE %s"); params.append("自动审核%")
+    elif st == "ai":  # AI 判断通过的（备注以「AI审核」开头），等人最后复核
+        where.append(f"{APPROVED} AND st.note LIKE %s"); params.append("AI审核%")
     if f.get("scenic_id"):
         where.append(f"s.{C['id']} = %s"); params.append(f["scenic_id"])
     if f.get("q"):
@@ -1012,11 +1021,11 @@ def overview():
     cs = cities()
     with cursor() as cur:
         where, params = _filters(dict(status="done"))
-        cur.execute(f"""SELECT COUNT(*) n, CAST(SUM(st.note LIKE %s) AS SIGNED) auto_n
+        cur.execute(f"""SELECT COUNT(*) n, CAST(SUM(st.note LIKE %s) AS SIGNED) auto_n, CAST(SUM(st.note LIKE %s) AS SIGNED) ai_n
                         FROM {SCENIC_TABLE} s LEFT JOIN {STATUS_TABLE} st ON st.scenic_id = s.{C['id']} {where}""",
-                    ["自动审核%"] + params)
+                    ["自动审核%", "AI审核%"] + params)
         r = cur.fetchone()
-        approved, auto_n = r["n"] or 0, r["auto_n"] or 0
+        approved, auto_n, ai_n = r["n"] or 0, r["auto_n"] or 0, r["ai_n"] or 0
         cur.execute(f"SELECT status, COUNT(*) n FROM {CRAWL_TABLE} GROUP BY status")
         crawl = {x["status"]: x["n"] for x in cur.fetchall()}
         cur.execute(f"""SELECT city, COUNT(*) images, COUNT(DISTINCT poi_id) pois FROM {IMAGE_TABLE} GROUP BY city""")
@@ -1039,7 +1048,7 @@ def overview():
     scenics_partial = sum(1 for a, b in per.values() if 0 < b < a)
     total = sum(int(c["n"] or 0) for c in cs)
     skipped = sum(int(c.get("skipped") or 0) for c in cs)
-    return dict(total=total, approved=approved, auto_approved=auto_n, manual_approved=approved - auto_n, skipped=skipped,
+    return dict(total=total, approved=approved, auto_approved=auto_n, ai_approved=ai_n, manual_approved=approved - auto_n - ai_n, skipped=skipped,
                 todo=total - approved - skipped, crawl=crawl, crawlable_pois=crawlable,
                 scenics_with_pois=len(per), scenics_collected=scenics_collected, scenics_partial=scenics_partial, images=images, ods_rows=ods,
                 ods_table=ODS_TABLE.replace("`", ""), cities=[dict(c, images=int((img_city.get(c["city"]) or {}).get("images") or 0),
@@ -1113,3 +1122,19 @@ def crawl_query(status=None, q=None, offset=0, limit=50):
         n = names.get(r["scenic_id"]) or {}
         r["scenic_name"], r["city"] = n.get("name"), n.get("city")
     return dict(total=total, items=_jsonable(rows))
+
+
+def ai_cache_get(scenic_id, sig):
+    with cursor() as cur:
+        cur.execute(f"SELECT result FROM {AI_TABLE} WHERE scenic_id=%s AND sig=%s", (scenic_id, sig))
+        r = cur.fetchone()
+    if not r or not r["result"]:
+        return None
+    return json.loads(r["result"]) if isinstance(r["result"], (str, bytes)) else r["result"]
+
+
+def ai_cache_put(scenic_id, sig, result):
+    with cursor() as cur:
+        cur.execute(f"""INSERT INTO {AI_TABLE} (scenic_id, sig, model, result) VALUES (%s, %s, %s, %s)
+                        ON DUPLICATE KEY UPDATE model=VALUES(model), result=VALUES(result), created_at=CURRENT_TIMESTAMP""",
+                    (scenic_id, sig, result.get("model"), json.dumps(result, ensure_ascii=False)))

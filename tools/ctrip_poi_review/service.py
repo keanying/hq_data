@@ -25,6 +25,7 @@ from fastapi.middleware.gzip import GZipMiddleware
 from fastapi.responses import FileResponse, HTMLResponse, Response
 from fastapi.staticfiles import StaticFiles
 
+import ai_judge
 import crawler
 import db
 import review
@@ -204,8 +205,9 @@ class Service:
                                  max_extra=int(p.get("max_extra") or 8), cache_only=bool(p.get("cache_only")),
                                  dry_run=bool(p.get("dry_run")), verbose=bool(p.get("verbose", True)),
                                  reviewer=p.get("reviewer") or "auto", max_fail=5)
+            ai_cfg = ai_judge.config(self.prefs) if p.get("use_ai", True) else None
             return await review.auto_review(ns, self.browser.get_searcher, log=job.write, should_stop=stop, progress=progress,
-                                            on_approved=on_ok)
+                                            on_approved=on_ok, ai_cfg=ai_cfg)
         if job.type == "images":
             f = dict(city=p.get("city") or "", grade=p.get("grade") or "", q=p.get("q") or "")
             return await crawler.crawl_all(self.browser.get_page, f, max_pages=int(p.get("max_pages") or 20),
@@ -286,6 +288,42 @@ def create_app(args):
         if payload.get("pause"):
             svc.follow["paused"] = True
         return follow_state()
+
+    # ---------------- 设置（AI 配置 + 核对 / 采集开关）
+    SETTING_KEYS = ["reviewer", "throttle_ms", "auto_search", "auto_keep_similar", "auto_approve", "auto_approve_delay_ms", "idle_skip",
+                    "idle_skip_sec", "search_more", "search_core_spots", "max_extra", "auto_address", "auto_collect", "collect_max_pages",
+                    "collect_max_images", "collect_empty_pages"] + [k for k in ai_judge.DEFAULTS if k != "ai_api_key"]
+
+    @app.get("/api/settings")
+    def get_settings():
+        cfg = ai_judge.config(svc.prefs)
+        return dict(review.public_prefs(svc.prefs), ai_key_source=cfg["key_source"], ai_defaults=ai_judge.DEFAULTS)
+
+    @app.post("/api/settings")
+    def set_settings(payload: dict = Body(default={})):
+        for k in SETTING_KEYS:
+            if k in payload:
+                svc.prefs[k] = payload[k]
+        key = payload.get("ai_api_key")
+        if key == "__clear__":
+            svc.prefs["ai_api_key"] = ""
+        elif isinstance(key, str) and key.strip() and "****" not in key:  # 打码的原样回传时不改
+            svc.prefs["ai_api_key"] = key.strip()
+        svc.prefs.save()
+        return get_settings()
+
+    @app.post("/api/ai/test")
+    async def ai_test(payload: dict = Body(default={})):
+        """用当前设置（或页面上还没保存的设置）发一个很短的请求，看能不能连通。"""
+        prefs = dict(svc.prefs)
+        prefs.update({k: v for k, v in payload.items() if k in ai_judge.DEFAULTS and k != "ai_api_key"})
+        if isinstance(payload.get("ai_api_key"), str) and payload["ai_api_key"].strip() and "****" not in payload["ai_api_key"]:
+            prefs["ai_api_key"] = payload["ai_api_key"].strip()
+        cfg = ai_judge.config(prefs)
+        try:
+            return await asyncio.to_thread(ai_judge.ping, cfg)
+        except Exception as e:  # noqa: BLE001
+            return dict(ok=False, error=str(e))
 
     @app.get("/api/crawl")
     def crawl_state():

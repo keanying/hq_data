@@ -23,6 +23,7 @@ from pathlib import Path
 
 from playwright.async_api import async_playwright
 
+import ai_judge
 import db
 import match
 
@@ -435,11 +436,45 @@ class CtripSearcher:
 
 
 # ---------------------------------------------------------------- 偏好设置
+def public_prefs(prefs):
+    """给浏览器看的设置：API Key 只给打码后的。"""
+    d = dict(prefs)
+    d["ai_api_key"] = ai_judge.mask(prefs.get("ai_api_key"))
+    d["ai_key_set"] = bool(ai_judge.config(prefs).get("ai_api_key"))
+    return d
+
+
+def ai_pool(detail, items):
+    """把面板 / 批量审核里的搜索结果和离线候选整理成交给 AI 的候选列表（去重，只要带 poiId 的）。"""
+    pool, seen = [], set()
+    for it in items or []:
+        k = it.get("key")
+        if not k or not it.get("poiId") or k in seen:
+            continue
+        seen.add(k)
+        pool.append(dict(key=k, name=it.get("name"), type=it.get("type"), city=it.get("cityName") or it.get("city"),
+                         district=it.get("districtName") or it.get("district"), address=it.get("address"), lat=it.get("lat"), lng=it.get("lng")))
+    for c in detail.get("candidates") or []:
+        k = f"poi:{c['ctrip_poi_id']}"
+        if k in seen:
+            continue
+        seen.add(k)
+        pool.append(dict(key=k, name=c.get("ctrip_poi_name"), type="sight", city=c.get("city_name"),
+                         district=c.get("district") or c.get("ctrip_district_name"), address=c.get("address"), lat=c.get("lat"), lng=c.get("lng")))
+    return pool
+
+
+async def ai_judge_scenic(cfg, detail, items):
+    pool = ai_pool(detail, items)
+    rule = judge_scenic(detail, items)
+    return await asyncio.to_thread(ai_judge.judge, cfg, detail["scenic"], pool, rule, db.ai_cache_get, db.ai_cache_put)
+
+
 class Prefs(dict):
     def __init__(self, path):
         super().__init__(reviewer="", throttle_ms=2500, sight_only=False, auto_search=True, input_selector="",
                          panel_width=560, push_page=False, auto_address=False, auto_keep_similar=True, auto_approve=True, auto_approve_delay_ms=2000, auto_collect=True, collect_max_pages=20, collect_max_images=300, collect_empty_pages=10, search_more=True, search_core_spots=False, max_extra=8, idle_skip=True, idle_skip_sec=10,
-                         filters=dict(city="", grade="", status="todo", q=""))
+                         filters=dict(city="", grade="", status="todo", q=""), **ai_judge.DEFAULTS)
         self.path = path
         if path.exists():
             self.update(json.loads(path.read_text(encoding="utf-8")))
@@ -496,7 +531,7 @@ def make_rpc(get_searcher, prefs, export_url=None):
     async def rpc(method, payload=None):
         payload = payload or {}
         if method == "hello":
-            return dict(main=True, prefs=dict(prefs), health=db.health(), cities=db.cities())
+            return dict(main=True, prefs=public_prefs(prefs), health=db.health(), cities=db.cities())
         if method == "list":
             return db.scenic_list(payload.get("filters") or {}, payload.get("offset", 0), payload.get("limit", 200),
                                   bool(payload.get("start_todo")))
@@ -519,9 +554,17 @@ def make_rpc(get_searcher, prefs, export_url=None):
         if method == "status":
             return db.set_status(payload)
         if method == "prefs":
-            prefs.update({k: v for k, v in payload.items() if k in prefs})
+            prefs.update({k: v for k, v in payload.items() if k in prefs and k != "ai_api_key"})  # Key 只在设置页改
             prefs.save()
-            return dict(prefs)
+            return public_prefs(prefs)
+        if method == "ai_judge":
+            cfg = ai_judge.config(prefs)
+            if not ai_judge.ready(cfg):
+                return dict(enabled=False)
+            d = db.scenic_detail(payload["scenic_id"])
+            enrich(d["candidates"], "ctrip_poi_id", "ctrip_business_id")
+            res = await ai_judge_scenic(cfg, d, payload.get("items") or [])
+            return dict(res, enabled=True, min_confidence=float(cfg["ai_min_confidence"]), auto_approve=bool(cfg["ai_auto_approve"]))
         if method == "locate_input":
             searcher = await get_searcher()
             sel = await searcher.locate_input()
@@ -639,11 +682,15 @@ async def cmd_prefetch(args):
 
 
 async def auto_review(args, get_searcher, log=print, should_stop=lambda: False, progress=lambda done, total: None,
-                      on_approved=lambda scenic_id: None):
+                      on_approved=lambda scenic_id: None, ai_cfg=None):
     """批量自动审核核心：名称一致且（地址相近/门牌一致/同省市区）的景区直接通过，其余留给人工。
     搜索结果优先用缓存；需要现搜时才调用 get_searcher()（async，返回 CtripSearcher）。CLI 和服务共用。"""
     filters = dict(city=args.city or "", grade=args.grade or "", status="todo", q=args.q or "")
-    stats = dict(approved=0, pending=0, searched=0, failed=0)
+    stats = dict(approved=0, ai_approved=0, pending=0, searched=0, failed=0, ai_failed=0)
+    use_ai = bool(ai_cfg and ai_judge.ready(ai_cfg))
+    if use_ai:
+        log(f"规则判不了的交给 AI（{ai_cfg['ai_model']}{'，联网搜索' if ai_cfg.get('ai_web_search') else ''}，"
+            f"置信度 ≥ {ai_cfg['ai_min_confidence']} 自动通过）")
 
     async def get_items(kwd):
         hit = db.cache_get(kwd)
@@ -689,12 +736,28 @@ async def auto_review(args, get_searcher, log=print, should_stop=lambda: False, 
                 raise
             continue
         progress(i, total)
-        if not j or not j["approve"]:
+        ai_keep, note = None, None
+        if (not j or not j["approve"]) and use_ai and items is not None:
+            try:
+                a = await ai_judge_scenic(ai_cfg, d, items)
+                minc = float(ai_cfg["ai_min_confidence"])
+                if a["approve"] and a["confidence"] >= minc and ai_cfg.get("ai_auto_approve", True):
+                    ai_keep = {k for k, v in a["decisions"].items() if v["keep"] and v["confidence"] >= minc}
+                    note = f"AI审核：{a['summary']}（置信度 {a['confidence']:.2f}）"
+                elif args.verbose:
+                    log(f"[{i}/{total}] {s['id']} {s['name']}：AI 也拿不准（{a['summary']}，置信度 {a['confidence']:.2f}）")
+            except Exception as e:  # AI 出错不影响规则流程
+                stats["ai_failed"] += 1
+                log(f"[{i}/{total}] {s['id']} {s['name']}：AI 判断失败 {e}")
+        if (not j or not j["approve"]) and not ai_keep:
             stats["pending"] += 1
             if args.verbose:
                 log(f"[{i}/{total}] {s['id']} {s['name']}：留给人工（{j['reason'] if j else '无缓存'}）")
             continue
-        want = (set(j["similar"]) | set(j.get("name_keep") or [])) - set(j.get("ambiguous") or []) - set(j.get("elsewhere") or [])
+        if ai_keep:
+            want = set(ai_keep)
+        else:
+            want = (set(j["similar"]) | set(j.get("name_keep") or [])) - set(j.get("ambiguous") or []) - set(j.get("elsewhere") or [])
         keep = [it for it in items if it.get("key") in want]
         keep += [dict(poiId=c["ctrip_poi_id"], name=c["ctrip_poi_name"], url=c.get("ctrip_url"), address=c.get("address"),
                       lat=c.get("lat"), lng=c.get("lng"), key=f"poi:{c['ctrip_poi_id']}")
@@ -709,11 +772,13 @@ async def auto_review(args, get_searcher, log=print, should_stop=lambda: False, 
                 db.set_poi(dict(scenic_id=s["id"], keep=True, poiId=it.get("poiId"), businessId=it.get("businessId"),
                                 poiName=it.get("name"), poiUri=it.get("url"), addr=it.get("address"), lat=it.get("lat"), lon=it.get("lng")))
         if not args.dry_run:
-            db.set_status(dict(scenic_id=s["id"], status="done", note=j["reason"], reviewer=args.reviewer))
+            db.set_status(dict(scenic_id=s["id"], status="done", note=note or j["reason"], reviewer="ai" if ai_keep else args.reviewer))
             on_approved(s["id"])
-        stats["approved"] += 1
-        log(f"[{i}/{total}] {s['id']} {s['name']}：{'(试运行) ' if args.dry_run else ''}自动通过，保留 {len(seen)} 个 {'、'.join(names)}")
-    log(f"完成：自动通过 {stats['approved']}，留给人工 {stats['pending']}，现搜 {stats['searched']} 次，失败 {stats['failed']}"
+        stats["ai_approved" if ai_keep else "approved"] += 1
+        log(f"[{i}/{total}] {s['id']} {s['name']}：{'(试运行) ' if args.dry_run else ''}{'AI 判断通过' if ai_keep else '自动通过'}，"
+            f"保留 {len(seen)} 个 {'、'.join(names)}" + (f"；{note}" if ai_keep else ""))
+    log(f"完成：自动通过 {stats['approved']}" + (f"，AI 通过 {stats['ai_approved']}（AI 出错 {stats['ai_failed']}）" if use_ai else "")
+        + f"，留给人工 {stats['pending']}，现搜 {stats['searched']} 次，失败 {stats['failed']}"
         + ("（试运行，未写库）" if args.dry_run else ""))
     return stats
 
@@ -758,7 +823,9 @@ async def cmd_auto(args):
     check_db()
     lb = LazyBrowser(args)
     try:
-        await auto_review(args, lb.get_searcher, log=lambda m: print(m, flush=True))
+        prefs_file = Path(args.profile).resolve() / "hq_prefs.json"  # AI 设置和服务 / 交互核对共用浏览器目录里的设置
+        ai_cfg = ai_judge.config(Prefs(prefs_file)) if not getattr(args, "no_ai", False) else None
+        await auto_review(args, lb.get_searcher, log=lambda m: print(m, flush=True), ai_cfg=ai_cfg)
     finally:
         await lb.close()
 
@@ -808,7 +875,7 @@ def build_parser():
     browser_opts(p)
     p = sub.add_parser("prefetch", help="批量预搜索，结果写入缓存表")
     browser_opts(p)
-    p.add_argument("--city", help="城市，逗号分隔；默认 CITIES 环境变量的 7 城")
+    p.add_argument("--city", help="城市，逗号分隔；默认全国（或 --cities / CITIES 指定的城市）")
     p.add_argument("--grade", help="等级，如 5A,4A")
     p.add_argument("--status", default="todo", choices=["todo", "done", "skip", "all"])
     p.add_argument("--q", help="景区名/ID 过滤")
@@ -819,12 +886,13 @@ def build_parser():
     p.add_argument("--max-fail", type=int, default=5, help="连续失败多少次就停止（可能被限流/出验证码）")
     p = sub.add_parser("auto", help="批量自动审核：名称一致且地址相近的直接通过，其余留给人工")
     browser_opts(p)
-    p.add_argument("--city", help="城市，逗号分隔；默认 CITIES 环境变量的 7 城")
+    p.add_argument("--city", help="城市，逗号分隔；默认全国（或 --cities / CITIES 指定的城市）")
     p.add_argument("--grade", help="等级，如 5A,4A")
     p.add_argument("--q", help="景区名/ID 过滤")
     p.add_argument("--no-alias", action="store_true", help="景区名没通过时不再用别名搜（默认会搜）")
     p.add_argument("--spots", action="store_true", help="别名也没通过时，再用核心景点搜（跳过大雄宝殿之类通用名）")
     p.add_argument("--max-extra", type=int, default=8, help="每个景区除景区名外最多再搜几个词，默认 8")
+    p.add_argument("--no-ai", action="store_true", help="不用 AI（默认按设置页 / hq_prefs.json 里的 AI 开关）")
     p.add_argument("--cache-only", action="store_true", help="只用已缓存的搜索结果，不开浏览器")
     p.add_argument("--dry-run", action="store_true", help="只打印判定结果，不写库")
     p.add_argument("--limit", type=int, default=0, help="最多处理多少个景区（0=不限）")
@@ -833,7 +901,7 @@ def build_parser():
     p.add_argument("-v", "--verbose", action="store_true", help="也打印留给人工的景区和原因")
     p = sub.add_parser("images", help="进入已审核 POI 的携程主页翻点评页，采集点评图片写进 MySQL")
     browser_opts(p)
-    p.add_argument("--city", help="城市，逗号分隔；默认 CITIES 环境变量的 7 城")
+    p.add_argument("--city", help="城市，逗号分隔；默认全国（或 --cities / CITIES 指定的城市）")
     p.add_argument("--grade", help="等级，如 5A,4A")
     p.add_argument("--q", help="景区名/ID 过滤")
     p.add_argument("--max-pages", type=int, default=20, help="每个 POI 最多翻几页点评，默认 20")

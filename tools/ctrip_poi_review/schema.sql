@@ -87,3 +87,11 @@ CREATE TABLE IF NOT EXISTS scenic_poi_image_crawl (
   updated_at DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
   PRIMARY KEY (scenic_id, poi_id)
 ) DEFAULT CHARSET=utf8mb4 COMMENT='点评图片采集进度';
+
+-- AI 辅助核对结果缓存（同一景区 + 同一组候选 + 同一模型只调一次）
+CREATE TABLE IF NOT EXISTS scenic_ai_judge (
+  scenic_id VARCHAR(64) NOT NULL, sig CHAR(40) NOT NULL COMMENT '模型 + 候选集合的签名',
+  model VARCHAR(128) NULL, result JSON NULL COMMENT 'AI 判断结果（每个 POI 保留与否、置信度、理由）',
+  created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+  PRIMARY KEY (scenic_id, sig)
+) DEFAULT CHARSET=utf8mb4 COMMENT='AI 辅助核对结果缓存';
