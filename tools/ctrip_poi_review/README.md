@@ -337,6 +337,27 @@ python service.py --channel chrome
 发给模型的只有：景区名称、别名、省市区、地址、坐标、等级、核心景点，以及携程候选的名称、类型、城市区县、地址、距离和规则提示。
 同一景区、同一组候选、同一模型的结果缓存在 `scenic_ai_judge` 表，重复打开不会重复调用。API Key 存在浏览器目录（`.pw-profile-service/hq_prefs.json`，已在 .gitignore）里，不会进 git。
 
+## 10. 智能客服对话数据：大模型改写（可追溯到原始对话）
+
+把包里的原始客服问答（`dwd.dwd_cus_service_dialogue_df` + `dwd.dwd_cus_service_dialogue_turn_df`）交给大模型，改写成多轮在线客服会话。
+输出字段和目标样例完全一致（session_id / channel / visitor_id / scenic_id / scenic_name / start_time / related_order_id / turns / end_type /
+satisfaction_score / session_duration_sec），**只多一个 `source`**：原始对话 ID、原始景点、意图、场景、来源网址、第几个版本、改写模型和提示词版本、
+质检结果（`needs_review`、`check_flags`）。
+
+```bash
+python cs_synth.py --data-dir <解压后的包>/data --limit 20                      # 先试 20 条看效果
+python cs_synth.py --data-dir <解压后的包>/data --city 北京 --intent 门票,预约购票 --variants 2 --workers 4 --mysql
+```
+
+- AI 配置用工作台「设置 → AI 判断」的（同一个 API Key / 模型；非流式、关闭深度思考），也可用环境变量 `ARK_API_KEY`。
+- 默认只用 `data_type=真实`、`dataset_split_type=train` 的原始对话（不把验证 / 测试集改写进训练数据），`--data-type`、`--split all` 可改。
+- 景区：原始 `attraction_id = ctrip_<携程景点ID>` → 携程主档 → 客户景区表里已审核且 `ctrip_poi_info` 含该 POI 的景区，得到 `scenic_id` / `scenic_name`；
+  对不上的默认跳过（`--allow-unmapped` 保留，scenic_id 为空）。原始问的是景区里的某个景点时，提示词会要求保留这个景点名。
+- 防编造：客服只能说原文里有的事实；生成后自动质检，客服说的金额 / 时间点原文没有的标 `needs_review`。
+- 输出在 `out/cs_synth_<日期>/`（已在 .gitignore）：`dialogs.jsonl`（生成结果）、`source_extract.jsonl`（用到的原始对话：原表整行 + 逐轮发言）、
+  `mapping.csv`（session_id ↔ 原始 dialogue_id ↔ 景区 ↔ 质检）、`rejected.jsonl`（不合格 / 调用失败及原因）。可断点续跑，已生成的跳过。
+  加 `--mysql` 同时写表 `cs_dialog_synth`（session_id 主键，`source_dialogue_id` 可直接 join 原始表）。
+
 ## 其他参数
 
 | 参数 | 说明 |
@@ -357,6 +378,7 @@ python service.py --channel chrome
 | `import_candidates.py` | 导入离线候选 CSV |
 | `import_ctrip_master.py` | 导入携程景区主档（用于显示地址/等级） |
 | `match.py` | 名称/地址比对与自动审核判定、坐标换算 |
+| `cs_synth.py` | 智能客服对话：用大模型改写原始客服问答，输出目标格式 + source |
 | `ai_judge.py` | AI 辅助核对（火山方舟 Responses API，提示词、解析、缓存） |
 | `crawler.py` | 点评图片采集（翻页、解析、入库） |
 | `service.py` | 常驻服务（FastAPI）：核对接口、任务队列、边核对边采集 |
