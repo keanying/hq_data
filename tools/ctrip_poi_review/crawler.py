@@ -49,7 +49,7 @@ def rows_from_items(items, total, scenic, poi, collect_time, image_total=None):
     rows = []
     for it in items:
         for im in it.get("images") or []:
-            if not im.get("imageId") or not im.get("imageSrcUrl"):
+            if not im.get("imageSrcUrl"):
                 continue
             rows.append(dict(
                 poi_id=int(poi["poiId"]), poi_name=poi.get("poiName"),
@@ -57,7 +57,8 @@ def rows_from_items(items, total, scenic, poi, collect_time, image_total=None):
                 image_url=im.get("imageSrcUrl"), image_thumb_url=im.get("imageThumbUrl"),
                 lon=_num(scenic.get("lng")), lat=_num(scenic.get("lat")),
                 province=scenic.get("province"), city=scenic.get("city"), district=scenic.get("district"),
-                total_count=image_total, comment_total=total, review_id=it.get("commentId"), image_id=im.get("imageId"),
+                total_count=image_total, comment_total=total, review_id=it.get("commentId"), ctrip_image_id=im.get("imageId"),
+                # image_id / record_id 在 db.images_insert 里由图片链接算出
                 width=im.get("width"), height=im.get("height"),
                 review_score=_num(it.get("score")), review_publish_time=parse_ms_date(it.get("publishTime")),
                 collect_time=collect_time, data_source=DATA_SOURCE, is_modified=0,

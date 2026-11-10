@@ -58,17 +58,21 @@ CREATE TABLE IF NOT EXISTS scenic_ctrip_candidate (
 -- 写入日期 >= 现有最大分区上界时自动 ADD PARTITION p<上界> VALUES LESS THAN (<次日>)（ODS_AUTO_PARTITION=0 可关）。
 -- lon/lat：客户景区表坐标实为 GCJ02，按交付表注释换算成 WGS84 再写（ODS_COORD=gcj02 则原样写）。
 
--- 工具自己的图片表：去重（同一景区+POI+图片只存一条）、生成 record_id，并多存缩略图/点评分/发布时间
+-- 工具自己的图片表：去重（同一景区+POI+图片只存一条），并多存缩略图/点评分/发布时间
+-- image_id  = 图片链接文件名（去尺寸后缀）的 SHA1 前 16 位十六进制转十进制，取 63 位：
+--             CAST(CONV(LEFT(SHA1('0100v1200091giq9766D4'), 16), 16, 10) AS UNSIGNED) & 9223372036854775807
+-- record_id = img_<景区ID>_<image_id>，同一景区同一张图永远相同，再次采集不会重复
 CREATE TABLE IF NOT EXISTS scenic_poi_image (
   id BIGINT AUTO_INCREMENT PRIMARY KEY,
-  record_id VARCHAR(32) NULL COMMENT '记录ID：img_<采集日期>_<序号>',
+  record_id VARCHAR(64) NULL COMMENT '记录ID：img_<景区ID>_<image_id>',
   poi_id BIGINT NOT NULL, poi_name VARCHAR(255) NULL,
   scenic_id VARCHAR(64) NOT NULL, scenic_name VARCHAR(255) NULL,
   image_url VARCHAR(512) NOT NULL, image_thumb_url VARCHAR(512) NULL,
   lon DOUBLE NULL, lat DOUBLE NULL, province VARCHAR(64) NULL, city VARCHAR(64) NULL, district VARCHAR(64) NULL,
   total_count BIGINT NULL COMMENT '该 POI 图片总数（主页 __NEXT_DATA__ poiDetail.imageInfo.imageCount）',
   comment_total INT NULL COMMENT '该 POI 点评总数（getCommentCollapseList.totalCount）',
-  review_id BIGINT NULL, image_id BIGINT NOT NULL, width INT NULL, height INT NULL,
+  review_id BIGINT NULL, image_id BIGINT NOT NULL COMMENT '由图片链接算出', ctrip_image_id BIGINT NULL COMMENT '携程 imageId',
+  old_record_id VARCHAR(64) NULL COMMENT '旧版 record_id（迁移时保留）', width INT NULL, height INT NULL,
   review_score DOUBLE NULL, review_publish_time DATETIME NULL,
   collect_time DATETIME NOT NULL, data_source VARCHAR(32) NOT NULL DEFAULT 'OTA-图片爬取', is_modified TINYINT NOT NULL DEFAULT 0,
   UNIQUE KEY uk_scenic_poi_image (scenic_id, poi_id, image_id), KEY idx_poi (poi_id), KEY idx_record (record_id), KEY idx_review (review_id)
