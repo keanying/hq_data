@@ -74,6 +74,22 @@ JS_IMAGE_TOTAL = """() => {
   return null;
 }"""
 
+# 携程 POI 主页是 Next.js 服务端渲染：第一页点评、图片总数都在 __NEXT_DATA__ 里（第一页不会发接口请求）
+#   props.pageProps.initialState.commentList            第一页点评（结构同接口 result.items）
+#   props.pageProps.initialState.commentTotalCount      点评总数（同接口 totalCount）
+#   props.pageProps.initialState.poiDetail.poiId        页面对应的 poiId
+#   props.pageProps.initialState.poiDetail.imageInfo.imageCount   POI 图片总数 → total_count
+JS_SSR = """() => {
+  const el = document.getElementById('__NEXT_DATA__');
+  if (!el) return null;
+  try {
+    const st = JSON.parse(el.textContent).props.pageProps.initialState || {};
+    const pd = st.poiDetail || {};
+    return { poiId: pd.poiId ?? null, poiName: pd.poiName ?? null, imageCount: (pd.imageInfo || {}).imageCount ?? null,
+             commentTotal: st.commentTotalCount ?? null, commentCount: pd.commentCount ?? null, items: st.commentList || null };
+  } catch (e) { return null; }
+}"""
+
 JS_NEXT_STATE = """(el) => {
   const dis = (e) => e && ((e.className || '').toString().toLowerCase().includes('disabled') || e.getAttribute('aria-disabled') === 'true' || e.disabled);
   return { disabled: dis(el) || dis(el.parentElement) || dis(el.closest('li')), visible: !!(el.offsetWidth || el.offsetHeight) };
@@ -133,25 +149,38 @@ class CommentImageCrawler:
         try:
             await page.goto(poi["poiUri"], wait_until="domcontentloaded", timeout=30000)
             await self._check_blocked()
-            # 往下滚到「用户点评」，触发第一页点评加载
+            # 第一页：优先读服务端渲染的 __NEXT_DATA__；没有时退回「滚到点评区等接口返回」
+            ssr = None
+            try:
+                ssr = await page.evaluate(JS_SSR)
+            except Exception:
+                pass
+            if ssr and ssr.get("poiId") and str(ssr["poiId"]) != str(pid):
+                stat["stop"] = f"页面上的 poiId={ssr['poiId']}（{ssr.get('poiName')}）与预期 {pid} 不符，未采集（poiUri 可能指向了别的 POI）"
+                return stat
             js = None
-            for _ in range(20):
-                js = await self._wait_new(captured, seen_n) if captured[seen_n[0]:] else None
-                if js:
-                    break
-                await page.mouse.wheel(0, random.randint(600, 1000))
-                await page.wait_for_timeout(random.randint(300, 600))
+            if ssr and ssr.get("items") is not None:
+                js = {"result": {"items": ssr["items"], "totalCount": ssr.get("commentTotal")}}
+            else:
+                for _ in range(20):
+                    js = await self._wait_new(captured, seen_n) if captured[seen_n[0]:] else None
+                    if js:
+                        break
+                    await page.mouse.wheel(0, random.randint(600, 1000))
+                    await page.wait_for_timeout(random.randint(300, 600))
+                if not js:
+                    js = await self._wait_new(captured, seen_n)
             if not js:
-                js = await self._wait_new(captured, seen_n)
-            if not js:
-                stat["stop"] = "没读到点评接口返回（页面没有点评，或结构变了：可用 dump_page.py 抓页面结构）"
+                stat["stop"] = "没读到第一页点评（页面没有点评，或结构变了：可用 dump_page.py 抓页面结构）"
                 return stat
             last_ids = None
             collect_time = datetime.now(CN_TZ).strftime("%Y-%m-%d %H:%M:%S")
-            try:
-                image_total = await page.evaluate(JS_IMAGE_TOTAL)
-            except Exception:
-                image_total = None
+            image_total = (ssr or {}).get("imageCount")
+            if image_total is None:
+                try:
+                    image_total = await page.evaluate(JS_IMAGE_TOTAL)
+                except Exception:
+                    image_total = None
             stat["image_total"] = image_total
             while True:
                 items, total = comment_result(js)
@@ -189,7 +218,7 @@ class CommentImageCrawler:
             return stat
         finally:
             page.remove_listener("response", on_resp)
-            ok = stat["stop"] and not stat["stop"].startswith(("没读到", "点「下一页」后", "已取消"))
+            ok = stat["stop"] and not stat["stop"].startswith(("没读到", "点「下一页」后", "已取消", "页面上的 poiId"))
             db.crawl_put(sid, pid, status="done" if ok else ("failed" if stat["pages"] == 0 else "partial"),
                          message=stat["stop"] or "中断")
 

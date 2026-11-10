@@ -66,7 +66,7 @@ CREATE TABLE IF NOT EXISTS scenic_poi_image (
   scenic_id VARCHAR(64) NOT NULL, scenic_name VARCHAR(255) NULL,
   image_url VARCHAR(512) NOT NULL, image_thumb_url VARCHAR(512) NULL,
   lon DOUBLE NULL, lat DOUBLE NULL, province VARCHAR(64) NULL, city VARCHAR(64) NULL, district VARCHAR(64) NULL,
-  total_count BIGINT NULL COMMENT '该 POI 图片总数（携程主页上的图片数，读不到为空）',
+  total_count BIGINT NULL COMMENT '该 POI 图片总数（主页 __NEXT_DATA__ poiDetail.imageInfo.imageCount）',
   comment_total INT NULL COMMENT '该 POI 点评总数（getCommentCollapseList.totalCount）',
   review_id BIGINT NULL, image_id BIGINT NOT NULL, width INT NULL, height INT NULL,
   review_score DOUBLE NULL, review_publish_time DATETIME NULL,

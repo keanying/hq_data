@@ -97,7 +97,7 @@ DDL += [
   image_thumb_url VARCHAR(512) NULL COMMENT '缩略图（imageThumbUrl）',
   lon DOUBLE NULL COMMENT '景区经度（客户景区表）', lat DOUBLE NULL COMMENT '景区纬度（客户景区表）',
   province VARCHAR(64) NULL, city VARCHAR(64) NULL, district VARCHAR(64) NULL,
-  total_count BIGINT NULL COMMENT '该 POI 图片总数（携程主页上的图片数，读不到为空）',
+  total_count BIGINT NULL COMMENT '该 POI 图片总数（主页 __NEXT_DATA__ poiDetail.imageInfo.imageCount）',
   comment_total INT NULL COMMENT '该 POI 点评总数（getCommentCollapseList.totalCount）',
   review_id BIGINT NULL COMMENT '点评 commentId',
   image_id BIGINT NOT NULL COMMENT '携程图片 imageId',
