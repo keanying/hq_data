@@ -179,6 +179,71 @@ python review.py export -o scenic_ctrip_poi_mapping.csv
 
 字段对应：携程搜索返回的 `poiId` = 携程主档 `ctrip_poi_id`；只有景点ID（url 中的数字）时会从携程主档 / 候选表补出 poiId，补不出的不能保存。
 
+## 7. 景点图像识别：采集点评图片
+
+对已审核（`approval=1`）景区 `ctrip_poi_info` 里的每个 POI：打开它的携程主页 → 往下滚到「用户点评」→ 一页页点「下一页」，
+旁路读取页面自己发出的 `getCommentCollapseList` 返回，把点评里的图片写进 MySQL。不自己调接口。
+
+```bash
+python review.py images --channel chrome --grade 5A,4A
+```
+
+- 每个 POI 默认最多 20 页、300 张（`--max-pages` / `--max-images`），页间随机停 1.5–3 秒；`--limit` 限制 POI 数，`--refresh` 重采已采完的。
+- 断点续采：进度在 `scenic_poi_image_crawl`，已采完的 POI 下次自动跳过；同一景区+POI+图片只存一条。
+- 遇到登录/验证会停下，在浏览器里处理后重跑即可。
+
+写入两张表：
+
+| 表 | 说明 |
+|---|---|
+| `ods_prd_poi_image_di`（交付表，你们建好的分区天表） | 字段与样例一致；`travel_date` = 采集日期；`lon/lat` 按表注释换算成 WGS84（客户景区坐标实为 GCJ02；`ODS_COORD=gcj02` 则原样写）；当天没有分区时自动 `ADD PARTITION p<次日> VALUES LESS THAN (<次日>)`（`ODS_AUTO_PARTITION=0` 关闭）|
+| `scenic_poi_image`（工具自己的表） | 去重、生成 `record_id`（`img_<采集日期>_<序号>`），多存缩略图、点评分、点评发布时间、点评总数 |
+
+字段来源：`poi_id/poi_name` 来自 `ctrip_poi_info`；`scenic_*`、省市区、`lon/lat` 来自客户景区表；`review_id`=commentId，`image_id/width/height/image_url`=点评图片；
+`total_count` = POI 主页上的图片总数（读不到为空，**真实页面的读取规则需用 `dump_page.py` 核对**）；`collect_time` 采集时间，`data_source`=`OTA-图片爬取`，`is_modified`=0。
+
+交付表不存在时只写 `scenic_poi_image`；之后建好交付表，用下面的命令补写（重复的会被忽略）：
+
+```bash
+python review.py sync-ods
+```
+
+### 抓页面结构（规则对不上时）
+
+```bash
+python dump_page.py https://you.ctrip.com/sight/beijing1/229.html --channel chrome
+```
+
+打开页面、滚到点评区、点一次「下一页」，保存整页 HTML、截图、点评接口请求/返回、「下一页」附近的 HTML、像「图片总数」的文字，
+打包成 `debug/page_dump_<时间>.zip` 发给开发即可（不含请求头和 Cookie，请求体里 token 之类字段已打码）。
+
+## 8. 服务化（常驻服务 + 网页控制台）
+
+```bash
+python service.py --channel chrome
+```
+
+浏览器打开 <http://127.0.0.1:8800>：
+
+- 审核进度（按城市）、图片采集进度（按城市）
+- 新建任务：「自动审核」「采集点评图片」，带筛选和上限；任务按提交顺序逐个执行（共用一个浏览器，避免并发被限流）
+- 任务列表：进度、实时日志、取消；遇到登录/验证会停在「需要人工」，在服务打开的浏览器里处理后重新提交即可（已完成的不会重做）
+- 图片预览：按景区ID / poiId 看已采的图片
+
+参数：`--port 8800`、`--host 127.0.0.1`（默认只本机可访问）、`--all-cities`、`--headless`（不建议）、`--profile`（默认 `.pw-profile-service`，和 `review.py run` 分开，可以同时开）。
+
+接口（给其他系统调用）：
+
+| 方法 | 路径 | 说明 |
+|---|---|---|
+| GET | `/api/health` | 服务状态、当前任务、排队数 |
+| GET | `/api/stats` | 各城市审核进度、图片采集统计 |
+| POST | `/api/jobs` | 提交任务：`{"type":"images","params":{"city":"北京市","grade":"5A","max_pages":20}}`；`type` 可为 `auto_review` / `images` |
+| GET | `/api/jobs`、`/api/jobs/{id}` | 任务列表 / 详情（含日志） |
+| POST | `/api/jobs/{id}/cancel` | 取消任务 |
+| GET | `/api/images?scenic_id=&poi_id=&limit=&offset=` | 查询已采图片 |
+| GET | `/api/scenic/{scenic_id}` | 景区详情和已保留的 POI |
+
 ## 其他参数
 
 | 参数 | 说明 |
@@ -198,5 +263,8 @@ python review.py export -o scenic_ctrip_poi_mapping.csv
 | `db.py` | MySQL 读写 |
 | `import_candidates.py` | 导入离线候选 CSV |
 | `import_ctrip_master.py` | 导入携程景区主档（用于显示地址/等级） |
-| `match.py` | 名称/地址比对与自动审核判定 |
+| `match.py` | 名称/地址比对与自动审核判定、坐标换算 |
+| `crawler.py` | 点评图片采集（翻页、解析、入库） |
+| `service.py` + `dashboard.html` | 常驻服务和网页控制台 |
+| `dump_page.py` | 抓 POI 主页结构，供核对采集规则 |
 | `schema.sql` | 表结构（程序会自动建，供 DBA 审阅） |

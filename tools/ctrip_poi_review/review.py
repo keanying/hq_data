@@ -8,6 +8,7 @@
     python review.py run                 # 交互核对（默认）
     python review.py prefetch --grade 5A,4A   # 批量预搜索，结果进缓存表，核对时秒开
     python review.py auto --grade 5A,4A       # 批量自动审核：名称一致且地址相近的直接通过
+    python review.py images --grade 5A,4A     # 进已审核 POI 的携程主页翻点评，采集点评图片
     python review.py export -o mapping.csv    # 导出 scenic_id -> ctrip_poi_id 列表
 """
 import argparse
@@ -618,90 +619,132 @@ async def cmd_prefetch(args):
             await ctx.close()
 
 
-async def cmd_auto(args):
-    """批量自动审核：名称一致且地址相近的景区直接通过（approval=1），其余留给人工。
-    搜索结果优先用缓存；需要现搜时才打开浏览器。"""
-    check_db()
+async def auto_review(args, get_searcher, log=print, should_stop=lambda: False, progress=lambda done, total: None):
+    """批量自动审核核心：名称一致且（地址相近/门牌一致/同省市区）的景区直接通过，其余留给人工。
+    搜索结果优先用缓存；需要现搜时才调用 get_searcher()（async，返回 CtripSearcher）。CLI 和服务共用。"""
     filters = dict(city=args.city or "", grade=args.grade or "", status="todo", q=args.q or "")
     stats = dict(approved=0, pending=0, searched=0, failed=0)
-    pw = ctx = searcher = None
-    try:
-        async def get_items(kwd):
-            nonlocal pw, ctx, searcher
-            hit = db.cache_get(kwd)
-            if hit and hit.get("result") and hit["result"].get("capture") != "dom":
-                return hit["result"]["items"]
-            if args.cache_only:
-                return None
-            if searcher is None:
-                pw = await async_playwright().start()
-                ctx, page, prefs = await launch(pw, args)
-                if args.throttle_ms:
-                    prefs["throttle_ms"] = args.throttle_ms
-                searcher = CtripSearcher(page, prefs, args.start_url, args.pattern)
-                await page.goto(args.start_url, wait_until="domcontentloaded")
-                await page.wait_for_timeout(2000)
-            res = await searcher.search(kwd)
-            stats["searched"] += 1
-            if res["capture"] == "dom":
-                raise RuntimeError("没读到接口返回（只有下拉框文字）")
-            db.cache_put(kwd, res)
-            return res["items"]
 
-        r = db.scenic_list(filters, 0, 100000)
-        total = len(r["items"])
-        for i, s in enumerate(r["items"], 1):
-            if args.limit and i > args.limit:
-                break
-            d = db.scenic_detail(s["id"])
-            enrich(d["candidates"], "ctrip_poi_id", "ctrip_business_id")
-            kws = [s["name"]] + ([a.strip() for a in re.split(r"[,，、;；/]", s.get("alias") or "") if a.strip()] if not args.no_alias else [])
-            kws += match.core_spots(s) if args.spots else []
-            kws = list(dict.fromkeys(kws))[: 1 + args.max_extra]
-            items, j = [], None
-            try:
-                for kwd in dict.fromkeys(kws):
-                    got = await get_items(kwd)
-                    if got is None:
-                        continue
-                    items += enrich(got)
-                    j = judge_scenic(d, items)
-                    if j["approve"]:
-                        break
-            except Exception as e:
-                stats["failed"] += 1
-                print(f"[{i}/{total}] {s['id']} {s['name']}：搜索失败 {e}", flush=True)
-                continue
-            if not j or not j["approve"]:
-                stats["pending"] += 1
-                if args.verbose:
-                    print(f"[{i}/{total}] {s['id']} {s['name']}：留给人工（{j['reason'] if j else '无缓存'}）", flush=True)
-                continue
-            want = (set(j["similar"]) | set(j.get("name_keep") or [])) - set(j.get("ambiguous") or []) - set(j.get("elsewhere") or [])
-            keep = [it for it in items if it.get("key") in want]
-            keep += [dict(poiId=c["ctrip_poi_id"], name=c["ctrip_poi_name"], url=c.get("ctrip_url"), address=c.get("address"),
-                          lat=c.get("lat"), lng=c.get("lng"), key=f"poi:{c['ctrip_poi_id']}")
-                     for c in d["candidates"] if f"poi:{c['ctrip_poi_id']}" in want]
-            names, seen = [], set()
-            for it in keep:
-                if it["key"] in seen:
+    async def get_items(kwd):
+        hit = db.cache_get(kwd)
+        if hit and hit.get("result") and hit["result"].get("capture") != "dom":
+            return hit["result"]["items"]
+        if args.cache_only:
+            return None
+        searcher = await get_searcher()
+        res = await searcher.search(kwd)
+        stats["searched"] += 1
+        if res["capture"] == "dom":
+            raise RuntimeError("没读到接口返回（只有下拉框文字）")
+        db.cache_put(kwd, res)
+        return res["items"]
+
+    r = db.scenic_list(filters, 0, 1000000)
+    items_all = r["items"][: args.limit] if args.limit else r["items"]
+    total = len(items_all)
+    for i, s in enumerate(items_all, 1):
+        if should_stop():
+            log("已取消")
+            break
+        d = db.scenic_detail(s["id"])
+        enrich(d["candidates"], "ctrip_poi_id", "ctrip_business_id")
+        kws = [s["name"]] + ([a.strip() for a in re.split(r"[,，、;；/]", s.get("alias") or "") if a.strip()] if not args.no_alias else [])
+        kws += match.core_spots(s) if args.spots else []
+        kws = list(dict.fromkeys(kws))[: 1 + args.max_extra]
+        items, j = [], None
+        try:
+            for kwd in dict.fromkeys(kws):
+                got = await get_items(kwd)
+                if got is None:
                     continue
-                seen.add(it["key"])
-                names.append(it.get("name"))
-                if not args.dry_run:
-                    db.set_poi(dict(scenic_id=s["id"], keep=True, poiId=it.get("poiId"), businessId=it.get("businessId"),
-                                    poiName=it.get("name"), poiUri=it.get("url"), addr=it.get("address"), lat=it.get("lat"), lon=it.get("lng")))
+                items += enrich(got)
+                j = judge_scenic(d, items)
+                if j["approve"]:
+                    break
+        except Exception as e:
+            stats["failed"] += 1
+            log(f"[{i}/{total}] {s['id']} {s['name']}：搜索失败 {e}")
+            progress(i, total)
+            if stats["failed"] >= getattr(args, "max_fail", 5) and stats["searched"] == 0:
+                raise
+            continue
+        progress(i, total)
+        if not j or not j["approve"]:
+            stats["pending"] += 1
+            if args.verbose:
+                log(f"[{i}/{total}] {s['id']} {s['name']}：留给人工（{j['reason'] if j else '无缓存'}）")
+            continue
+        want = (set(j["similar"]) | set(j.get("name_keep") or [])) - set(j.get("ambiguous") or []) - set(j.get("elsewhere") or [])
+        keep = [it for it in items if it.get("key") in want]
+        keep += [dict(poiId=c["ctrip_poi_id"], name=c["ctrip_poi_name"], url=c.get("ctrip_url"), address=c.get("address"),
+                      lat=c.get("lat"), lng=c.get("lng"), key=f"poi:{c['ctrip_poi_id']}")
+                 for c in d["candidates"] if f"poi:{c['ctrip_poi_id']}" in want]
+        names, seen = [], set()
+        for it in keep:
+            if it["key"] in seen:
+                continue
+            seen.add(it["key"])
+            names.append(it.get("name"))
             if not args.dry_run:
-                db.set_status(dict(scenic_id=s["id"], status="done", note=j["reason"], reviewer=args.reviewer))
-            stats["approved"] += 1
-            print(f"[{i}/{total}] {s['id']} {s['name']}：{'(试运行) ' if args.dry_run else ''}自动通过，保留 {len(set(k['key'] for k in keep))} 个 {'、'.join(names)}", flush=True)
+                db.set_poi(dict(scenic_id=s["id"], keep=True, poiId=it.get("poiId"), businessId=it.get("businessId"),
+                                poiName=it.get("name"), poiUri=it.get("url"), addr=it.get("address"), lat=it.get("lat"), lon=it.get("lng")))
+        if not args.dry_run:
+            db.set_status(dict(scenic_id=s["id"], status="done", note=j["reason"], reviewer=args.reviewer))
+        stats["approved"] += 1
+        log(f"[{i}/{total}] {s['id']} {s['name']}：{'(试运行) ' if args.dry_run else ''}自动通过，保留 {len(seen)} 个 {'、'.join(names)}")
+    log(f"完成：自动通过 {stats['approved']}，留给人工 {stats['pending']}，现搜 {stats['searched']} 次，失败 {stats['failed']}"
+        + ("（试运行，未写库）" if args.dry_run else ""))
+    return stats
+
+
+class LazyBrowser:
+    """需要时才启动浏览器；CLI 的 auto / images 用。"""
+    def __init__(self, args):
+        self.args, self.pw, self.ctx, self.page, self.prefs, self.searcher = args, None, None, None, None, None
+
+    async def get_page(self):
+        if self.page is None:
+            self.pw = await async_playwright().start()
+            self.ctx, self.page, self.prefs = await launch(self.pw, self.args)
+            if getattr(self.args, "throttle_ms", 0):
+                self.prefs["throttle_ms"] = self.args.throttle_ms
+        return self.page
+
+    async def get_searcher(self):
+        if self.searcher is None:
+            page = await self.get_page()
+            self.searcher = CtripSearcher(page, self.prefs, self.args.start_url, self.args.pattern)
+            await page.goto(self.args.start_url, wait_until="domcontentloaded")
+            await page.wait_for_timeout(2000)
+        return self.searcher
+
+    async def close(self):
+        if self.ctx:
+            await self.ctx.close()
+        if self.pw:
+            await self.pw.stop()
+
+
+async def cmd_auto(args):
+    check_db()
+    lb = LazyBrowser(args)
+    try:
+        await auto_review(args, lb.get_searcher, log=lambda m: print(m, flush=True))
     finally:
-        if ctx:
-            await ctx.close()
-        if pw:
-            await pw.stop()
-        print(f"完成：自动通过 {stats['approved']}，留给人工 {stats['pending']}，现搜 {stats['searched']} 次，失败 {stats['failed']}"
-              + ("（试运行，未写库）" if args.dry_run else ""))
+        await lb.close()
+
+
+async def cmd_images(args):
+    """进入已审核 POI 的携程主页，翻点评页，把点评图片写进 MySQL。"""
+    import crawler
+    check_db()
+    lb = LazyBrowser(args)
+    try:
+        await crawler.crawl_all(lb.get_page, dict(city=args.city or "", grade=args.grade or "", q=args.q or ""),
+                                max_pages=args.max_pages, max_images=args.max_images, limit=args.limit, refresh=args.refresh,
+                                log=lambda m: print(m, flush=True))
+    finally:
+        await lb.close()
 
 
 def write_csv(path, rows):
@@ -758,6 +801,16 @@ def build_parser():
     p.add_argument("--throttle-ms", type=int, default=0, help="两次搜索最小间隔（毫秒），默认 2500")
     p.add_argument("--reviewer", default="auto", help="写入进度表的核对人，默认 auto")
     p.add_argument("-v", "--verbose", action="store_true", help="也打印留给人工的景区和原因")
+    p = sub.add_parser("images", help="进入已审核 POI 的携程主页翻点评页，采集点评图片写进 MySQL")
+    browser_opts(p)
+    p.add_argument("--city", help="城市，逗号分隔；默认 CITIES 环境变量的 7 城")
+    p.add_argument("--grade", help="等级，如 5A,4A")
+    p.add_argument("--q", help="景区名/ID 过滤")
+    p.add_argument("--max-pages", type=int, default=20, help="每个 POI 最多翻几页点评，默认 20")
+    p.add_argument("--max-images", type=int, default=300, help="每个 POI 最多存几张图，默认 300（0=不限）")
+    p.add_argument("--limit", type=int, default=0, help="最多采几个 POI（0=不限）")
+    p.add_argument("--refresh", action="store_true", help="已采完的 POI 也重新采")
+    p = sub.add_parser("sync-ods", help="把已采集的图片补写进交付表 ods_prd_poi_image_di（重复的会被忽略）")
     p = sub.add_parser("export", help="导出最终映射 CSV")
     p.add_argument("-o", "--output", default="scenic_ctrip_poi_mapping.csv")
     return ap
@@ -775,10 +828,15 @@ def main(argv=None):
         db.DEFAULT_CITIES = []
     if args.cmd == "export":
         cmd_export(args)
+    elif args.cmd == "sync-ods":
+        check_db()
+        print(f"写入 {db.ODS_TABLE}：{db.ods_sync()} 条（坐标：{db.ODS_COORD}）")
     elif args.cmd == "prefetch":
         asyncio.run(cmd_prefetch(args))
     elif args.cmd == "auto":
         asyncio.run(cmd_auto(args))
+    elif args.cmd == "images":
+        asyncio.run(cmd_images(args))
     else:
         asyncio.run(cmd_run(args))
 

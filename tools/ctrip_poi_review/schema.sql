@@ -52,3 +52,33 @@ CREATE TABLE IF NOT EXISTS scenic_ctrip_candidate (
 ) DEFAULT CHARSET=utf8mb4 COMMENT='景区-携程POI 离线候选（规则匹配）';
 
 -- 最终结果：SELECT scenic_id, approval, ctrip_poi_info FROM pft_ai_dim_prd_scenic_base_yr_f WHERE approval = 1;
+
+-- ================================================================ 景点图像识别：携程点评图片
+-- 交付表：ods_prd_poi_image_di（你们建好的分区天表）。review.py images / 服务采到的图片会同步写入；
+-- 写入日期 >= 现有最大分区上界时自动 ADD PARTITION p<上界> VALUES LESS THAN (<次日>)（ODS_AUTO_PARTITION=0 可关）。
+-- lon/lat：客户景区表坐标实为 GCJ02，按交付表注释换算成 WGS84 再写（ODS_COORD=gcj02 则原样写）。
+
+-- 工具自己的图片表：去重（同一景区+POI+图片只存一条）、生成 record_id，并多存缩略图/点评分/发布时间
+CREATE TABLE IF NOT EXISTS scenic_poi_image (
+  id BIGINT AUTO_INCREMENT PRIMARY KEY,
+  record_id VARCHAR(32) NULL COMMENT '记录ID：img_<采集日期>_<序号>',
+  poi_id BIGINT NOT NULL, poi_name VARCHAR(255) NULL,
+  scenic_id VARCHAR(64) NOT NULL, scenic_name VARCHAR(255) NULL,
+  image_url VARCHAR(512) NOT NULL, image_thumb_url VARCHAR(512) NULL,
+  lon DOUBLE NULL, lat DOUBLE NULL, province VARCHAR(64) NULL, city VARCHAR(64) NULL, district VARCHAR(64) NULL,
+  total_count BIGINT NULL COMMENT '该 POI 图片总数（携程主页上的图片数，读不到为空）',
+  comment_total INT NULL COMMENT '该 POI 点评总数（getCommentCollapseList.totalCount）',
+  review_id BIGINT NULL, image_id BIGINT NOT NULL, width INT NULL, height INT NULL,
+  review_score DOUBLE NULL, review_publish_time DATETIME NULL,
+  collect_time DATETIME NOT NULL, data_source VARCHAR(32) NOT NULL DEFAULT 'OTA-图片爬取', is_modified TINYINT NOT NULL DEFAULT 0,
+  UNIQUE KEY uk_scenic_poi_image (scenic_id, poi_id, image_id), KEY idx_poi (poi_id), KEY idx_record (record_id), KEY idx_review (review_id)
+) DEFAULT CHARSET=utf8mb4 COMMENT='景点图像识别：携程点评图片';
+
+-- 采集进度（断点续采）
+CREATE TABLE IF NOT EXISTS scenic_poi_image_crawl (
+  scenic_id VARCHAR(64) NOT NULL, poi_id BIGINT NOT NULL, poi_name VARCHAR(255) NULL, poi_uri VARCHAR(512) NULL,
+  status VARCHAR(16) NULL COMMENT 'running / done / partial / failed', pages_done INT NOT NULL DEFAULT 0,
+  total_count INT NULL, review_qty INT NOT NULL DEFAULT 0, image_qty INT NOT NULL DEFAULT 0, message VARCHAR(500) NULL,
+  updated_at DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  PRIMARY KEY (scenic_id, poi_id)
+) DEFAULT CHARSET=utf8mb4 COMMENT='点评图片采集进度';
