@@ -779,6 +779,10 @@ async def auto_review(args, get_searcher, log=print, should_stop=lambda: False, 
         keep += [dict(poiId=c["ctrip_poi_id"], name=c["ctrip_poi_name"], url=c.get("ctrip_url"), address=c.get("address"),
                       lat=c.get("lat"), lng=c.get("lng"), key=f"poi:{c['ctrip_poi_id']}")
                  for c in d["candidates"] if f"poi:{c['ctrip_poi_id']}" in want]
+        if ai_keep is not None and not args.dry_run:  # AI 说了算：之前保留的、AI 没选中的全部取消（AI 一个没选 = 全部不选）
+            for k in db.scenic_detail(s["id"]).get("kept") or []:
+                if f"poi:{k['poiId']}" not in want:
+                    db.set_poi(dict(scenic_id=s["id"], keep=False, poiId=k["poiId"]))
         names, seen = [], set()
         for it in keep:
             if it["key"] in seen:
