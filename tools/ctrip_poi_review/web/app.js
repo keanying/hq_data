@@ -166,11 +166,13 @@
   }
 
   // ------------------------------------------------------------ 采集状态（边核对边采集 + 正在采集的 POI）
+  /** 边核对边采集的状态：[颜色, 短状态, 说明] */
   function followState(f) {
-    if (!f || !f.enabled) return ['grey', '已关闭'];
-    if (f.paused) return ['orange', '已暂停'];
-    if (f.current) return ['blue', '采集中'];
-    return ['green', '待命'];
+    if (!f || !f.enabled) return ['grey', '已关闭', '审核通过后不会自动采图片'];
+    if (f.paused) return ['orange', '已暂停', f.message ? `原因：${f.message}` : '队列保留着，点「继续采集」接着采'];
+    if (f.current) return ['blue', '采集中', `正在采 ${f.current}`];
+    if (f.pending) return ['blue', '排队中', `还有 ${f.pending} 个景区等着采`];
+    return ['green', '空闲', '审核通过（含规则自动通过、AI 通过）的景区会自动开始采'];
   }
   async function skipPoi(source, refresh) {
     try {
@@ -186,15 +188,19 @@
 
   function FollowControls({ follow, refresh }) {
     const f = follow || {};
-    const [c, t] = followState(f);
-    return html`<span className="toolbar" style=${{ gap: 8 }}>
+    const [c, t, desc] = followState(f);
+    return html`<span className="fc">
       <${Switch} size="small" checked=${!!f.enabled} onChange=${(v) => setFollow({ enabled: v }, refresh)} />
-      <${Text} strong>边核对边采集<//>
-      <${Tag} color=${c} size="small">${t}<//>
-      <${Text} type="tertiary" size="small">排队 ${f.pending || 0} · 已采景区 ${f.done || 0} · 新增图片 ${fmt(f.images || 0)}${f.failed ? ` · 失败 ${f.failed}` : ''}<//>
+      <b className="fc-name">边核对边采集</b>
+      <${Help} text="打开后，核对页里审核通过（含规则自动通过、AI 通过）的景区会自动排进队列，服务在后台另一个标签页里打开它保留的携程 POI，翻点评、把图片写进 MySQL。下面的数字是本次启动服务以来的累计，重启后从 0 开始。" />
+      <${Tooltip} content=${desc}><span className=${'fc-state ' + c}><i></i>${t}</span><//>
+      <span className="fc-sep"></span>
+      <span className="fc-chip"><em>队列</em><b>${fmt(f.pending || 0)}</b> 个景区</span>
+      <${Tooltip} content="本次启动服务以来的累计，重启后从 0 开始"><span className="fc-chip"><em>本次已采</em><b>${fmt(f.done || 0)}</b> 个景区 · 新增 <b>${fmt(f.images || 0)}</b> 张图</span><//>
+      ${f.failed ? html`<span className="fc-chip bad"><em>失败</em><b>${fmt(f.failed)}</b> 个景区</span>` : null}
       ${f.enabled && (f.paused
-        ? html`<${Button} size="small" theme="solid" icon=${html`<${Ic.IconPlay} />`} onClick=${() => setFollow({ resume: true }, refresh)}>继续<//>`
-        : html`<${Button} size="small" type="tertiary" icon=${html`<${Ic.IconPause} />`} onClick=${() => setFollow({ pause: true }, refresh)}>暂停<//>`)}
+        ? html`<${Button} size="small" theme="solid" icon=${html`<${Ic.IconPlay} />`} onClick=${() => setFollow({ resume: true }, refresh)}>继续采集<//>`
+        : html`<${Button} size="small" type="tertiary" icon=${html`<${Ic.IconPause} />`} onClick=${() => setFollow({ pause: true }, refresh)}>暂停采集<//>`)}
     </span>`;
   }
 
@@ -363,7 +369,7 @@
           <${Spin} size="small" />
           <span className="txt">正在采：<b>${a.scenic_name} / ${a.poi_name}</b> · 第 ${a.pages}/${a.max_pages} 页 · 新增 ${a.images} 张</span>
           <${Button} size="small" type="primary" theme="light" icon=${html`<${Ic.IconChevronRight} />`} iconPosition="right" onClick=${() => skipPoi('follow', refreshFollow)}>下一个 POI<//>`
-          : html`<${Text} type="tertiary" size="small">审核完成（含自动通过）的景区会自动排进图片采集<//>`}</div>
+          : html`<${Text} type="tertiary" size="small">${followState(follow)[2]}<//>`}</div>
       </div>
       <div className="card review-card"><div id="review-host" ref=${host}></div></div>
     </div>`;
