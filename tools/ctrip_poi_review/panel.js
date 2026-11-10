@@ -262,19 +262,36 @@
     })();
 
     // ---------------------------------------------------------------- navigation
+    // S.base = S.list[0] 在整个筛选结果里的位置。「待核对」之外的筛选（全部 / 已审核…）不从第一条开始，
+    // 而是从第一个还没审核（approval≠1）的景区开始；计数「第 x / 总数」按整个筛选结果算。
     async function loadList(reset) {
       const f = prefs.filters || {}, gen = S.gen;
-      const offset = reset || f.status === 'todo' ? 0 : S.list.length;
-      const r = await call('list', { filters: f, offset, limit: 200 });
+      const todo = (f.status || 'todo') === 'todo';
+      const offset = reset || todo ? 0 : (S.base || 0) + S.list.length;
+      const r = await call('list', { filters: f, offset, limit: 200, start_todo: !!(reset && !todo) });
       if (gen !== S.gen) throw new Error('__stale__'); // 期间换了筛选条件，这次结果作废
-      S.total = r.total;
-      if (reset) { S.list = r.items; S.i = -1; } else {
+      S.total = r.total; S.approvedIn = r.approved;
+      if (reset) { S.list = r.items; S.i = -1; S.base = todo ? 0 : (r.offset || 0); } else {
         const seen = new Set(S.list.map((x) => x.id));
         S.list = S.list.concat(r.items.filter((x) => !seen.has(x.id)));
       }
       return r.items.length;
     }
+    async function loadBefore() {  // 往前翻到了已加载部分的开头：再往前加载一批
+      const f = prefs.filters || {}, gen = S.gen;
+      const off = Math.max(0, (S.base || 0) - 200), lim = (S.base || 0) - off;
+      if (lim <= 0) return 0;
+      const r = await call('list', { filters: f, offset: off, limit: lim });
+      if (gen !== S.gen) throw new Error('__stale__');
+      const seen = new Set(S.list.map((x) => x.id));
+      const add = r.items.filter((x) => !seen.has(x.id));
+      S.list = add.concat(S.list); S.i += add.length; S.base = off;
+      return add.length;
+    }
     async function go(delta) {
+      if (S.i + delta < 0 && (S.base || 0) > 0) {
+        try { await loadBefore(); } catch (e) { if (e.message === '__stale__') return; throw e; }
+      }
       let j = S.i + delta;
       if (j >= S.list.length) {
         let added = 0;
@@ -320,14 +337,16 @@
     }
     function renderProgress() {
       const st = { todo: '待核对', done: '已审核', skip: '已跳过', auto: '自动通过', all: '全部' }[(prefs.filters || {}).status] || '';
-      $('#progress').textContent = S.detail ? `${st} 第 ${S.i + 1} / ${S.total}` : `${st} 共 ${S.total}`;
+      const fmtN = (v) => Number(v || 0).toLocaleString('zh-CN');
+      $('#progress').textContent = S.detail ? `${st} 第 ${fmtN((S.base || 0) + S.i + 1)} / ${fmtN(S.total)}` : `${st} 共 ${fmtN(S.total)}`;
       const city = (prefs.filters || {}).city;
       const rows = (S.cities || []).filter((c) => !city || city.split(',').includes(c.city));
       const n = rows.reduce((a, c) => a + Number(c.n || 0), 0), ok = rows.reduce((a, c) => a + Number(c.reviewed || 0), 0);
       const sk = rows.reduce((a, c) => a + Number(c.skipped || 0), 0);
       $('#prog-bar').style.width = n ? (ok / n * 100).toFixed(1) + '%' : '0';
       const cur = !city && S.detail ? ` · 当前 ${esc(S.detail.scenic.city || '')}` : '';
-      $('#prog-text').innerHTML = `${esc(city || '全部城市')}${cur} 已审核 <b>${ok}</b> / ${n}${n ? `（${(ok / n * 100).toFixed(1)}%）` : ''}${sk ? ` · 跳过 ${sk}` : ''}`;
+      $('#prog-text').innerHTML = `${esc(city || '全部城市')}${cur} · 共 ${fmtN(n)} · 已审核 <b>${fmtN(ok)}</b>${n ? `（${(ok / n * 100).toFixed(1)}%）` : ''}`
+        + ` · 未审核 ${fmtN(n - ok)}${sk ? `（含跳过 ${fmtN(sk)}）` : ''}`;
     }
     function fillCities() {
       const sel = $('#f-city'), cur = (prefs.filters || {}).city || '';
@@ -786,7 +805,7 @@
           const f = Object.assign({}, prefs.filters || {});
           if (t.dataset.empty === 'clear') Object.assign(f, { q: '', city: '', grade: '' }); else f.status = t.dataset.empty;
           await savePrefs({ filters: f }); await start();
-        } else if (t.id === 'f-apply') { await savePrefs({ filters: { city: $('#f-city').value, grade: $('#f-grade').value, status: $('#f-status').value, q: $('#f-q').value.trim() } }); await start(); }
+        } else if (t.id === 'f-apply') { await savePrefs({ filters: { city: $('#f-city').value, grade: $('#f-grade').value, status: $('#f-status').value, q: $('#f-q').value.trim(), from_link: false } }); await start(); }
         else if (t.id === 'export') { const r = await call('export'); if (r.url) window.open(r.url, '_blank'); else toast('已导出：' + r.path); }
         else if (t.id === 's-save') {
           await savePrefs({ reviewer: $('#s-reviewer').value.trim(), throttle_ms: Number($('#s-throttle').value || 2500), auto_search: $('#s-auto').checked,
@@ -887,7 +906,7 @@
     window.addEventListener('hq:open', async (e) => {
       const sid = e.detail && e.detail.scenic_id;
       if (!sid || !hello) return;
-      await savePrefs({ filters: Object.assign({}, prefs.filters || {}, { q: sid, status: 'all', city: '' }) });
+      await savePrefs({ filters: Object.assign({}, prefs.filters || {}, { q: sid, status: 'all', city: '', from_link: true }) });
       $('#panel').classList.remove('hidden'); $('#fab').style.display = 'none';
       await start();
     });
@@ -895,6 +914,12 @@
     return {
       ready(h) {
         hello = h; $('#fab').title = '景区 ↔ 携程POI 核对';
+        // 上次是从「去核对」链接打开的单个景区：这次回到「待核对」，从没审核的开始
+        const f0 = (prefs && prefs.filters) || {};
+        if (f0.from_link) {
+          prefs.filters = Object.assign({}, f0, { q: '', status: 'todo', from_link: false });
+          call('prefs', { filters: prefs.filters }).catch(() => {});
+        }
         if (EMBED) $('#fab').click(); // 嵌在网页里：直接打开
       },
       fail(msg) { bootError = msg; const f = $('#fab'); f.classList.add('err'); f.textContent = 'POI核对（出错，点我看原因）'; },

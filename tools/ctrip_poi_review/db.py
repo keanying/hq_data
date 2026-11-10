@@ -427,19 +427,26 @@ def _select():
     return ", ".join(f"s.{v} AS `{k}`" for k, v in C.items())
 
 
-def scenic_list(f, offset=0, limit=200):
+def scenic_list(f, offset=0, limit=200, start_todo=False):
+    """核对列表。start_todo=True：从当前排序里第一个还没审核（approval<>1）的景区开始返回（offset 改成它的位置），
+    「全部」等筛选下也不用从第一条翻起；total 仍是筛选范围内的总数，另给出其中已审核 / 未审核的数量。"""
     where, params = _filters(f)
     base = f"FROM {SCENIC_TABLE} s LEFT JOIN {STATUS_TABLE} st ON st.scenic_id = s.{C['id']} {where}"
+    # 城市按 CITIES 的顺序依次排（一个城市跑完再下一个），城市内 5A→4A→…；全国模式按省、再按市依次跑
+    city_order, city_params = ((f"FIELD(s.{C['city']}, {','.join(['%s'] * len(DEFAULT_CITIES))}), ", list(DEFAULT_CITIES)) if DEFAULT_CITIES
+                               else (f"s.{C['province']}, ", []))
+    order = f"ORDER BY {city_order}s.{C['city']}, {GRADE_ORDER}, s.{C['id']}"
     with cursor() as cur:
-        cur.execute(f"SELECT COUNT(*) n {base}", params)
-        total = cur.fetchone()["n"]
-        # 城市按 CITIES 的顺序依次排（一个城市跑完再下一个），城市内 5A→4A→…
-        city_order, city_params = ((f"FIELD(s.{C['city']}, {','.join(['%s'] * len(DEFAULT_CITIES))}), ", list(DEFAULT_CITIES)) if DEFAULT_CITIES
-                                   else (f"s.{C['province']}, ", []))  # 全国模式：按省、再按市依次跑
+        cur.execute(f"SELECT COUNT(*) n, CAST(SUM({APPROVED}) AS SIGNED) ok {base}", params)
+        r = cur.fetchone()
+        total, approved = r["n"] or 0, r["ok"] or 0
+        if start_todo:
+            cur.execute(f"SELECT COALESCE(s.{APPROVAL}, 0) a {base} {order}", params + city_params)
+            flags = [x["a"] for x in cur.fetchall()]
+            offset = next((i for i, a in enumerate(flags) if int(a or 0) != 1), 0)
         cur.execute(f"""SELECT {_select()}, COALESCE(s.{APPROVAL}, 0) approval, st.status, st.note
-                        {base} ORDER BY {city_order}s.{C['city']}, {GRADE_ORDER}, s.{C['id']} LIMIT %s OFFSET %s""",
-                    params + city_params + [int(limit), int(offset)])
-        return dict(total=total, offset=offset, items=list(cur.fetchall()))
+                        {base} {order} LIMIT %s OFFSET %s""", params + city_params + [int(limit), int(offset)])
+        return dict(total=total, approved=approved, unapproved=total - approved, offset=offset, items=list(cur.fetchall()))
 
 
 def scenic_detail(sid):

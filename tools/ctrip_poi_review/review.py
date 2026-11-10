@@ -498,7 +498,8 @@ def make_rpc(get_searcher, prefs, export_url=None):
         if method == "hello":
             return dict(main=True, prefs=dict(prefs), health=db.health(), cities=db.cities())
         if method == "list":
-            return db.scenic_list(payload.get("filters") or {}, payload.get("offset", 0), payload.get("limit", 200))
+            return db.scenic_list(payload.get("filters") or {}, payload.get("offset", 0), payload.get("limit", 200),
+                                  bool(payload.get("start_todo")))
         if method == "detail":
             d = db.scenic_detail(payload["scenic_id"])
             enrich(d["candidates"], "ctrip_poi_id", "ctrip_business_id")
