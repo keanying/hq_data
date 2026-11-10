@@ -743,6 +743,33 @@
   }
 
   // ------------------------------------------------------------ 设置
+  /** AI 调用记录：每次调用的结果 / 失败原因 / 用时 / request id；完整日志在 logs/ai_calls.jsonl */
+  function AILog() {
+    const [d, refresh] = usePoll(() => api('/api/ai/log?limit=200'), 5000);
+    const [cur, setCur] = useState(null);
+    const box = useRef(null); const h = useHeight(box);
+    const items = (d && d.items) || [];
+    const cols = [
+      { title: '时间', dataIndex: 'time', width: 120, render: (v) => html`<span className="num nw sm">${(v || '').slice(5)}</span>` },
+      { title: '景区', dataIndex: 'scenic_name', width: 200, render: (v, r) => html`<div className="cell-2"><div className="t ell">${v || r.scenic_id || '—'}</div>
+          <div className="d">${r.model || ''}${r.web_search ? ' · 联网' : ''}${r.items != null ? ` · ${r.items} 个候选` : ''}</div></div>` },
+      { title: '结果', dataIndex: 'ok', width: 70, render: (v) => (v ? html`<${Tag} color="green" size="small">成功<//>` : html`<${Tag} color="red" size="small">失败<//>`) },
+      { title: '用时', dataIndex: 'elapsed', width: 64, align: 'right', render: (v) => html`<span className="num sm">${v != null ? v + 's' : '—'}</span>` },
+      { title: '说明', dataIndex: 'error', render: (v, r) => html`<div className=${'ell sm ' + (r.ok ? 'muted' : '')} style=${{ color: r.ok ? undefined : '#c62828' }}
+          title=${v || r.summary || ''}>${r.ok ? `${r.approve ? '可通过' : '拿不准'} · 置信度 ${Number(r.confidence || 0).toFixed(2)} · ${r.summary || r.raw || ''}` : v}</div>` },
+    ];
+    return html`<${Card} title="AI 调用记录" sub=${items.length ? `最近 ${items.length} 次` : ''} className="fill" bodyClass="flush"
+        help=${`每次调用 AI 的结果都会记下来（成功 / 失败原因 / 用时 / request id / 返回片段），点一行看详情。完整日志：${(d && d.file) || 'logs/ai_calls.jsonl'}`}
+        extra=${html`<${Button} size="small" icon=${html`<${Ic.IconRefresh} />`} onClick=${refresh} />`}>
+      <div className="fill" ref=${box} style=${{ minHeight: 160 }}>${h > 0 && html`<${Table} size="small" columns=${cols} dataSource=${items}
+        rowKey=${(r) => (r.time || '') + (r.scenic_id || '') + (r.elapsed || '')} pagination=${false} scroll=${{ y: h - 41 }}
+        onRow=${(r) => ({ onClick: () => setCur(r), style: { cursor: 'pointer' } })} empty=${html`<${Empty} description="还没有调用过 AI" />`} />`}</div>
+      <${Modal} title="AI 调用详情" visible=${!!cur} onCancel=${() => setCur(null)} footer=${null} width=${720}>
+        ${cur && html`<pre className="log" style=${{ maxHeight: 480 }}>${JSON.stringify(cur, null, 2)}</pre>`}
+      <//>
+    <//>`;
+  }
+
   function SettingsPage({ refreshHealth }) {
     const [st, setSt] = useState(null);
     const [key, setKey] = useState('');
@@ -781,7 +808,8 @@
     const keyHint = st.ai_key_set ? `已设置（${st.ai_api_key || '环境变量'}，来自${st.ai_key_source || '设置页'}）；留空表示不修改` : '填写火山方舟 API Key（也可用环境变量 ARK_API_KEY）';
     return html`<div className="page">
       <div className="row2" style=${{ gridTemplateColumns: 'minmax(0, 1.15fr) minmax(0, 1fr)', flex: 1 }}>
-        <${Card} title="AI 判断" sub=${st.ai_enabled ? (st.ai_key_set ? '已启用' : '已启用，缺 API Key') : '未启用'} bodyClass="scroll"
+        <div className="page" style=${{ gap: 14 }}>
+        <${Card} title="AI 判断" sub=${st.ai_enabled ? (st.ai_key_set ? '已启用' : '已启用，缺 API Key') : '未启用'} bodyClass="scroll" style=${{ flex: 'none', maxHeight: '62%' }}
           help="规则判不了的景区（名称不一致、同名不同区、地址对不上…），把景区名称 / 别名 / 省市区 / 地址 / 坐标 / 核心景点和携程候选的名称 / 类型 / 城市区县 / 地址 / 距离发给大模型，判断每个 POI 是否属于这个景区。有把握（置信度达到下限）就自动保留并通过，备注以「AI审核：」开头，最后在核对页筛「AI 通过（待复核）」由人复核。结果按景区缓存，不重复调用。">
           <div className="form" style=${{ gridTemplateColumns: '96px minmax(0, 1fr)' }}>
             <${Field} label="启用">${sw('ai_enabled')}<span className="lbl">核对页搜完规则判不了时自动调用；任务中心的批量自动审核也会用</span><//>
@@ -803,8 +831,11 @@
             <//>
           </div>
           ${test && !test.loading && html`<${Banner} style=${{ marginTop: 14 }} type=${test.ok ? 'success' : 'danger'} closeIcon=${null}
-            description=${test.ok ? `连通了：${test.model}${test.web_search ? '（联网搜索）' : ''}，用时 ${test.elapsed} 秒；返回：${test.text}` : `没连通：${test.error}`} />`}
+            description=${test.ok ? `连通了：${test.model}${test.web_search ? '（联网搜索）' : ''}，用时 ${test.elapsed} 秒；返回：${test.text}${test.request_id ? `；request_id ${test.request_id}` : ''}`
+              : `没连通：${test.error}${test.request_id ? `（request_id ${test.request_id}）` : ''}${test.raw ? `；原始返回：${test.raw}` : ''}`} />`}
         <//>
+        <${AILog} />
+        </div>
         <div className="page" style=${{ gap: 14 }}>
           <${Card} title="核对" bodyClass="scroll" className="fill">
             <div className="form" style=${{ gridTemplateColumns: '96px minmax(0, 1fr)' }}>

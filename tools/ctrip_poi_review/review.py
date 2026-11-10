@@ -467,7 +467,16 @@ def ai_pool(detail, items):
 async def ai_judge_scenic(cfg, detail, items):
     pool = ai_pool(detail, items)
     rule = judge_scenic(detail, items)
-    return await asyncio.to_thread(ai_judge.judge, cfg, detail["scenic"], pool, rule, db.ai_cache_get, db.ai_cache_put)
+    limit = float(cfg.get("ai_timeout_s") or 60) + 10  # 硬上限：接口一直不返回也不会卡住核对流程
+    try:
+        return await asyncio.wait_for(asyncio.to_thread(ai_judge.judge, cfg, detail["scenic"], pool, rule, db.ai_cache_get, db.ai_cache_put),
+                                      timeout=limit)
+    except asyncio.TimeoutError:
+        s = detail["scenic"]
+        msg = f"AI 接口超过 {limit:.0f} 秒没返回，已放弃这次判断（开了联网搜索会更慢，可在设置里调大超时）"
+        ai_judge.log_call(dict(scenic_id=s.get("id"), scenic_name=s.get("name"), model=cfg.get("ai_model"),
+                               web_search=bool(cfg.get("ai_web_search")), items=len(pool), ok=False, elapsed=limit, error=msg))
+        raise ai_judge.AIError(msg) from None
 
 
 class Prefs(dict):

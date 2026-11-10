@@ -193,6 +193,8 @@
   :host(.embed) .ai-banner.ok { background: #e8f7ee; color: #1c7c3f; }
   :host(.embed) .ai-banner.err { background: #ffecec; color: #c62828; }
   :host(.embed) .ai-banner .muted { margin-left: 8px; font-size: 12px; }
+  :host(.embed) .ai-banner .ai-acts { margin-top: 8px; display: flex; gap: 12px; align-items: center; }
+  :host(.embed) .ai-banner .ai-log-link { color: #6c4dff; font-size: 12.5px; }
   :host(.embed) .ai-banner.loading .layui-icon { display: inline-block; animation: hqspin 1s linear infinite; }
   @keyframes hqspin { to { transform: rotate(360deg); } }
   :host(.embed) .tag.ai { background: #f4f2ff; color: #5b3deb; }
@@ -460,7 +462,7 @@
       syncKept();
       S.res = null; S.keyword = ''; S.rawOpen = {}; S.domOpen = false; S.othersOpen = false;
       S.searches = []; S.merged = null; stopSequence();
-      S.manualOff = new Set(); S.autoKept = new Set(); S.aiKept = new Set(); S.ai = null; cancelAutoApprove(true); cancelIdleSkip(true); S.takenOver = false;
+      S.manualOff = new Set(); S.autoKept = new Set(); S.aiKept = new Set(); S.ai = null; clearInterval(S.aiTick); cancelAutoApprove(true); cancelIdleSkip(true); S.takenOver = false;
       $('#note').value = (S.detail.status && S.detail.status.note) || '';
       render();
       // 已审核（approval=1）的景区：不再自动搜索 / 自动保留 / 自动审核，只展示已保留的；要复核手动点搜索词或「重新搜索」
@@ -566,16 +568,22 @@
       const items = ((S.merged && S.merged.items) || []).filter((it) => it.key && it.poiId)
         .map((it) => ({ key: it.key, poiId: it.poiId, name: it.name, type: it.type, cityName: it.cityName, districtName: it.districtName,
           address: it.address || null, lat: it.lat ?? null, lng: it.lng ?? null }));
-      S.ai = { loading: true }; render();
+      clearInterval(S.aiTick);
+      S.ai = { loading: true, t0: Date.now() }; render();
+      S.aiTick = setInterval(() => { const el = $('#ai-el'); if (el && S.ai && S.ai.loading) el.textContent = Math.round((Date.now() - S.ai.t0) / 1000); }, 1000);
       let r;
       try {
         r = await call('ai_judge', { scenic_id: sid, items });
       } catch (e) {
+        clearInterval(S.aiTick);
         if (!S.detail || S.detail.scenic.id !== sid) return;
-        S.ai = { error: e.message }; render(); toast('AI 判断失败：' + e.message, true);
+        const msg = String(e.message || e).replace(/^AIError:\s*/, '');
+        S.ai = { error: msg, secs: Math.round((Date.now() - (S.ai && S.ai.t0 || Date.now())) / 1000) }; render();
+        toast('AI 判断失败：' + msg, true);
         if (auto) startIdleSkip(ruleReason || 'AI 判断失败');
         return;
       }
+      clearInterval(S.aiTick);
       if (!S.detail || S.detail.scenic.id !== sid) return;
       if (!r.enabled) { S.ai = null; render(); if (auto) startIdleSkip(ruleReason); return; }
       S.ai = r;
@@ -735,8 +743,11 @@
     }
     function aiBanner() {
       if (!S.ai) return '';
-      if (S.ai.loading) return `<div class="ai-banner loading">${IC('loading', '')} AI 判断中…（${esc(prefs.ai_model || '')}${prefs.ai_web_search ? '，联网搜索' : ''}）</div>`;
-      if (S.ai.error) return `<div class="ai-banner err">AI 判断失败：${esc(S.ai.error)}</div>`;
+      if (S.ai.loading) return `<div class="ai-banner loading">${IC('loading', '')} AI 判断中… 已等 <b id="ai-el">${Math.round((Date.now() - S.ai.t0) / 1000)}</b> 秒
+        <span class="muted">（${esc(prefs.ai_model || '')}${prefs.ai_web_search ? '，联网搜索' : ''}；超过 ${Number(prefs.ai_timeout_s) || 60} 秒会放弃）</span></div>`;
+      if (S.ai.error) return `<div class="ai-banner err"><b>AI 判断失败</b>（用时 ${S.ai.secs || 0} 秒）：${esc(S.ai.error)}
+        <div class="ai-acts"><button id="ai-run">${IC('refresh', '')} 重试</button>
+        ${EMBED ? '<a href="#/settings" class="ai-log-link">查看 AI 调用记录</a>' : '<span class="muted">详细记录在工具目录 logs/ai_calls.jsonl</span>'}</div></div>`;
       const c = Number(S.ai.confidence) || 0;
       return `<div class="ai-banner ${S.ai.approve ? 'ok' : ''}"><b>AI ${S.ai.approve ? '判断可以通过' : '拿不准'}</b>：${esc(S.ai.summary || '')}
         <span class="muted">置信度 ${c.toFixed(2)} · ${esc(S.ai.model || '')} · ${S.ai.cached ? '缓存' : '用时 ' + S.ai.elapsed + ' 秒'}</span></div>`;
@@ -961,7 +972,7 @@
         <div class="sec"><b>携程搜索</b>${S.seq ? `<span class="tag warn">依次搜索 ${S.seq.i + 1}/${S.seq.kws.length}</span><button id="stop-seq" title="不再继续搜下一个关键词">停止</button>` : ''}${S.keyword ? `<span class="muted">「${esc(S.keyword)}」${capLabel ? ' · ' + esc(capLabel) : ''}${S.res && S.res.cached ? ' · 缓存 ' + esc(S.res.searched_at) : ''}</span>
           <button id="re-search" title="在携程页面重新输入搜索 (R)">${IC('refresh', '')} 重新搜索</button>` : ''}
           ${missingAddr ? `<button id="fill-addr" title="逐个打开携程详情页读取地址">${IC('location', '')} 补全地址（${missingAddr}）</button>` : ''}
-          ${prefs.ai_key_set && S.merged && !(S.ai && S.ai.loading) ? `<button id="ai-run" title="让 AI 判断这些候选是否属于这个景区（不会自动通过）">${IC('chat', '')} AI 判断</button>` : ''}</div>
+          ${prefs.ai_key_set && S.merged && !(S.ai && (S.ai.loading || S.ai.error)) ? `<button id="ai-run" title="让 AI 判断这些候选是否属于这个景区（不会自动通过）">${IC('chat', '')} AI 判断</button>` : ''}</div>
         ${aiBanner()}
         ${S.idle ? `<div class="idle-banner"><div class="txt"><b>需要人工审核</b>：${esc(S.idle.reason)}<br><span id="idle-left">${S.idle.left}</span> 秒内无人操作将跳过并进入下一个（之后可在「已跳过」里处理）</div><button id="take-over">我来处理</button></div>` : ''}
         ${S.autoApprove ? `<div class="auto-banner"><div class="txt"><b>${S.autoApprove.ai ? IC('ok', '✓') + ' AI 判断可以通过' : IC('ok', '✓') + ' 名称一致（地址相近 / 门牌一致 / 同省市区）'}</b>，<span id="auto-left">${S.autoApprove.left}</span> 秒后自动审核通过并进入下一个<br>${esc(S.autoApprove.reason)}</div><button id="cancel-auto">取消（Esc）</button></div>`
