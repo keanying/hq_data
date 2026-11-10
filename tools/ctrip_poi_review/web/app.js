@@ -189,18 +189,22 @@
   function FollowControls({ follow, refresh }) {
     const f = follow || {};
     const [c, t, desc] = followState(f);
+    const toggle = () => setFollow(f.paused ? { resume: true } : { pause: true }, refresh);
+    const action = !f.enabled ? '' : f.paused ? '继续' : '暂停';
     return html`<span className="fc">
       <${Switch} size="small" checked=${!!f.enabled} onChange=${(v) => setFollow({ enabled: v }, refresh)} />
       <b className="fc-name">边核对边采集</b>
-      <${Help} text="打开后，核对页里审核通过（含规则自动通过、AI 通过）的景区会自动排进队列，服务在后台另一个标签页里打开它保留的携程 POI，翻点评、把图片写进 MySQL。下面的数字是本次启动服务以来的累计，重启后从 0 开始。" />
-      <${Tooltip} content=${desc}><span className=${'fc-state ' + c}><i></i>${t}</span><//>
+      <${Help} text="打开后，核对页里审核通过（含规则自动通过、AI 审核完成）的景区会自动排进队列，服务在后台另一个标签页里打开它保留的携程 POI，翻点评、把图片写进 MySQL。数字是本次启动服务以来的累计，重启后从 0 开始。" />
+      <${Tooltip} content=${f.enabled ? `${desc}；点击${action}采集` : desc}>
+        <button className=${'fc-btn ' + c} disabled=${!f.enabled} onClick=${toggle}>
+          <span className="st"><i></i>${t}</span>
+          ${action && html`<span className="act">${f.paused ? html`<${Ic.IconPlay} size="small" />` : html`<${Ic.IconPause} size="small" />`}${action}</span>`}
+        </button>
+      <//>
       <span className="fc-sep"></span>
       <span className="fc-chip"><em>队列</em><b>${fmt(f.pending || 0)}</b> 个景区</span>
       <${Tooltip} content="本次启动服务以来的累计，重启后从 0 开始"><span className="fc-chip"><em>本次已采</em><b>${fmt(f.done || 0)}</b> 个景区 · 新增 <b>${fmt(f.images || 0)}</b> 张图</span><//>
       ${f.failed ? html`<span className="fc-chip bad"><em>失败</em><b>${fmt(f.failed)}</b> 个景区</span>` : null}
-      ${f.enabled && (f.paused
-        ? html`<${Button} size="small" theme="solid" icon=${html`<${Ic.IconPlay} />`} onClick=${() => setFollow({ resume: true }, refresh)}>继续采集<//>`
-        : html`<${Button} size="small" type="tertiary" icon=${html`<${Ic.IconPause} />`} onClick=${() => setFollow({ pause: true }, refresh)}>暂停采集<//>`)}
     </span>`;
   }
 
@@ -780,7 +784,7 @@
     if (!st) return html`<div className="page"><${Spin} /></div>`;
     const set = (k) => (v) => setSt((o) => ({ ...o, [k]: v }));
     const sw = (k) => html`<${Switch} checked=${!!st[k]} onChange=${set(k)} />`;
-    const AI_FIELDS = ['ai_enabled', 'ai_base_url', 'ai_model', 'ai_web_search', 'ai_max_keyword', 'ai_min_confidence', 'ai_auto_approve', 'ai_timeout_s', 'ai_thinking'];
+    const AI_FIELDS = ['ai_enabled', 'ai_base_url', 'ai_model', 'ai_web_search', 'ai_max_keyword', 'ai_min_confidence', 'ai_auto_approve', 'ai_timeout_s', 'ai_thinking', 'ai_mode'];
     const save = async () => {
       setBusy(true);
       try {
@@ -812,7 +816,10 @@
         <${Card} title="AI 判断" sub=${st.ai_enabled ? (st.ai_key_set ? '已启用' : '已启用，缺 API Key') : '未启用'} bodyClass="scroll" style=${{ flex: 'none', maxHeight: '62%' }}
           help="规则判不了的景区（名称不一致、同名不同区、地址对不上…），把景区名称 / 别名 / 省市区 / 地址 / 坐标 / 核心景点和携程候选的名称 / 类型 / 城市区县 / 地址 / 距离发给大模型，判断每个 POI 是否属于这个景区。有把握（置信度达到下限）就自动保留并通过，备注以「AI审核：」开头，最后在核对页筛「AI 通过（待复核）」由人复核。结果按景区缓存，不重复调用。">
           <div className="form" style=${{ gridTemplateColumns: '96px minmax(0, 1fr)' }}>
-            <${Field} label="启用">${sw('ai_enabled')}<span className="lbl">核对页搜完规则判不了时自动调用；任务中心的批量自动审核也会用</span><//>
+            <${Field} label="启用">${sw('ai_enabled')}<span className="lbl">核对页搜完自动调用；任务中心的批量自动审核也会用</span><//>
+            <${Field} label="判断范围"><${Select} value=${st.ai_mode || 'all'} onChange=${set('ai_mode')} style=${{ width: 420 }} optionList=${[
+              { value: 'all', label: '每个景区都过 AI，判完直接审核完成（推荐，全程自动）' },
+              { value: 'fallback', label: '只在规则判不了时用 AI，有把握才通过' }]} /><//>
             <${Field} label="接口地址"><${Input} value=${st.ai_base_url} onChange=${set('ai_base_url')} placeholder=${st.ai_defaults.ai_base_url} style=${{ flex: 1 }} /><//>
             <${Field} label="模型"><${Input} value=${st.ai_model} onChange=${set('ai_model')} placeholder=${st.ai_defaults.ai_model} style=${{ flex: 1 }} /><//>
             <${Field} label="API Key">
@@ -822,9 +829,9 @@
             <${Field} label="联网搜索">${sw('ai_web_search')}<span className="lbl">让模型先上网查（web_search），更准但更慢、费用更高；最多</span>
               <${InputNumber} hideButtons value=${st.ai_max_keyword} onChange=${set('ai_max_keyword')} min=${1} max=${10} disabled=${!st.ai_web_search} style=${{ width: 90 }} suffix="个词" /><//>
             <${Field} label="深度思考">${sw('ai_thinking')}<span className="lbl">默认关闭（请求带 thinking: disabled），更快更省；输出固定非流式（stream: false），一次拿完整结果</span><//>
-            <${Field} label="自动通过">${sw('ai_auto_approve')}<span className="lbl">置信度 ≥</span>
+            <${Field} label="自动完成">${sw('ai_auto_approve')}<span className="lbl">${(st.ai_mode || 'all') === 'all' ? 'AI 判完自动审核完成（是这个景区就自动保留，不是也完成）；只保留置信度 ≥' : '置信度 ≥'}</span>
               <${InputNumber} hideButtons value=${st.ai_min_confidence} onChange=${set('ai_min_confidence')} min=${0.5} max=${1} step=${0.05} precision=${2} style=${{ width: 90 }} />
-              <span className="lbl">时自动保留并审核通过；低于这个只打标签、留给人</span><//>
+              <span className="lbl">${(st.ai_mode || 'all') === 'all' ? '的 POI；之后在「AI 通过（待复核）」里人工复核' : '时自动保留并审核通过；低于这个只打标签、留给人'}</span><//>
             <${Field} label="超时"><${InputNumber} hideButtons value=${st.ai_timeout_s} onChange=${set('ai_timeout_s')} min=${10} max=${300} style=${{ width: 100 }} suffix="秒" /><//>
             <${Field} label="">
               <${Button} onClick=${runTest} loading=${test && test.loading} icon=${html`<${Ic.IconPulse} />`}>测试连接<//>

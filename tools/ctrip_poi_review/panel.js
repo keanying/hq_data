@@ -153,6 +153,7 @@
   :host(.embed) .row.keep { border-color: #6c4dff; border-left-width: 1px; padding-left: 14px; background: #f8f6ff; box-shadow: inset 0 0 0 1px #6c4dff; }
   :host(.embed) .row.nokey { cursor: default; }
   :host(.embed) .row.dim { opacity: .6; }
+  :host(.embed) .row.outside { opacity: .45; border-style: dashed; }
   :host(.embed) .idx { width: 24px; height: 24px; line-height: 24px; border-radius: 50%; background: #f4f4f6; color: #52525b; font-size: 12px; font-weight: 600; align-self: center; }
   :host(.embed) .row.keep .idx { background: #6c4dff; color: #fff; }
   :host(.embed) .l1 a { font-size: 14.5px; font-weight: 600; color: #18181b; text-decoration: none; }
@@ -460,7 +461,7 @@
       if (gen !== S.gen) return; // 期间换了筛选条件
       S.detail = d;
       syncKept();
-      S.res = null; S.keyword = ''; S.rawOpen = {}; S.domOpen = false; S.othersOpen = false;
+      S.res = null; S.keyword = ''; S.rawOpen = {}; S.domOpen = false; S.othersOpen = false; S.outsideOpen = false;
       S.searches = []; S.merged = null; stopSequence();
       S.manualOff = new Set(); S.autoKept = new Set(); S.aiKept = new Set(); S.ai = null; clearInterval(S.aiTick); cancelAutoApprove(true); cancelIdleSkip(true); S.takenOver = false;
       $('#note').value = (S.detail.status && S.detail.status.note) || '';
@@ -557,6 +558,7 @@
       if (S.seq === seq) { S.seq = null; render(); }
       if (seq.stopped || !S.detail || S.detail.scenic.id !== sid) return;
       const ruleReason = (S.merged && S.merged.judge && S.merged.judge.reason) || (S.merged && S.merged.items.length ? '没有能自动通过的结果' : '没有搜到结果');
+      if (aiAll()) { cancelAutoApprove(true); await runAI(true, ruleReason); return; }
       if (S.autoApprove) return;
       if (prefs.ai_enabled && prefs.ai_key_set) { await runAI(true, ruleReason); return; }
       startIdleSkip(ruleReason);
@@ -565,7 +567,7 @@
     async function runAI(auto, ruleReason) {
       if (!S.detail) return;
       const sid = S.detail.scenic.id;
-      const items = ((S.merged && S.merged.items) || []).filter((it) => it.key && it.poiId)
+      const items = ((S.merged && S.merged.items) || []).filter((it) => it.key && it.poiId && !it.outside)
         .map((it) => ({ key: it.key, poiId: it.poiId, name: it.name, type: it.type, cityName: it.cityName, districtName: it.districtName,
           address: it.address || null, lat: it.lat ?? null, lng: it.lng ?? null }));
       clearInterval(S.aiTick);
@@ -602,6 +604,22 @@
       if (n) toast(`AI 判断保留 ${n} 条`);
       if (!auto) return;
       const conf = Number(r.confidence) || 0;
+      if (aiAll() && Number(S.detail.scenic.approval) !== 1) {
+        // AI 说了算：规则自动保留、但 AI 判为不属于的去掉（人手动保留的不动），然后不管是不是这个景区都审核完成
+        let dropped = 0;
+        for (const [key, v] of Object.entries(r.decisions || {})) {
+          if (v.keep || v.confidence < minc || !S.autoKept.has(key) || S.decisions[key] !== 'keep') continue;
+          const it = pool.find((x) => x.key === key);
+          if (it) { try { await savePoi(it, false); S.autoKept.delete(key); dropped++; } catch (e) { /* 忽略 */ } }
+        }
+        if (!S.detail || S.detail.scenic.id !== sid) return;
+        const kept = Object.values(S.decisions).filter((v) => v === 'keep').length;
+        render();
+        maybeAutoApprove({ approve: true, aiAll: true,
+          reason: `AI审核：${r.summary || (keepKeys.length ? '有属于该景区的 POI' : '没有属于该景区的 POI')}（保留 ${kept} 个${dropped ? `，去掉规则误选 ${dropped} 个` : ''}，置信度 ${conf.toFixed(2)}）`,
+          similar: [], name_keep: keepKeys });
+        return;
+      }
       if (r.approve && conf >= minc && r.auto_approve && prefs.auto_approve !== false && keepKeys.length) {
         maybeAutoApprove({ approve: true, reason: `AI审核：${r.summary || '可以通过'}（置信度 ${conf.toFixed(2)}）`, similar: [], name_keep: keepKeys });
       } else {
@@ -710,9 +728,12 @@
       S.autoApprove = null;
       if (!silent) { toast('已取消自动审核'); render(); }
     }
+    // AI「每个景区都过」模式：规则的自动通过让位给 AI，AI 判完直接审核完成
+    const aiAll = () => !!(prefs.ai_enabled && prefs.ai_key_set && (prefs.ai_mode || 'all') === 'all');
     function maybeAutoApprove(override) {
       const j = override || (S.merged && S.merged.judge);
-      if (!prefs.auto_approve || !j || !j.approve || !S.detail || Number(S.detail.scenic.approval) === 1) return;
+      if (!override && aiAll()) return; // 等 AI 判
+      if (!(override ? prefs.ai_auto_approve !== false : prefs.auto_approve) || !j || !j.approve || !S.detail || Number(S.detail.scenic.approval) === 1) return;
       cancelAutoApprove(true);
       const sid = S.detail.scenic.id, delay = Number(prefs.auto_approve_delay_ms) || 2000;
       const A = { sid, reason: j.reason, ai: !!override, left: Math.ceil(delay / 1000) };
@@ -749,7 +770,7 @@
         <div class="ai-acts"><button id="ai-run">${IC('refresh', '')} 重试</button>
         ${EMBED ? '<a href="#/settings" class="ai-log-link">查看 AI 调用记录</a>' : '<span class="muted">详细记录在工具目录 logs/ai_calls.jsonl</span>'}</div></div>`;
       const c = Number(S.ai.confidence) || 0;
-      return `<div class="ai-banner ${S.ai.approve ? 'ok' : ''}"><b>AI ${S.ai.approve ? '判断可以通过' : '拿不准'}</b>：${esc(S.ai.summary || '')}
+      return `<div class="ai-banner ${S.ai.approve || aiAll() ? 'ok' : ''}"><b>${aiAll() ? 'AI 结论' : 'AI ' + (S.ai.approve ? '判断可以通过' : '拿不准')}</b>：${esc(S.ai.summary || '')}
         <span class="muted">置信度 ${c.toFixed(2)} · ${esc(S.ai.model || '')} · ${S.ai.cached ? '缓存' : '用时 ' + S.ai.elapsed + ' 秒'}</span></div>`;
     }
     function candAsItem(c) {
@@ -822,12 +843,14 @@
     // 带 poiId 的、或类型是景点/购物/玩乐/美食等的都算 POI，参与核对；酒店、目的地等折叠
     const POI_TYPES = new Set(['sight', 'shop', 'shopping', 'play', 'entertainment', 'restaurant', 'food', 'poi', 'scenic', '景点', '购物', '玩乐', '娱乐', '美食']);
     const isPoi = (r) => !!(r.isPoi || r.isSight || r.poiId || POI_TYPES.has(String(r.type || '').toLowerCase()));
+    // 不同省 / 市的结果（服务端标了 outside）：不展示、不参与自动保留和 AI；可点「已隐藏 N 条」展开看
     function shown() {
-      const all = (S.merged && S.merged.items) || [];
+      const all0 = (S.merged && S.merged.items) || [];
+      const outside = all0.filter((r) => r.outside), all = all0.filter((r) => !r.outside);
       const sights = all.filter(isPoi), others = all.filter((r) => !isPoi(r));
-      const list = [...sights, ...(S.othersOpen && !prefs.sight_only ? others : [])];
+      const list = [...sights, ...(S.othersOpen && !prefs.sight_only ? others : []), ...(S.outsideOpen ? outside : [])];
       list.forEach((r, i) => { r.n = i + 1; });
-      return { sights, others, list };
+      return { sights, others, list, outside };
     }
     const byN = (n) => shown().list.find((r) => r.n == n);
 
@@ -877,7 +900,7 @@
       const dec = (key) => S.decisions[key] || '';
       const MJ = (S.merged && S.merged.judge) || {};
       const nameMatch = new Set(MJ.name_match || []), spotMatch = new Set(MJ.spot_match || []), subMatch = new Set(MJ.sub_match || []), amb = new Set(MJ.ambiguous || []), elsew = new Set(MJ.elsewhere || []);
-      const { sights, others, list } = shown();
+      const { sights, others, list, outside } = shown();
       const capLabel = S.res ? ({ network: '下拉框结果', 'network?': '接口有返回但没解析出条目', dom: '只读到下拉框文字（没有ID，不能保存）' }[S.res.capture] || S.res.capture) : '';
       const capHint = S.res && S.res.capture !== 'network' && !S.loading
         ? '<div class="muted" style="color:#9a6700;margin:2px 0 6px">没读到携程接口返回。按 R 重新搜索；仍不行请把 tools/ctrip_poi_review/debug/last_search.json 发给开发排查。</div>' : '';
@@ -909,8 +932,10 @@
       if (S.loading) resHtml = '<div class="muted">正在携程页面输入并等待下拉结果…</div>';
       else if (!(S.merged && S.merged.items.length)) resHtml = `<div class="muted">${S.keyword ? '无结果' : '点上面的关键词搜索'}</div>`;
       else {
-        resHtml = list.map(resRow).join('') || '<div class="muted">没有景点/购物等 POI 类结果</div>';
+        resHtml = list.map((r) => (r.outside ? resRow(r).replace('class="row pick', 'class="row pick outside') : resRow(r))).join('')
+          || `<div class="muted">没有本地的景点/购物等 POI 类结果${outside.length ? '（搜到的都在别的省市）' : ''}</div>`;
         if (others.length && !prefs.sight_only) resHtml += `<div class="muted" style="margin:2px 0 6px"><button class="link" id="others-toggle">${S.othersOpen ? '收起' : '展开'}其他结果（酒店/目的地等 ${others.length} 条）</button></div>`;
+        if (outside.length) resHtml += `<div class="muted" style="margin:2px 0 6px"><button class="link" id="outside-toggle" title="和景区不在同一省 / 市（如景区在云南、结果在湖北），不参与自动保留和 AI 判断">${S.outsideOpen ? '收起' : '已隐藏'} ${outside.length} 条不同省市的结果${S.outsideOpen ? '' : '（展开看）'}</button></div>`;
       }
 
       const searched = new Set(((S.merged && S.merged.items) || []).map((r) => r.poiId).filter(Boolean));
@@ -975,7 +1000,7 @@
           ${prefs.ai_key_set && S.merged && !(S.ai && (S.ai.loading || S.ai.error)) ? `<button id="ai-run" title="让 AI 判断这些候选是否属于这个景区（不会自动通过）">${IC('chat', '')} AI 判断</button>` : ''}</div>
         ${aiBanner()}
         ${S.idle ? `<div class="idle-banner"><div class="txt"><b>需要人工审核</b>：${esc(S.idle.reason)}<br><span id="idle-left">${S.idle.left}</span> 秒内无人操作将跳过并进入下一个（之后可在「已跳过」里处理）</div><button id="take-over">我来处理</button></div>` : ''}
-        ${S.autoApprove ? `<div class="auto-banner"><div class="txt"><b>${S.autoApprove.ai ? IC('ok', '✓') + ' AI 判断可以通过' : IC('ok', '✓') + ' 名称一致（地址相近 / 门牌一致 / 同省市区）'}</b>，<span id="auto-left">${S.autoApprove.left}</span> 秒后自动审核通过并进入下一个<br>${esc(S.autoApprove.reason)}</div><button id="cancel-auto">取消（Esc）</button></div>`
+        ${S.autoApprove ? `<div class="auto-banner"><div class="txt"><b>${S.autoApprove.ai ? IC('ok', '✓') + ' AI 已判断' : IC('ok', '✓') + ' 名称一致（地址相近 / 门牌一致 / 同省市区）'}</b>，<span id="auto-left">${S.autoApprove.left}</span> 秒后${S.autoApprove.ai ? '审核完成' : '自动审核通过'}并进入下一个<br>${esc(S.autoApprove.reason)}</div><button id="cancel-auto">取消（Esc）</button></div>`
           : (MJ.reason && !S.loading && !S.seq && !S.idle && Number(s.approval) !== 1 ? `<div class="judge-note">自动审核：${esc(MJ.approve ? '可通过（已取消或未开启）' : MJ.reason + (S.searches.length > 1 ? `（已搜 ${S.searches.length} 个词）` : ''))}</div>` : '')}
         ${capHint}${resHtml}
         ${dom.length ? `<div class="muted"><button class="link" id="dom-toggle">${S.domOpen ? '收起' : '查看'}下拉框原文（${dom.length}）</button></div>
@@ -1049,6 +1074,7 @@
         else if (t.id === 'take-over') takeOver();
         else if (t.id === 'stop-seq') { stopSequence(); render(); }
         else if (t.id === 'others-toggle') { S.othersOpen = !S.othersOpen; render(); }
+        else if (t.id === 'outside-toggle') { S.outsideOpen = !S.outsideOpen; render(); }
         else if (t.id === 'fill-addr') await fillAddresses();
         else if (ds.fetch) await fetchAddr(byN(ds.fetch));
         else if (ds.cfetch) { const c = S.detail.candidates[ds.cfetch]; c.url = c.ctrip_url; await fetchAddr(c); }

@@ -256,3 +256,18 @@ a:hover { color: var(--semi-color-link-hover); }
 .fc-chip em { font-style: normal; margin-right: 4px; }
 .fc-chip b { color: var(--ink); font-weight: 600; font-variant-numeric: tabular-nums; }
 .fc-chip.bad b, .fc-chip.bad { color: #c62828; }
+/* 状态 + 暂停 / 继续 合成一个固定宽度的按钮 */
+.fc-btn { display: inline-flex; align-items: center; justify-content: space-between; gap: 0; width: 168px; height: 28px; padding: 0; border-radius: 14px;
+  border: 1px solid transparent; cursor: pointer; font: inherit; font-size: 12px; overflow: hidden; }
+.fc-btn .st { display: inline-flex; align-items: center; gap: 6px; padding: 0 10px; font-weight: 500; white-space: nowrap; flex: 1; }
+.fc-btn .st i { width: 7px; height: 7px; border-radius: 50%; background: currentColor; }
+.fc-btn .act { display: inline-flex; align-items: center; gap: 3px; height: 100%; padding: 0 10px; border-left: 1px solid rgba(0, 0, 0, .08);
+  background: rgba(255, 255, 255, .6); color: var(--ink-2); white-space: nowrap; }
+.fc-btn:hover .act { background: #fff; color: var(--ink); }
+.fc-btn:disabled { cursor: not-allowed; }
+.fc-btn.green { background: #e8f7ee; color: #1c7c3f; border-color: #cdebd8; }
+.fc-btn.blue { background: #e8f0ff; color: #2f5bd8; border-color: #d3e0ff; }
+.fc-btn.blue .st i { animation: fcpulse 1.2s ease-in-out infinite; }
+.fc-btn.orange { background: #fff4dd; color: #9a5b00; border-color: #f6e2b6; }
+.fc-btn.orange .act { background: #6c4dff; color: #fff; }
+.fc-btn.grey { background: #f4f4f6; color: #71717a; border-color: #ececf1; justify-content: center; }

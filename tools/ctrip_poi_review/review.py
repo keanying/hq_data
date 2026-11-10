@@ -449,7 +449,7 @@ def ai_pool(detail, items):
     pool, seen = [], set()
     for it in items or []:
         k = it.get("key")
-        if not k or not it.get("poiId") or k in seen:
+        if not k or not it.get("poiId") or k in seen or it.get("outside") or match.out_of_area(it, detail["scenic"]):
             continue
         seen.add(k)
         pool.append(dict(key=k, name=it.get("name"), type=it.get("type"), city=it.get("cityName") or it.get("city"),
@@ -593,7 +593,9 @@ def make_rpc(get_searcher, prefs, export_url=None):
             if payload.get("scenic_id"):
                 d = db.scenic_detail(payload["scenic_id"])
                 enrich(d["candidates"], "ctrip_poi_id", "ctrip_business_id")
-                res["judge"] = judge_scenic(d, res["items"])
+                for it in res["items"]:  # 和景区不在同一省 / 市的：标出来，面板不展示、不参与判断
+                    it["outside"] = match.out_of_area(it, d["scenic"])
+                res["judge"] = judge_scenic(d, [it for it in res["items"] if not it.get("outside")])
             return res
         if method == "export":
             if export_url:
@@ -698,8 +700,8 @@ async def auto_review(args, get_searcher, log=print, should_stop=lambda: False, 
     stats = dict(approved=0, ai_approved=0, pending=0, searched=0, failed=0, ai_failed=0)
     use_ai = bool(ai_cfg and ai_judge.ready(ai_cfg))
     if use_ai:
-        log(f"规则判不了的交给 AI（{ai_cfg['ai_model']}{'，联网搜索' if ai_cfg.get('ai_web_search') else ''}，"
-            f"置信度 ≥ {ai_cfg['ai_min_confidence']} 自动通过）")
+        log(("每个景区都过 AI，判完直接审核完成" if (ai_cfg.get("ai_mode") or "all") == "all" else "规则判不了的交给 AI")
+            + f"（{ai_cfg['ai_model']}{'，联网搜索' if ai_cfg.get('ai_web_search') else ''}，保留需置信度 ≥ {ai_cfg['ai_min_confidence']}）")
 
     async def get_items(kwd):
         hit = db.cache_get(kwd)
@@ -727,13 +729,14 @@ async def auto_review(args, get_searcher, log=print, should_stop=lambda: False, 
         kws = [s["name"]] + ([a.strip() for a in re.split(r"[,，、;；/]", s.get("alias") or "") if a.strip()] if not args.no_alias else [])
         kws += match.core_spots(s) if args.spots else []
         kws = list(dict.fromkeys(kws))[: 1 + args.max_extra]
-        items, j = [], None
+        items, j, searched = [], None, False
         try:
             for kwd in dict.fromkeys(kws):
                 got = await get_items(kwd)
                 if got is None:
                     continue
-                items += enrich(got)
+                searched = True
+                items += [it for it in enrich(got) if not match.out_of_area(it, d["scenic"])]  # 不同省 / 市的不要
                 j = judge_scenic(d, items)
                 if j["approve"]:
                     break
@@ -746,11 +749,16 @@ async def auto_review(args, get_searcher, log=print, should_stop=lambda: False, 
             continue
         progress(i, total)
         ai_keep, note = None, None
-        if (not j or not j["approve"]) and use_ai and items is not None:
+        ai_all = use_ai and (ai_cfg.get("ai_mode") or "all") == "all" and searched  # 一个词都没搜（只用缓存又没缓存）就不判，留着下次
+        if (ai_all or not j or not j["approve"]) and use_ai and items is not None:
             try:
                 a = await ai_judge_scenic(ai_cfg, d, items)
                 minc = float(ai_cfg["ai_min_confidence"])
-                if a["approve"] and a["confidence"] >= minc and ai_cfg.get("ai_auto_approve", True):
+                if ai_all and ai_cfg.get("ai_auto_approve", True):  # 每个景区都过 AI：判完就审核完成（没有属于的也完成，保留为空）
+                    ai_keep = {k for k, v in a["decisions"].items() if v["keep"] and v["confidence"] >= minc}
+                    note = (f"AI审核：{a['summary'] or ('有属于该景区的 POI' if ai_keep else '没有属于该景区的 POI')}"
+                            f"（保留 {len(ai_keep)} 个，置信度 {a['confidence']:.2f}）")
+                elif a["approve"] and a["confidence"] >= minc and ai_cfg.get("ai_auto_approve", True):
                     ai_keep = {k for k, v in a["decisions"].items() if v["keep"] and v["confidence"] >= minc}
                     note = f"AI审核：{a['summary']}（置信度 {a['confidence']:.2f}）"
                 elif args.verbose:
@@ -758,12 +766,12 @@ async def auto_review(args, get_searcher, log=print, should_stop=lambda: False, 
             except Exception as e:  # AI 出错不影响规则流程
                 stats["ai_failed"] += 1
                 log(f"[{i}/{total}] {s['id']} {s['name']}：AI 判断失败 {e}")
-        if (not j or not j["approve"]) and not ai_keep:
+        if (not j or not j["approve"]) and ai_keep is None:
             stats["pending"] += 1
             if args.verbose:
                 log(f"[{i}/{total}] {s['id']} {s['name']}：留给人工（{j['reason'] if j else '无缓存'}）")
             continue
-        if ai_keep:
+        if ai_keep is not None:
             want = set(ai_keep)
         else:
             want = (set(j["similar"]) | set(j.get("name_keep") or [])) - set(j.get("ambiguous") or []) - set(j.get("elsewhere") or [])
@@ -781,11 +789,11 @@ async def auto_review(args, get_searcher, log=print, should_stop=lambda: False, 
                 db.set_poi(dict(scenic_id=s["id"], keep=True, poiId=it.get("poiId"), businessId=it.get("businessId"),
                                 poiName=it.get("name"), poiUri=it.get("url"), addr=it.get("address"), lat=it.get("lat"), lon=it.get("lng")))
         if not args.dry_run:
-            db.set_status(dict(scenic_id=s["id"], status="done", note=note or j["reason"], reviewer="ai" if ai_keep else args.reviewer))
+            db.set_status(dict(scenic_id=s["id"], status="done", note=note or j["reason"], reviewer="ai" if ai_keep is not None else args.reviewer))
             on_approved(s["id"])
-        stats["ai_approved" if ai_keep else "approved"] += 1
-        log(f"[{i}/{total}] {s['id']} {s['name']}：{'(试运行) ' if args.dry_run else ''}{'AI 判断通过' if ai_keep else '自动通过'}，"
-            f"保留 {len(seen)} 个 {'、'.join(names)}" + (f"；{note}" if ai_keep else ""))
+        stats["ai_approved" if ai_keep is not None else "approved"] += 1
+        log(f"[{i}/{total}] {s['id']} {s['name']}：{'(试运行) ' if args.dry_run else ''}{'AI 审核完成' if ai_keep is not None else '自动通过'}，"
+            f"保留 {len(seen)} 个 {'、'.join(names)}" + (f"；{note}" if ai_keep is not None else ""))
     log(f"完成：自动通过 {stats['approved']}" + (f"，AI 通过 {stats['ai_approved']}（AI 出错 {stats['ai_failed']}）" if use_ai else "")
         + f"，留给人工 {stats['pending']}，现搜 {stats['searched']} 次，失败 {stats['failed']}"
         + ("（试运行，未写库）" if args.dry_run else ""))
