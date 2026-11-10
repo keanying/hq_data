@@ -6,6 +6,7 @@ import hashlib
 import json
 import os
 import re
+import time
 from contextlib import contextmanager
 
 import pymysql
@@ -106,6 +107,7 @@ DDL += [
   old_record_id VARCHAR(64) NULL COMMENT '旧版 record_id（img_<采集日期>_<序号>），迁移时保留',
   width INT NULL, height INT NULL,
   review_score DOUBLE NULL COMMENT '点评评分', review_publish_time DATETIME NULL COMMENT '点评发布时间',
+  review_content TEXT NULL COMMENT '点评内容', review_url VARCHAR(512) NULL COMMENT '点评详情页', tourist_type VARCHAR(32) NULL COMMENT '出游类型',
   collect_time DATETIME NOT NULL COMMENT '采集时间',
   data_source VARCHAR(32) NOT NULL DEFAULT 'OTA-图片爬取',
   is_modified TINYINT NOT NULL DEFAULT 0 COMMENT '是否人工修改过：0-否 1-是',
@@ -115,7 +117,7 @@ DDL += [
     f"""CREATE TABLE IF NOT EXISTS {CRAWL_TABLE} (
   scenic_id VARCHAR(64) NOT NULL, poi_id BIGINT NOT NULL,
   poi_name VARCHAR(255) NULL, poi_uri VARCHAR(512) NULL,
-  status VARCHAR(16) NULL COMMENT 'running / done / failed',
+  status VARCHAR(16) NULL COMMENT 'running / done / empty(无图) / partial / failed',
   pages_done INT NOT NULL DEFAULT 0 COMMENT '已翻到第几页',
   total_count INT NULL COMMENT '点评总数', review_qty INT NOT NULL DEFAULT 0 COMMENT '已读点评数',
   image_qty INT NOT NULL DEFAULT 0 COMMENT '已入库图片数',
@@ -203,7 +205,13 @@ def init_db():
             align_collation(cur, t, col)
     ensure_poi_info_column()
     ensure_image_columns()
-    migrate_image_ids()
+    n = mark_no_image()
+    if n:
+        print(f"{n} 个 POI 之前记为「失败 · 没读到第一页点评」，其实是没有图片，已改为「无图」", flush=True)
+    n = mark_interrupted()
+    if n:
+        print(f"上次有 {n} 个 POI 采集到一半被中断，已记为「部分」，采到的页不会再采", flush=True)
+    migrate_image_ids(log=lambda m: print(m, flush=True))
     with cursor() as cur:  # 旧版「已完成」状态同步到 approval
         cur.execute(f"""UPDATE {SCENIC_TABLE} s JOIN {STATUS_TABLE} st ON st.scenic_id = s.{C['id']}
                         SET s.{APPROVAL} = 1 WHERE st.status = 'done' AND COALESCE(s.{APPROVAL}, 0) = 0""")
@@ -608,8 +616,44 @@ def addr_put(poi_id, biz_id, name, address, page_url):
 
 
 # ---------------------------------------------------------------- 点评图片（景点图像识别）
-def crawl_targets(f, refresh=False):
-    """已审核通过（approval=1）的景区里，ctrip_poi_info 保留的每个 POI。默认跳过已采完的。"""
+# 这些原因再采也一样，算「采过了」，不自动重采
+PERMANENT_FAIL = ("页面上的 poiId", "没读到第一页点评", "该 POI 没有图片数据")
+
+
+def crawled_set():
+    """采过的 (景区ID, poiId)：采完的、采到过至少一页的（中途停了也算）、链接不对 / 页面没点评的。
+    只有「一页都没采到的临时失败」（网络、异常、启动时中断在第一页之前）才会再采。勾「重采」可强制重采。"""
+    with cursor() as cur:
+        cur.execute(f"SELECT scenic_id, poi_id, status, pages_done, message FROM {CRAWL_TABLE}")
+        rows = cur.fetchall()
+    return {(r["scenic_id"], str(r["poi_id"])) for r in rows
+            if r["status"] in ("done", "empty") or (r["pages_done"] or 0) > 0 or str(r["message"] or "").startswith(PERMANENT_FAIL)}
+
+
+def mark_no_image():
+    """旧版把「页面没有点评 / 没有图片」记成了失败：改成 empty（无图，正常情况）。"""
+    with cursor() as cur:
+        if not table_exists(cur, CRAWL_TABLE):
+            return 0
+        n = cur.execute(f"""UPDATE {CRAWL_TABLE} SET status = 'empty',
+                            message = '该 POI 没有图片数据（页面没有返回点评数据）'
+                            WHERE status = 'failed' AND pages_done = 0 AND message LIKE %s""", ("没读到第一页点评%",))
+    return n or 0
+
+
+def mark_interrupted():
+    """服务 / 程序上次在采集中途被关掉：把还是 running 的记录改成 partial（采到过的页不再重采）。"""
+    with cursor() as cur:
+        if not table_exists(cur, CRAWL_TABLE):
+            return 0
+        n = cur.execute(f"""UPDATE {CRAWL_TABLE} SET status = 'partial',
+                            message = CONCAT('上次运行中断（已采 ', pages_done, ' 页）') WHERE status = 'running'""")
+    return n or 0
+
+
+def crawl_targets(f, refresh=False, stats=None):
+    """已审核通过（approval=1）的景区里，ctrip_poi_info 保留的每个 POI。默认跳过采过的（见 crawled_set）。
+    stats 传一个 dict 进来会填 skipped = 因为采过而跳过的 POI 数。"""
     where, params = _filters(dict(f, status="done"))
     city_order, city_params = ((f"FIELD(s.{C['city']}, {','.join(['%s'] * len(DEFAULT_CITIES))}), ", list(DEFAULT_CITIES)) if DEFAULT_CITIES
                                else (f"s.{C['province']}, ", []))
@@ -619,18 +663,18 @@ def crawl_targets(f, refresh=False):
                         AND s.{POI_INFO} IS NOT NULL AND s.{POI_INFO} <> '[]'
                         ORDER BY {city_order}s.{C['city']}, {GRADE_ORDER}, s.{C['id']}""", params + city_params)
         rows = list(cur.fetchall())
-        done = set()
-        if not refresh:
-            cur.execute(f"SELECT scenic_id, poi_id FROM {CRAWL_TABLE} WHERE status = 'done'")
-            done = {(r["scenic_id"], str(r["poi_id"])) for r in cur.fetchall()}
-    out = []
+    done = set() if refresh else crawled_set()
+    out, skipped = [], 0
     for r in rows:
         for p in _parse_info(r.pop("poi_info")):
             if not str(p.get("poiId", "")).isdigit() or not p.get("poiUri"):
                 continue
             if (r["id"], str(p["poiId"])) in done:
+                skipped += 1
                 continue
             out.append(dict(scenic=r, poi=p))
+    if stats is not None:
+        stats["skipped"] = skipped
     return out
 
 
@@ -655,7 +699,7 @@ def crawl_put(sid, poi_id, **kw):
 
 IMAGE_COLS = ["record_id", "ctrip_image_id", "poi_id", "poi_name", "scenic_id", "scenic_name", "image_url", "image_thumb_url", "lon", "lat", "province", "city",
               "district", "total_count", "comment_total", "review_id", "image_id", "width", "height", "review_score",
-              "review_publish_time", "collect_time", "data_source", "is_modified"]
+              "review_publish_time", "review_content", "review_url", "tourist_type", "collect_time", "data_source", "is_modified"]
 
 
 def image_key(url):
@@ -709,41 +753,76 @@ def images_insert(rows):
 OLD_RECORD_RE = r"^img_[0-9]{8}_[0-9]+$"
 
 
-def migrate_image_ids(batch=2000, log=print):
+def migrate_image_ids(batch=5000, log=print):
     """旧版 record_id = img_<采集日期>_<序号>、image_id = 携程 imageId 的记录，改成由图片链接算出的 ID；
-    交付表里对应的行（按旧 record_id 找）一起改。重复的图片（同景区同 POI 同一张图）只留一条。可重复执行。"""
+    交付表里对应的行（按旧 record_id 找）一起改。同一景区同一张图只留一条。按批处理，可重复执行（只处理还没改过的）。"""
     if not table_exists_q(IMAGE_TABLE):
         return 0
+    with cursor() as cur:
+        cur.execute(f"""SELECT COUNT(*) n FROM {IMAGE_TABLE} WHERE old_record_id IS NULL AND (record_id IS NULL OR record_id REGEXP %s)""",
+                    (OLD_RECORD_RE,))
+        total = cur.fetchone()["n"]
+    if not total:
+        return 0
     ods = ods_exists()
+    coll = "utf8mb4_general_ci"
+    if ods:
+        with cursor() as cur:
+            cur.execute("""SELECT COLLATION_NAME c FROM information_schema.COLUMNS WHERE TABLE_SCHEMA = DATABASE()
+                           AND TABLE_NAME = %s AND COLUMN_NAME = 'record_id'""", (ODS_TABLE.strip("`").split(".")[-1].strip("`"),))
+            r = cur.fetchone()
+            coll = (r or {}).get("c") or coll
+    log(f"图片 ID 升级（只做一次）：{total} 条记录改为由图片链接算出" + (f"，交付表 {ODS_TABLE} 一起改" if ods else "") + "…")
     done = dup = 0
+    last = 0
+    t0 = time.time()
     while True:
         with cursor() as cur:
-            cur.execute(f"""SELECT id, record_id, scenic_id, poi_id, image_id, image_url FROM {IMAGE_TABLE}
-                            WHERE old_record_id IS NULL AND (record_id IS NULL OR record_id REGEXP %s) ORDER BY id LIMIT %s""",
-                        (OLD_RECORD_RE, batch))
+            cur.execute(f"""SELECT id, record_id, scenic_id, poi_id, image_url FROM {IMAGE_TABLE}
+                            WHERE id > %s AND old_record_id IS NULL AND (record_id IS NULL OR record_id REGEXP %s) ORDER BY id LIMIT %s""",
+                        (last, OLD_RECORD_RE, batch))
             rows = list(cur.fetchall())
             if not rows:
                 break
+            last = rows[-1]["id"]
             for r in rows:
-                old = r["record_id"] or ""
-                nid = image_num(r["image_url"])
-                nrid = make_record_id(r["scenic_id"], nid)
-                cur.execute(f"SELECT id FROM {IMAGE_TABLE} WHERE scenic_id=%s AND poi_id=%s AND image_id=%s AND id<>%s",
-                            (r["scenic_id"], r["poi_id"], nid, r["id"]))
-                if cur.fetchone():  # 同一张图已经有一条：删掉这条重复的
-                    cur.execute(f"DELETE FROM {IMAGE_TABLE} WHERE id=%s", (r["id"],))
-                    if ods and old:
-                        cur.execute(f"DELETE FROM {ODS_TABLE} WHERE record_id=%s", (old,))
-                    dup += 1
-                    continue
-                cur.execute(f"""UPDATE {IMAGE_TABLE} SET ctrip_image_id = COALESCE(ctrip_image_id, image_id), image_id=%s, record_id=%s,
-                                old_record_id=%s WHERE id=%s""", (nid, nrid, old or "-", r["id"]))
-                if ods and old:
-                    cur.execute(f"UPDATE IGNORE {ODS_TABLE} SET record_id=%s, image_id=%s WHERE record_id=%s", (nrid, nid, old))
-                    cur.execute(f"DELETE FROM {ODS_TABLE} WHERE record_id=%s", (old,))  # 改不了的（新 ID 已存在）就是重复行
-                done += 1
-    if done or dup:
-        log(f"图片 ID 已改为由图片链接算出：更新 {done} 条，去掉重复 {dup} 条" + (f"（交付表 {ODS_TABLE} 同步修改）" if ods else ""))
+                r["nid"] = image_num(r["image_url"])
+                r["nrid"] = make_record_id(r["scenic_id"], r["nid"])
+            # 已经有新 ID 的同一张图（或本批里重复的）→ 这条是重复，删掉
+            nrids = sorted({r["nrid"] for r in rows})
+            cur.execute(f"SELECT record_id FROM {IMAGE_TABLE} WHERE record_id IN ({','.join(['%s'] * len(nrids))})", nrids)
+            taken = {x["record_id"] for x in cur.fetchall()}
+            keep, drop = [], []
+            for r in rows:
+                if r["nrid"] in taken:
+                    drop.append(r)
+                else:
+                    taken.add(r["nrid"])
+                    keep.append(r)
+            if drop:
+                cur.execute(f"DELETE FROM {IMAGE_TABLE} WHERE id IN ({','.join(['%s'] * len(drop))})", [r["id"] for r in drop])
+                olds = [r["record_id"] for r in drop if r["record_id"]]
+                if ods and olds:
+                    cur.execute(f"DELETE FROM {ODS_TABLE} WHERE record_id IN ({','.join(['%s'] * len(olds))})", olds)
+            if keep:
+                cur.execute(f"""CREATE TEMPORARY TABLE IF NOT EXISTS _hq_imgid (id BIGINT PRIMARY KEY, nid BIGINT NOT NULL,
+                                nrid VARCHAR(64) CHARACTER SET utf8mb4 COLLATE {coll} NOT NULL,
+                                old VARCHAR(64) CHARACTER SET utf8mb4 COLLATE {coll} NULL, KEY k_old (old))""")
+                cur.execute("DELETE FROM _hq_imgid")
+                cur.executemany("INSERT INTO _hq_imgid (id, nid, nrid, old) VALUES (%s, %s, %s, %s)",
+                                [(r["id"], r["nid"], r["nrid"], r["record_id"]) for r in keep])
+                cur.execute(f"""UPDATE {IMAGE_TABLE} i JOIN _hq_imgid t ON t.id = i.id
+                                SET i.ctrip_image_id = COALESCE(i.ctrip_image_id, i.image_id), i.image_id = t.nid, i.record_id = t.nrid,
+                                    i.old_record_id = COALESCE(t.old, '-')""")
+                if ods:
+                    cur.execute(f"""UPDATE IGNORE {ODS_TABLE} o JOIN _hq_imgid t ON o.record_id = t.old
+                                    SET o.record_id = t.nrid, o.image_id = t.nid""")
+                    cur.execute(f"DELETE o FROM {ODS_TABLE} o JOIN _hq_imgid t ON o.record_id = t.old")  # 新 ID 已存在的旧行 = 重复
+                cur.execute("DROP TEMPORARY TABLE IF EXISTS _hq_imgid")
+            done += len(keep)
+            dup += len(drop)
+        log(f"  图片 ID 升级：{done + dup} / {total}（{time.time() - t0:.0f} 秒）")
+    log(f"图片 ID 升级完成：更新 {done} 条，去掉重复 {dup} 条")
     return done
 
 
@@ -759,9 +838,16 @@ def ensure_image_columns():
         cur.execute(f"SHOW COLUMNS FROM {IMAGE_TABLE}")
         cols = {c["Field"]: c for c in cur.fetchall()}
         if "varchar(64)" not in str(cols.get("record_id", {}).get("Type", "")).lower():
+            print(f"图片表 {IMAGE_TABLE} 加长 record_id 字段（只做一次，表大时要等一会）…", flush=True)
             cur.execute(f"ALTER TABLE {IMAGE_TABLE} MODIFY record_id VARCHAR(64) NULL COMMENT '记录ID：img_<景区ID>_<image_id>'")
         if "ctrip_image_id" not in cols:
+            print(f"图片表 {IMAGE_TABLE} 增加 ctrip_image_id / old_record_id 字段（只做一次）…", flush=True)
             cur.execute(f"ALTER TABLE {IMAGE_TABLE} ADD COLUMN ctrip_image_id BIGINT NULL COMMENT '携程接口里的 imageId' AFTER image_id")
+        if "review_content" not in cols:
+            print(f"图片表 {IMAGE_TABLE} 增加点评内容字段（只做一次）…", flush=True)
+            cur.execute(f"""ALTER TABLE {IMAGE_TABLE} ADD COLUMN review_content TEXT NULL COMMENT '点评内容' AFTER review_publish_time,
+                            ADD COLUMN review_url VARCHAR(512) NULL COMMENT '点评详情页' AFTER review_content,
+                            ADD COLUMN tourist_type VARCHAR(32) NULL COMMENT '出游类型' AFTER review_url""")
         if "old_record_id" not in cols:
             cur.execute(f"ALTER TABLE {IMAGE_TABLE} ADD COLUMN old_record_id VARCHAR(64) NULL COMMENT '旧版 record_id' AFTER ctrip_image_id")
 
@@ -858,26 +944,59 @@ def image_stats(f=None):
     return dict(image_total=total, crawl=crawl, by_city=[dict(city=k, poi_qty=v["poi_qty"], image_qty=v["image_qty"]) for k, v in imgs.items()])
 
 
-def images_query(scenic_id=None, poi_id=None, limit=50, offset=0, city=None, q=None):
+IMAGE_SORTS = {"collect": "i.id DESC", "publish": "i.review_publish_time DESC, i.id DESC", "score": "i.review_score DESC, i.id DESC",
+               "size": "(i.width * i.height) DESC, i.id DESC"}
+
+
+def _image_where(scenic_id=None, poi_id=None, city=None, q=None, score_min=None):
     where, params = [], []
     if scenic_id:
-        where.append("scenic_id=%s"); params.append(scenic_id)
+        where.append("i.scenic_id=%s"); params.append(scenic_id)
     if poi_id:
-        where.append("poi_id=%s"); params.append(int(poi_id))
+        where.append("i.poi_id=%s"); params.append(int(poi_id))
     if city:
-        where.append("city=%s"); params.append(city)
+        where.append("i.city=%s"); params.append(city)
     if q:
-        where.append("(scenic_name LIKE %s OR poi_name LIKE %s OR scenic_id=%s)"); params += [f"%{q}%", f"%{q}%", q]
-    w = ("WHERE " + " AND ".join(where)) if where else ""
+        where.append("(i.scenic_name LIKE %s OR i.poi_name LIKE %s OR i.scenic_id=%s OR i.record_id=%s)"); params += [f"%{q}%", f"%{q}%", q, q]
+    if score_min not in (None, ""):
+        where.append("i.review_score >= %s"); params.append(float(score_min))
+    return ("WHERE " + " AND ".join(where)) if where else "", params
+
+
+def images_query(scenic_id=None, poi_id=None, limit=50, offset=0, city=None, q=None, score_min=None, sort="collect"):
+    w, params = _image_where(scenic_id, poi_id, city, q, score_min)
+    order = IMAGE_SORTS.get(sort or "collect", IMAGE_SORTS["collect"])
     with cursor() as cur:
-        cur.execute(f"SELECT COUNT(*) n FROM {IMAGE_TABLE} {w}", params)
+        cur.execute(f"SELECT COUNT(*) n FROM {IMAGE_TABLE} i {w}", params)
         total = cur.fetchone()["n"]
-        cur.execute(f"""SELECT record_id, poi_id, poi_name, scenic_id, scenic_name, image_url, image_thumb_url, lon, lat, province, city,
-                        district, total_count, comment_total, review_id, image_id, width, height, review_score, review_publish_time,
-                        collect_time, data_source, is_modified
-                        FROM {IMAGE_TABLE} {w} ORDER BY id DESC LIMIT %s OFFSET %s""", params + [int(limit), int(offset)])
+        cur.execute(f"""SELECT i.record_id, i.poi_id, i.poi_name, i.scenic_id, i.scenic_name, i.image_url, i.image_thumb_url, i.lon, i.lat,
+                        i.province, i.city, i.district, i.total_count, i.comment_total, i.review_id, i.image_id, i.ctrip_image_id,
+                        i.width, i.height, i.review_score, i.review_publish_time, i.review_content, i.review_url, i.tourist_type,
+                        i.collect_time, i.data_source, i.is_modified, c.poi_uri
+                        FROM {IMAGE_TABLE} i LEFT JOIN {CRAWL_TABLE} c ON c.scenic_id = i.scenic_id AND c.poi_id = i.poi_id
+                        {w} ORDER BY {order} LIMIT %s OFFSET %s""", params + [int(limit), int(offset)])
         rows = _jsonable(list(cur.fetchall()))
     return dict(total=total, items=rows)
+
+
+def image_facets(city=None, scenic_id=None, q=None, limit=200):
+    """图片预览的下拉选项：有图片的景区（按城市 / 关键词），选了景区再给它的 POI。都带图片数。"""
+    w, params = _image_where(None, None, city, None, None)
+    if q:
+        w += (" AND " if w else "WHERE ") + "(i.scenic_name LIKE %s OR i.scenic_id = %s)"
+        params += [f"%{q}%", q]
+    with cursor() as cur:
+        cur.execute(f"""SELECT i.scenic_id id, MAX(i.scenic_name) name, MAX(i.city) city, COUNT(*) n FROM {IMAGE_TABLE} i {w}
+                        GROUP BY i.scenic_id ORDER BY n DESC LIMIT %s""", params + [int(limit)])
+        scenics = list(cur.fetchall())
+        pois = []
+        if scenic_id:
+            cur.execute(f"""SELECT i.poi_id id, MAX(i.poi_name) name, COUNT(*) n FROM {IMAGE_TABLE} i WHERE i.scenic_id = %s
+                            GROUP BY i.poi_id ORDER BY n DESC""", (scenic_id,))
+            pois = list(cur.fetchall())
+        cur.execute(f"SELECT i.city, COUNT(*) n FROM {IMAGE_TABLE} i GROUP BY i.city ORDER BY n DESC")
+        cities = list(cur.fetchall())
+    return dict(scenics=_jsonable(scenics), pois=_jsonable(pois), cities=_jsonable(cities))
 
 
 def overview():
@@ -900,11 +1019,21 @@ def overview():
         if table_exists(cur, ODS_TABLE):
             cur.execute(f"SELECT COUNT(*) n FROM {ODS_TABLE}")
             ods = cur.fetchone()["n"]
-    crawlable = sum(1 for _ in crawl_targets({}, refresh=True))
+    allt = crawl_targets({}, refresh=True)
+    crawlable = len(allt)
+    got = crawled_set()
+    per = {}
+    for t in allt:
+        k = t["scenic"]["id"]
+        a, b = per.get(k, (0, 0))
+        per[k] = (a + 1, b + ((k, str(t["poi"]["poiId"])) in got))
+    scenics_collected = sum(1 for a, b in per.values() if a == b)
+    scenics_partial = sum(1 for a, b in per.values() if 0 < b < a)
     total = sum(int(c["n"] or 0) for c in cs)
     skipped = sum(int(c.get("skipped") or 0) for c in cs)
     return dict(total=total, approved=approved, auto_approved=auto_n, manual_approved=approved - auto_n, skipped=skipped,
-                todo=total - approved - skipped, crawl=crawl, crawlable_pois=crawlable, images=images, ods_rows=ods,
+                todo=total - approved - skipped, crawl=crawl, crawlable_pois=crawlable,
+                scenics_with_pois=len(per), scenics_collected=scenics_collected, scenics_partial=scenics_partial, images=images, ods_rows=ods,
                 ods_table=ODS_TABLE.replace("`", ""), cities=[dict(c, images=int((img_city.get(c["city"]) or {}).get("images") or 0),
                                                                    pois=int((img_city.get(c["city"]) or {}).get("pois") or 0)) for c in cs])
 
@@ -927,12 +1056,26 @@ def scenic_table(f, offset=0, limit=50):
                             WHERE scenic_id IN ({','.join(['%s'] * len(ids))}) GROUP BY scenic_id, poi_id""", ids)
             for x in cur.fetchall():
                 counts.setdefault(x["scenic_id"], {})[str(x["poi_id"])] = x["n"]
+            cur.execute(f"""SELECT scenic_id, poi_id, status, pages_done, message, updated_at FROM {CRAWL_TABLE}
+                            WHERE scenic_id IN ({','.join(['%s'] * len(ids))})""", ids)
+            crawls = {(x["scenic_id"], str(x["poi_id"])): x for x in cur.fetchall()}
+        else:
+            crawls = {}
     for r in rows:
         r["pois"] = _normalize(_parse_info(r.pop("poi_info")))
         c = counts.get(r["id"], {})
+        n_col = 0
         for p in r["pois"]:
             p["images"] = c.get(str(p["poiId"]), 0)
+            cr = crawls.get((r["id"], str(p["poiId"])))
+            p["crawl"] = cr["status"] if cr else None
+            p["crawl_msg"] = cr["message"] if cr else None
+            p["collected"] = bool(cr and (cr["status"] in ("done", "empty") or (cr["pages_done"] or 0) > 0
+                                          or str(cr["message"] or "").startswith(PERMANENT_FAIL)))
+            n_col += p["collected"]
         r["images"] = sum(c.values())
+        r["collect_n"] = n_col
+        r["collect"] = None if not r["pois"] else "done" if n_col == len(r["pois"]) else "partial" if n_col else "none"
     return dict(total=total, items=_jsonable(rows))
 
 

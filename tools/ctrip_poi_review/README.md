@@ -191,7 +191,16 @@ python review.py images --channel chrome --grade 5A,4A
 
 - 每个 POI 默认最多 20 页、300 张（`--max-pages` / `--max-images`），页间随机停 1.5–3 秒；`--limit` 限制 POI 数，`--refresh` 重采已采完的。
 - 连续 10 页没有新图片（没图或都已采过）就换下一个 POI（`--empty-pages`，0 = 不按这个规则）。
-- 断点续采：进度在 `scenic_poi_image_crawl`，已采完的 POI 下次自动跳过；同一景区+POI+图片只存一条。
+- **采过的不再采**：每个景区 + POI 的采集记录在 `scenic_poi_image_crawl`。下面这些下次启动 / 再跑任务 / 边核对边采集都会跳过（日志里会写「N 个之前采过，跳过」）：
+  - 采完的（到最后一页、到最大页数 / 张数、连续 N 页没有新图、手动「下一个 POI」）
+  - 采到过至少一页的（中途取消、翻页没等到返回、**服务被关掉时正在采的**——启动时自动记为「部分」）
+  - **无图**：进 POI 页后没有图片数据——页面图片总数 0、没有点评、或 getCommentCollapseList 返回的 items 为空 / result 为空。
+    这是正常情况（不算失败），**立即换下一个 POI**，不翻页、不长时间等待
+  - 链接指向了别的 POI（再采也一样）
+
+  只有「一页都没采到的临时失败」（网络、异常）会再采。要强制重采请勾「重采」（命令行 `--refresh`）。
+  数据预览里每个景区有「图片采集」一列：已采 / 部分 x/y / 未采；点开看每个 POI 的采集状态和原因。总览里有「已采景区」。
+- 同一景区同一张图只存一条（见下方 record_id 说明），就算重采也不会重复。
 - 遇到登录/验证会停下，在浏览器里处理后重跑即可。
 
 写入两张表：
@@ -243,11 +252,11 @@ python service.py --channel chrome
 
 | 页面 | 说明 |
 |---|---|
-| 总览 | 景区总数、已审核（自动/人工）、待核对、已跳过、已采 POI、图片数；各城市进度；正在采集的 POI；最近任务 |
+| 总览 | 已审核景区、已采景区、点评图片；各城市审核完成率、审核完成度（已审核 / 已跳过 / 待核对）；各城市进度；正在采集的 POI；最近任务 |
 | 核对 | 原来的核对面板嵌在工作台里：规则、自动选中、自动通过、10 秒无人接管跳过、按城市依次跑完、快捷键都一样。顶部一条显示边核对边采集的状态和正在采的 POI（可点「下一个 POI」）。`#/review?scenic_id=PFTSCB01001668` 直接打开某个景区 |
 | 图片采集 | 批量采集（城市 / 等级 / 景区、每个 POI 最多页数 / 张数、连续几页无新图换下一个）；正在采集的 POI（进度 + 「下一个 POI」）和日志；POI 采集记录（状态、页数、点评、新增图片、停止原因） |
 | 数据预览 | 客户景区表 + `ctrip_poi_info` + `approval`，按城市 / 状态 / 等级 / 名称筛选；点一行看详情：保留的 POI、每个 POI 的图片数、去核对 / 看图片 |
-| 图片预览 | 按城市、景区名 / POI 名、景区ID、poiId 浏览已采图片；点开看大图，← → 翻页、Esc 关闭 |
+| 图片预览 | 下拉筛选：城市 → 景区（可搜索，带图片数）→ POI、评分、排序（最新采集 / 最新点评 / 评分最高 / 尺寸最大）。点开图片：左边大图（← → 翻页、Esc 关闭），右边图片信息：点评内容、record_id / image_id（可复制）、携程 imageId、点评时间、POI 图片 / 点评总数、景区、坐标，以及打开原图 / 点评详情 / 携程 POI 页面 |
 | 任务中心 | 提交「自动审核」「采集点评图片」任务，看进度和日志、取消；采集任务运行时也能点「下一个 POI」 |
 
 顶栏：全局搜索（跳到数据预览）、提醒（任务需要人工 / 边核对边采集暂停）、核对人设置、接口文档、导出 CSV。
@@ -274,7 +283,8 @@ python service.py --channel chrome
 | GET | `/api/stats` | 各城市审核进度、图片采集统计 |
 | GET | `/api/scenic_table?city=&status=&grade=&q=&offset=&limit=` | 景区 + 保留 POI + 每个 POI 的图片数（分页） |
 | GET | `/api/scenic/{scenic_id}` | 景区详情和已保留的 POI |
-| GET | `/api/images?city=&q=&scenic_id=&poi_id=&limit=&offset=` | 已采图片（分页） |
+| GET | `/api/images?city=&q=&scenic_id=&poi_id=&score_min=&sort=&limit=&offset=` | 已采图片（分页）；sort = collect / publish / score / size |
+| GET | `/api/image_facets?city=&scenic_id=&q=` | 图片预览的下拉选项：有图片的城市、景区（带图片数），选了景区再给 POI |
 | GET | `/api/crawl_records?status=&q=&limit=&offset=` | 每个 POI 的采集记录（分页） |
 | GET | `/api/crawl` | 正在采集的 POI：来源、页数、新增图片、连续无新图页数 |
 | POST | `/api/crawl/skip` | 手动跳到下一个 POI：`{"source":"follow"}` / `{"source":"job"}`，不传则全部 |

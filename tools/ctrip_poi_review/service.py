@@ -11,6 +11,7 @@
 import argparse
 import asyncio
 import collections
+import contextlib
 import itertools
 import re
 import time
@@ -124,8 +125,11 @@ class Service:
             try:
                 if sid in self.follow_pending:
                     self.follow_pending.remove(sid)
-                targets = db.crawl_targets(dict(scenic_id=sid))
+                st0 = {}
+                targets = db.crawl_targets(dict(scenic_id=sid), stats=st0)
                 if not targets:
+                    if st0.get("skipped"):
+                        self.flog(f"{sid}：保留的 {st0['skipped']} 个 POI 之前都采过，跳过")
                     continue
                 if self.follow_page is None:
                     self.follow_page = await self.browser.new_page()
@@ -215,18 +219,18 @@ class Service:
 
 def create_app(args):
     svc = Service(args)
-    app = FastAPI(title="携程 POI 核对 / 景点图像采集服务")
-    app.add_middleware(GZipMiddleware, minimum_size=2048)  # web/vendor 里的前端库较大，压缩后传输
-
-    @app.on_event("startup")
-    async def _start():
-        review.check_db()
-        asyncio.get_running_loop().create_task(svc.worker())
-        asyncio.get_running_loop().create_task(svc.follow_worker())
-
-    @app.on_event("shutdown")
-    async def _stop():
+    @contextlib.asynccontextmanager
+    async def lifespan(_app):
+        loop = asyncio.get_running_loop()
+        loop.create_task(svc.worker())
+        loop.create_task(svc.follow_worker())
+        url = f"http://{args.host}:{args.port}"
+        loop.call_later(0.5, lambda: print(f"服务已就绪：{url}  （浏览器打开即是工作台；Ctrl+C 停止）", flush=True))
+        yield
         await svc.browser.close()
+
+    app = FastAPI(title="携程 POI 核对 / 景点图像采集服务", lifespan=lifespan)
+    app.add_middleware(GZipMiddleware, minimum_size=2048)  # web/vendor 里的前端库较大，压缩后传输
 
     @app.get("/", response_class=HTMLResponse)
     def index():
@@ -362,8 +366,15 @@ def create_app(args):
         return j.brief()
 
     @app.get("/api/images")
-    def images(scenic_id: str = "", poi_id: str = "", city: str = "", q: str = "", limit: int = 60, offset: int = 0):
-        return db.images_query(scenic_id or None, poi_id or None, min(max(limit, 1), 500), max(offset, 0), city or None, q or None)
+    def images(scenic_id: str = "", poi_id: str = "", city: str = "", q: str = "", score_min: str = "", sort: str = "collect",
+               limit: int = 60, offset: int = 0):
+        return db.images_query(scenic_id or None, poi_id or None, min(max(limit, 1), 500), max(offset, 0), city or None, q or None,
+                               score_min or None, sort)
+
+    @app.get("/api/image_facets")
+    def image_facets(city: str = "", scenic_id: str = "", q: str = ""):
+        """图片预览的下拉选项：有图片的城市、景区（带图片数），选了景区再给它的 POI。"""
+        return db.image_facets(city or None, scenic_id or None, q or None)
 
     @app.get("/api/crawl_records")
     def crawl_records(status: str = "", q: str = "", limit: int = 50, offset: int = 0):
@@ -395,7 +406,8 @@ def main():
     args.pattern = review.DEFAULT_PATTERNS
     if args.all_cities:
         db.DEFAULT_CITIES = []
-    print(f"服务启动：http://{args.host}:{args.port}  （浏览器打开即是工作台）", flush=True)
+    print("检查 MySQL（第一次升级到新版本时会顺带升级数据，表大时要等一会，进度会打印在下面）…", flush=True)
+    review.check_db()
     uvicorn.run(create_app(args), host=args.host, port=args.port, log_level="warning")
 
 
