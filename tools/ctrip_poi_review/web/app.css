@@ -163,7 +163,7 @@ a:hover { color: var(--semi-color-link-hover); }
 .crawl-now .m { display: flex; align-items: center; gap: 4px 10px; flex-wrap: wrap; font-size: 12px; color: var(--ink-3); }
 .crawl-now .m > span { white-space: nowrap; }
 .crawl-now .m .grow { flex: 1; }
-.follow-strip { background: #fff; border: 1px solid var(--line); border-radius: 16px; padding: 8px 14px; display: flex; align-items: center; gap: 10px; min-height: 34px; flex-wrap: wrap; }
+.follow-strip { background: linear-gradient(90deg, #f7f5ff 0%, #fff8f3 100%); border: 1px solid #efedf8; border-radius: 16px; padding: 10px 16px; display: flex; align-items: center; gap: 10px; min-height: 34px; flex-wrap: wrap; }
 .follow-strip .now { display: flex; align-items: center; gap: 8px; min-width: 0; flex: 1; justify-content: flex-end; font-size: 13px; }
 .follow-strip .now .txt { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; color: var(--ink-2); }
 .log { margin: 0; font: 12px/1.6 ui-monospace, SFMono-Regular, Menlo, Consolas, "Microsoft YaHei", monospace; color: var(--ink-2);
@@ -172,7 +172,7 @@ a:hover { color: var(--semi-color-link-hover); }
 .job-item:last-child { border-bottom: 0; }
 
 /* 核对页：面板嵌入 */
-.review-card { flex: 1; min-height: 0; }
+.review-card { flex: 1; min-height: 0; border-radius: 18px; }
 #review-host { height: 100%; }
 
 /* ---------------- 图片预览 ---------------- */

@@ -109,6 +109,63 @@
   :host(.embed) footer button { height: 34px; min-width: 84px; padding: 0 14px; font-size: 13px; font-weight: 500; }
   :host(.embed) footer button.primary { min-width: 104px; }
   :host(.embed) footer input { height: 34px; }
+  /* ---------- 新外观（和工作台一致）---------- */
+  :host(.embed) header { padding: 16px 35px 8px 20px; gap: 8px; }
+  :host(.embed) header b { font-size: 17px; font-weight: 650; letter-spacing: .2px; }
+  :host(.embed) #progress { flex: none; margin-right: auto; padding: 2px 10px; border-radius: 12px; background: #f4f2ff; color: #5b3deb; font-size: 12px; font-weight: 500; }
+  :host(.embed) header button { width: 32px; height: 32px; border-radius: 10px; background: #f6f6f8; font-size: 15px; line-height: 30px; }
+  :host(.embed) header button:hover { background: #ececf1; }
+  :host(.embed) .prog { padding: 4px 35px 14px 20px; }
+  :host(.embed) .prog .bar { height: 6px; border-radius: 3px; background: #f1f0f5; }
+  :host(.embed) .prog .bar i { background: linear-gradient(90deg, #9c82ff, #6c4dff); border-radius: 3px; }
+  :host(.embed) #prog-text { font-size: 12px; color: #8a8a99; max-width: 70%; }
+  :host(.embed) #prog-text b { color: #18181b; }
+  :host(.embed) .filters { padding: 0 35px 14px 20px; gap: 8px; border-bottom: 1px solid #f1f1f4; }
+  :host(.embed) .filters select, :host(.embed) .filters input[type=text], :host(.embed) .filters button { height: 36px; border-radius: 10px; }
+  :host(.embed) select { appearance: none; -webkit-appearance: none; padding-right: 30px !important; cursor: pointer;
+    background-image: url(\"data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 24 24' fill='none' stroke='%238a8a99' stroke-width='2.5' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='m6 9 6 6 6-6'/%3E%3C/svg%3E\"); background-repeat: no-repeat; background-position: right 10px center; background-color: #f6f6f8; }
+  :host(.embed) .filters input[type=text] { background: #f6f6f8; }
+  :host(.embed) .filters button { padding: 0 14px; background: #fff; border: 1px solid #ececf1; }
+  :host(.embed) .body { padding: 14px 22px 100px 20px; }
+  :host(.embed) .card { background: linear-gradient(135deg, #faf9ff 0%, #fff8f3 100%); border: 1px solid #efedf8; border-radius: 16px; padding: 16px 20px; }
+  :host(.embed) .ttl h3 { font-size: 17px; font-weight: 650; }
+  :host(.embed) .ttl .kept { color: #5b3deb; }
+  :host(.embed) .kv { font-size: 12.5px; gap: 4px 12px; grid-template-columns: 64px 1fr; }
+  :host(.embed) .kv > span { color: #8a8a99; }
+  :host(.embed) .chip { border-radius: 16px; padding: 4px 12px; border: 1px solid #ececf1; background: #fff; font-size: 12.5px; }
+  :host(.embed) .chip:hover { border-color: #c9bfff; }
+  :host(.embed) .chip.active { background: #6c4dff; border-color: #6c4dff; color: #fff; }
+  :host(.embed) .chip.done:not(.active) { background: #f6f6f8; color: #52525b; }
+  :host(.embed) .tag { border-radius: 6px; padding: 0 7px; line-height: 20px; font-size: 11.5px; background: #f4f4f6; color: #52525b; }
+  :host(.embed) .tag.sight { background: rgba(108, 77, 255, .1); color: #5b3deb; }
+  :host(.embed) .tag.good { background: #e8f7ee; color: #1c7c3f; }
+  :host(.embed) .tag.warn { background: #fff4dd; color: #9a5b00; }
+  :host(.embed) .tag.bad { background: #ffecec; color: #c62828; }
+  :host(.embed) .tag.g5 { background: #fff0e6; color: #c2410c; }
+  :host(.embed) .sec b { font-size: 13.5px; font-weight: 600; }
+  /* 结果行：整行可点，右侧圆形勾选 */
+  :host(.embed) .row { grid-template-columns: 28px minmax(0, 1fr) 30px; gap: 4px 12px; border: 1px solid #efeff3; border-radius: 14px;
+    padding: 12px 12px 12px 14px; margin-bottom: 10px; background: #fff; transition: border-color .15s, box-shadow .15s, background .15s; }
+  :host(.embed) .row.pick { cursor: pointer; user-select: text; }
+  :host(.embed) .row.pick:hover { border-color: rgba(108, 77, 255, .4); box-shadow: 0 4px 16px rgba(108, 77, 255, .08); }
+  :host(.embed) .row.keep { border-color: #6c4dff; border-left-width: 1px; padding-left: 14px; background: #f8f6ff; box-shadow: inset 0 0 0 1px #6c4dff; }
+  :host(.embed) .row.nokey { cursor: default; }
+  :host(.embed) .row.dim { opacity: .6; }
+  :host(.embed) .idx { width: 24px; height: 24px; line-height: 24px; border-radius: 50%; background: #f4f4f6; color: #52525b; font-size: 12px; font-weight: 600; align-self: center; }
+  :host(.embed) .row.keep .idx { background: #6c4dff; color: #fff; }
+  :host(.embed) .l1 a { font-size: 14.5px; font-weight: 600; color: #18181b; text-decoration: none; }
+  :host(.embed) .l1 a:hover { color: #6c4dff; text-decoration: none; }
+  :host(.embed) .meta { color: #8a8a99; font-size: 12px; }
+  :host(.embed) .pick-box { width: 22px; height: 22px; border-radius: 50%; border: 2px solid #d4d4dc; box-sizing: border-box; display: inline-block; position: relative; background: #fff; transition: all .15s; }
+  :host(.embed) .row.pick:hover .pick-box:not(.on) { border-color: #6c4dff; }
+  :host(.embed) .pick-box.on { background: #6c4dff; border-color: #6c4dff; }
+  :host(.embed) .pick-box.on::after { content: ''; position: absolute; left: 6px; top: 2px; width: 5px; height: 10px; border: solid #fff; border-width: 0 2px 2px 0; transform: rotate(45deg); }
+  :host(.embed) .acts { justify-content: center; }
+  :host(.embed) footer { padding: 12px 35px 12px 20px; background: rgba(255, 255, 255, .97); border-top: 1px solid #f1f1f4; box-shadow: 0 -8px 20px rgba(24, 24, 27, .04); }
+  :host(.embed) footer input { height: 38px; border-radius: 10px; background: #f6f6f8; }
+  :host(.embed) footer button { height: 38px; border-radius: 10px; }
+  :host(.embed) footer button.primary { background: linear-gradient(135deg, #8b6cff, #6c4dff); border: 0; box-shadow: 0 6px 16px rgba(108, 77, 255, .28); }
+  :host(.embed) .auto-banner, :host(.embed) .idle-banner { border-radius: 12px; }
   :host(.embed) .empty-state { text-align: center; padding: 64px 16px; color: rgba(28, 31, 35, .62); }
   :host(.embed) .empty-state b { display: block; font-size: 16px; color: #1c1f23; margin-bottom: 6px; }
   :host(.embed) .empty-state .acts { margin-top: 16px; display: flex; gap: 8px; justify-content: center; }
@@ -682,7 +739,8 @@
         const c = (r.poiId && candByPoi[r.poiId]) || (r.businessId && candByBiz[r.businessId]);
         const d = haversine(slat, slng, r.lat, r.lng);
         const poi = isPoi(r);
-        return `<div class="row ${dec(r.key)} ${poi ? '' : 'dim'}">
+        return `<div class="row pick ${dec(r.key)} ${poi ? '' : 'dim'} ${r.key ? '' : 'nokey'}" ${r.key ? `data-rkeep="${r.n}"` : ''}
+            title="${r.key ? '点这一行：保留 / 取消保留（快捷键 ' + r.n + '）' : '这条没有 poiId，不能保留'}">
           <div class="idx">${r.n}</div>
           <div>
             <div class="l1">${r.url ? `<a href="${esc(r.url)}" target="_blank" rel="noopener" title="在新标签页打开携程页面">${esc(r.name)}</a>` : `<b>${esc(r.name)}</b>`}
@@ -696,9 +754,7 @@
               <button class="link" data-raw="${r.n}">原始</button>
             </div>
           </div>
-          <div class="acts">
-            <button class="keep ${dec(r.key) === 'keep' ? 'on' : ''}" data-keep="${r.n}" ${r.key ? '' : 'disabled'} title="保留 / 取消保留 (${r.n})">${dec(r.key) === 'keep' ? '✓ 已保留' : '保留'}</button>
-          </div>
+          <div class="acts"><span class="pick-box ${dec(r.key) === 'keep' ? 'on' : ''}" aria-label="${dec(r.key) === 'keep' ? '已保留' : '未保留'}"></span></div>
           ${S.rawOpen[r.key || r.name] ? `<pre>${esc(JSON.stringify(r.raw, null, 2))}</pre>` : ''}
         </div>`;
       };
@@ -713,7 +769,7 @@
       const searched = new Set(((S.merged && S.merged.items) || []).map((r) => r.poiId).filter(Boolean));
       const candHtml = S.detail.candidates.length ? S.detail.candidates.map((c, i) => {
         const key = 'poi:' + c.ctrip_poi_id;
-        return `<div class="row ${dec(key)}">
+        return `<div class="row pick ${dec(key)}" data-rckeep="${i}" title="点这一行：保留 / 取消保留">
           <div class="idx c">${String.fromCharCode(97 + (i % 26))}</div>
           <div>
             <div class="l1">${c.ctrip_url ? `<a href="${esc(c.ctrip_url)}" target="_blank" rel="noopener">${esc(c.ctrip_poi_name)}</a>` : `<b>${esc(c.ctrip_poi_name)}</b>`}
@@ -725,9 +781,7 @@
               ${c.dist_to_anchor_m != null ? `<span>距锚点 ${fmtDist(c.dist_to_anchor_m)}</span>` : ''}<span>图片 ${esc(c.image_qty ?? 0)}</span>
               <span>${esc(c.match_evidence || '')}</span>${c.also_in_scenic_ids ? `<span class="tag warn">也挂在 ${esc(c.also_in_scenic_ids)}</span>` : ''}</div>
           </div>
-          <div class="acts">
-            <button class="keep ${dec(key) === 'keep' ? 'on' : ''}" data-ckeep="${i}" title="保留 / 取消保留">${dec(key) === 'keep' ? '✓ 已保留' : '保留'}</button>
-          </div></div>`;
+          <div class="acts"><span class="pick-box ${dec(key) === 'keep' ? 'on' : ''}"></span></div></div>`;
       }).join('') : '<div class="muted">无离线候选（未导入候选表，或规则没匹配到）</div>';
 
       const shownKeys = new Set([...((S.merged && S.merged.items) || []).map((r) => r.key), ...S.detail.candidates.map((c) => 'poi:' + c.ctrip_poi_id)]);
@@ -777,14 +831,28 @@
         <div class="sec"><b>离线候选（${S.detail.candidates.length}）</b>
           ${S.detail.candidates.length ? '<button id="apply-triage" title="把「自动保留」的候选都保留">采纳自动保留</button><button id="apply-high">高置信全保留</button>' : ''}</div>
         ${candHtml}
-        ${other.length ? `<div class="sec"><b>其他已保留（不在当前搜索结果里，${other.length}）</b></div>` + other.map((k) => `<div class="row keep"><div></div><div>
+        ${other.length ? `<div class="sec"><b>其他已保留（不在当前搜索结果里，${other.length}）</b></div>` + other.map((k) => `<div class="row pick keep" data-runkeep="${esc(k.poiId)}" title="点这一行：取消保留"><div></div><div>
             <div class="l1">${k.poiUri ? `<a href="${esc(k.poiUri)}" target="_blank" rel="noopener">${esc(k.poiName || k.poiId)}</a>` : `<b>${esc(k.poiName || k.poiId)}</b>`}</div>
             <div class="meta"><span>poiId ${esc(k.poiId)}</span></div></div>
-            <div class="acts"><button class="keep on" data-unkeep="${esc(k.poiId)}" title="取消保留">✓ 已保留</button></div></div>`).join('') : ''}`;
+            <div class="acts"><span class="pick-box on"></span></div></div>`).join('') : ''}`;
     }
 
     // ---------------------------------------------------------------- events
     root.addEventListener('click', async (ev) => {
+      // 点结果行任意位置 = 保留 / 取消保留（点行里的链接、按钮，或正在选文字时不算）
+      if (!ev.target.closest('button, a, input, select, textarea, pre, label')) {
+        const row = ev.target.closest('[data-rkeep], [data-rckeep], [data-runkeep]');
+        const sel = root.getSelection ? root.getSelection() : window.getSelection();
+        if (row && !(sel && String(sel).trim())) {
+          try {
+            const d = row.dataset;
+            if (d.rkeep) await setDecision(byN(d.rkeep), 'keep');
+            else if (d.rckeep) await setDecision(candAsItem(S.detail.candidates[d.rckeep]), 'keep');
+            else if (d.runkeep) await setDecision({ key: 'poi:' + d.runkeep, poiId: d.runkeep }, 'drop');
+          } catch (e) { toast(e.message, true); }
+          return;
+        }
+      }
       const t = ev.target.closest('button'); if (!t) return;
       const ds = t.dataset;
       try {
