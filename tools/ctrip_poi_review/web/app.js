@@ -141,6 +141,7 @@
   // ------------------------------------------------------------ 状态标签
   function scenicTag(x) {
     if (Number(x.approval) === 1) {
+      if (/^AI审核/.test(x.note || '')) return html`<${Tooltip} content=${x.note}><${Tag} color="cyan" size="small">AI 通过<//><//>`;
       return /^自动审核/.test(x.note || '') ? html`<${Tag} color="green" size="small">自动通过<//>` : html`<${Tag} color="violet" size="small">人工通过<//>`;
     }
     if (x.status === 'skip') return html`<${Tag} color="orange" size="small">已跳过<//>`;
@@ -157,7 +158,7 @@
   const JOB_ST = { queued: ['grey', '排队中'], running: ['blue', '运行中'], done: ['green', '完成'], failed: ['red', '失败'], cancelled: ['grey', '已取消'], need_human: ['orange', '需要人工'] };
   const jobTag = (s) => { const [c, t] = JOB_ST[s] || ['grey', s]; return html`<${Tag} color=${c} size="small">${t}<//>`; };
   const STATUS_OPTS = [{ value: 'all', label: '全部状态' }, { value: 'todo', label: '待核对' }, { value: 'done', label: '已审核' },
-    { value: 'auto', label: '自动通过' }, { value: 'skip', label: '已跳过' }];
+    { value: 'auto', label: '自动通过' }, { value: 'ai', label: 'AI 通过（待复核）' }, { value: 'skip', label: '已跳过' }];
 
   function CitySelect({ value, onChange, cities, style }) {
     const opts = [{ value: '', label: '全部城市' }].concat((cities || []).filter((c) => c.city).map((c) => ({ value: c.city, label: shortCity(c.city) })));
@@ -286,7 +287,7 @@
         <div className="art" dangerouslySetInnerHTML=${{ __html: HERO_SVG }}></div>
         <div className="glass">
           <div className="kpi"><div className="k">已审核景区</div><div className="v">${fmt(A)}</div>
-            <div className="s">自动 ${fmt(o.auto_approved)} · 人工 ${fmt(o.manual_approved)} · 共 ${fmt(T)}</div></div>
+            <div className="s">规则 ${fmt(o.auto_approved)} · AI ${fmt(o.ai_approved)} · 人工 ${fmt(o.manual_approved)} · 共 ${fmt(T)}</div></div>
           <div className="kpi"><div className="k">已采景区</div><div className="v">${fmt(o.scenics_collected)}</div>
             <div className="s">可采 ${fmt(o.scenics_with_pois)} · POI ${fmt((crawl.done || 0) + (crawl.empty || 0))}/${fmt(o.crawlable_pois)}</div></div>
           <div className="kpi"><div className="k">点评图片</div><div className="v">${fmt(o.images)}</div>
@@ -648,7 +649,7 @@
     const [sel, setSel] = useState(query.id ? Number(query.id) : null);
     const selId = sel || (jobs && jobs[0] && jobs[0].id);
     const [detail] = usePoll(() => (selId ? api(`/api/jobs/${selId}?tail=500`) : null), 2000, [selId]);
-    const [ar, setAr] = useState({ city: '', grade: '', q: '', limit: 0, spots: false, cache_only: false, dry_run: false });
+    const [ar, setAr] = useState({ city: '', grade: '', q: '', limit: 0, spots: false, cache_only: false, dry_run: false, use_ai: true });
     const [im, setIm] = useState({ city: '', grade: '', q: '', max_pages: 20, max_images: 300, empty_pages: 10, refresh: false });
     const submit = async (type, params) => {
       try { const j = await post('/api/jobs', { type, params }); Toast.success(`已提交任务 #${j.id}`); setSel(j.id); refresh(); } catch (e) { Toast.error(e.message); }
@@ -671,7 +672,7 @@
     const box = useRef(null); const h = useHeight(box);
     return html`<div className="page">
       <div className="row2 even" style=${{ flex: 'none' }}>
-        <${Card} title="自动审核" help="名称一致且（地址相近 / 门牌一致 / 同省市区）的直接通过，通过后自动排进图片采集；拿不准的留给人工。试运行只看结果不写库。">
+        <${Card} title="自动审核" help="名称一致且（地址相近 / 门牌一致 / 同省市区）的直接通过；规则判不了的交给 AI（在「设置」里开启并填 Key），AI 有把握的也通过，备注以「AI审核：」开头，最后在核对页筛「AI 通过（待复核）」复核。通过后自动排进图片采集；拿不准的留给人工。试运行只看结果不写库。">
           <div className="form">
             <${Field} label="范围">
               <${CitySelect} value=${ar.city} onChange=${sa('city')} cities=${cities} style=${{ width: 130 }} />
@@ -686,6 +687,7 @@
               <${Checkbox} checked=${ar.spots} onChange=${(e) => sa('spots')(e.target.checked)}>再搜核心景点<//>
               <${Checkbox} checked=${ar.cache_only} onChange=${(e) => sa('cache_only')(e.target.checked)}>只用缓存<//>
               <${Checkbox} checked=${ar.dry_run} onChange=${(e) => sa('dry_run')(e.target.checked)}>试运行<//>
+              <${Checkbox} checked=${ar.use_ai} onChange=${(e) => sa('use_ai')(e.target.checked)}>规则判不了的交给 AI<//>
               <span style=${{ flex: 1 }}></span>
               <${Button} theme="solid" icon=${html`<${Ic.IconPlay} />`} onClick=${() => submit('auto_review', ar)}>开始<//>
             <//>
@@ -734,6 +736,96 @@
     return html`<${CrawlNow} active=${a} refresh=${refresh} empty="正在切换 POI…" />`;
   }
 
+  // ------------------------------------------------------------ 设置
+  function SettingsPage({ refreshHealth }) {
+    const [st, setSt] = useState(null);
+    const [key, setKey] = useState('');
+    const [busy, setBusy] = useState(false);
+    const [test, setTest] = useState(null);
+    const load = async () => { try { setSt(await api('/api/settings')); } catch (e) { Toast.error(e.message); } };
+    useEffect(() => { load(); }, []);
+    if (!st) return html`<div className="page"><${Spin} /></div>`;
+    const set = (k) => (v) => setSt((o) => ({ ...o, [k]: v }));
+    const sw = (k) => html`<${Switch} checked=${!!st[k]} onChange=${set(k)} />`;
+    const AI_FIELDS = ['ai_enabled', 'ai_base_url', 'ai_model', 'ai_web_search', 'ai_max_keyword', 'ai_min_confidence', 'ai_auto_approve', 'ai_timeout_s'];
+    const save = async () => {
+      setBusy(true);
+      try {
+        const body = {};
+        for (const k of [...AI_FIELDS, 'reviewer', 'throttle_ms', 'auto_search', 'auto_keep_similar', 'auto_approve', 'auto_approve_delay_ms', 'idle_skip',
+          'idle_skip_sec', 'search_more', 'search_core_spots', 'max_extra', 'auto_address', 'auto_collect', 'collect_max_pages', 'collect_max_images',
+          'collect_empty_pages']) body[k] = st[k];
+        if (key.trim()) body.ai_api_key = key.trim();
+        const r = await post('/api/settings', body);
+        setSt(r); setKey('');
+        window.dispatchEvent(new CustomEvent('hq:prefs', { detail: r })); // 核对面板立即用上新设置
+        Toast.success('已保存'); refreshHealth && refreshHealth();
+      } catch (e) { Toast.error(e.message); }
+      setBusy(false);
+    };
+    const clearKey = async () => {
+      try { const r = await post('/api/settings', { ai_api_key: '__clear__' }); setSt(r); window.dispatchEvent(new CustomEvent('hq:prefs', { detail: r })); Toast.success('已清除'); } catch (e) { Toast.error(e.message); }
+    };
+    const runTest = async () => {
+      setTest({ loading: true });
+      const body = {}; for (const k of AI_FIELDS) body[k] = st[k];
+      if (key.trim()) body.ai_api_key = key.trim();
+      try { setTest(await post('/api/ai/test', body)); } catch (e) { setTest({ ok: false, error: e.message }); }
+    };
+    const keyHint = st.ai_key_set ? `已设置（${st.ai_api_key || '环境变量'}，来自${st.ai_key_source || '设置页'}）；留空表示不修改` : '填写火山方舟 API Key（也可用环境变量 ARK_API_KEY）';
+    return html`<div className="page">
+      <div className="row2" style=${{ gridTemplateColumns: 'minmax(0, 1.15fr) minmax(0, 1fr)', flex: 1 }}>
+        <${Card} title="AI 判断" sub=${st.ai_enabled ? (st.ai_key_set ? '已启用' : '已启用，缺 API Key') : '未启用'} bodyClass="scroll"
+          help="规则判不了的景区（名称不一致、同名不同区、地址对不上…），把景区名称 / 别名 / 省市区 / 地址 / 坐标 / 核心景点和携程候选的名称 / 类型 / 城市区县 / 地址 / 距离发给大模型，判断每个 POI 是否属于这个景区。有把握（置信度达到下限）就自动保留并通过，备注以「AI审核：」开头，最后在核对页筛「AI 通过（待复核）」由人复核。结果按景区缓存，不重复调用。">
+          <div className="form" style=${{ gridTemplateColumns: '96px minmax(0, 1fr)' }}>
+            <${Field} label="启用">${sw('ai_enabled')}<span className="lbl">核对页搜完规则判不了时自动调用；任务中心的批量自动审核也会用</span><//>
+            <${Field} label="接口地址"><${Input} value=${st.ai_base_url} onChange=${set('ai_base_url')} placeholder=${st.ai_defaults.ai_base_url} style=${{ flex: 1 }} /><//>
+            <${Field} label="模型"><${Input} value=${st.ai_model} onChange=${set('ai_model')} placeholder=${st.ai_defaults.ai_model} style=${{ flex: 1 }} /><//>
+            <${Field} label="API Key">
+              <${Input} mode="password" value=${key} onChange=${setKey} placeholder=${keyHint} style=${{ flex: 1 }} autoComplete="new-password" />
+              ${st.ai_key_set && st.ai_key_source === '设置页' && html`<${Button} type="danger" theme="borderless" onClick=${clearKey}>清除<//>`}
+            <//>
+            <${Field} label="联网搜索">${sw('ai_web_search')}<span className="lbl">让模型先上网查（web_search），更准但更慢、费用更高；最多</span>
+              <${InputNumber} hideButtons value=${st.ai_max_keyword} onChange=${set('ai_max_keyword')} min=${1} max=${10} disabled=${!st.ai_web_search} style=${{ width: 90 }} suffix="个词" /><//>
+            <${Field} label="自动通过">${sw('ai_auto_approve')}<span className="lbl">置信度 ≥</span>
+              <${InputNumber} hideButtons value=${st.ai_min_confidence} onChange=${set('ai_min_confidence')} min=${0.5} max=${1} step=${0.05} precision=${2} style=${{ width: 90 }} />
+              <span className="lbl">时自动保留并审核通过；低于这个只打标签、留给人</span><//>
+            <${Field} label="超时"><${InputNumber} hideButtons value=${st.ai_timeout_s} onChange=${set('ai_timeout_s')} min=${10} max=${300} style=${{ width: 100 }} suffix="秒" /><//>
+            <${Field} label="">
+              <${Button} onClick=${runTest} loading=${test && test.loading} icon=${html`<${Ic.IconPulse} />`}>测试连接<//>
+              <${Button} theme="solid" onClick=${save} loading=${busy}>保存<//>
+            <//>
+          </div>
+          ${test && !test.loading && html`<${Banner} style=${{ marginTop: 14 }} type=${test.ok ? 'success' : 'danger'} closeIcon=${null}
+            description=${test.ok ? `连通了：${test.model}${test.web_search ? '（联网搜索）' : ''}，用时 ${test.elapsed} 秒；返回：${test.text}` : `没连通：${test.error}`} />`}
+        <//>
+        <div className="page" style=${{ gap: 14 }}>
+          <${Card} title="核对" bodyClass="scroll" className="fill">
+            <div className="form" style=${{ gridTemplateColumns: '96px minmax(0, 1fr)' }}>
+              <${Field} label="核对人"><${Input} value=${st.reviewer} onChange=${set('reviewer')} placeholder="写入审核记录的 reviewer" style=${{ width: 220 }} /><//>
+              <${Field} label="自动搜索">${sw('auto_search')}<span className="lbl">打开景区时自动搜景区名；</span>${sw('search_more')}<span className="lbl">没通过再搜别名</span>
+                ${sw('search_core_spots')}<span className="lbl">再搜核心景点，最多</span><${InputNumber} hideButtons value=${st.max_extra} onChange=${set('max_extra')} min=${0} max=${20} style=${{ width: 80 }} suffix="个" /><//>
+              <${Field} label="自动保留">${sw('auto_keep_similar')}<span className="lbl">地址相近、名称一致 / 子景点且同省市区的自动保留</span><//>
+              <${Field} label="自动通过">${sw('auto_approve')}<span className="lbl">倒计时</span><${InputNumber} hideButtons value=${st.auto_approve_delay_ms} onChange=${set('auto_approve_delay_ms')} min=${0} step=${500} style=${{ width: 110 }} suffix="毫秒" /><//>
+              <${Field} label="无人接管">${sw('idle_skip')}<${InputNumber} hideButtons value=${st.idle_skip_sec} onChange=${set('idle_skip_sec')} min=${3} style=${{ width: 90 }} suffix="秒" /><span className="lbl">没人操作就跳过、进入下一个</span><//>
+              <${Field} label="搜索间隔"><${InputNumber} hideButtons value=${st.throttle_ms} onChange=${set('throttle_ms')} min=${500} step=${100} style=${{ width: 120 }} suffix="毫秒" /><span className="lbl">两次携程搜索的最小间隔</span><//>
+              <${Field} label="补全地址">${sw('auto_address')}<span className="lbl">搜索后自动打开详情页补地址（较慢）</span><//>
+            </div>
+          <//>
+          <${Card} title="图片采集" bodyClass="scroll">
+            <div className="form" style=${{ gridTemplateColumns: '96px minmax(0, 1fr)' }}>
+              <${Field} label="边核对边采集">${sw('auto_collect')}<span className="lbl">审核通过后自动采集图片</span><//>
+              <${Field} label="每个 POI"><span className="lbl">最多</span><${InputNumber} hideButtons value=${st.collect_max_pages} onChange=${set('collect_max_pages')} min=${1} style=${{ width: 90 }} suffix="页" />
+                <${InputNumber} hideButtons value=${st.collect_max_images} onChange=${set('collect_max_images')} min=${0} style=${{ width: 100 }} suffix="张" />
+                <span className="lbl">连续</span><${InputNumber} hideButtons value=${st.collect_empty_pages} onChange=${set('collect_empty_pages')} min=${0} style=${{ width: 90 }} suffix="页" /><span className="lbl">无新图换下一个</span><//>
+            </div>
+            <div style=${{ marginTop: 14, textAlign: 'right' }}><${Button} theme="solid" onClick=${save} loading=${busy}>保存<//></div>
+          <//>
+        </div>
+      </div>
+    </div>`;
+  }
+
   // ------------------------------------------------------------ 顶栏 / 侧栏
   const PAGES = {
     overview: ['总览', '审核与图片采集进度'],
@@ -742,6 +834,7 @@
     data: ['数据预览', '客户景区表 + ctrip_poi_info + approval，点一行看详情'],
     gallery: ['图片预览', '按城市 / 景区 / POI 筛选，点开看大图和图片信息'],
     jobs: ['任务中心', '任务按提交顺序逐个执行；遇到登录 / 验证会停在「需要人工」'],
+    settings: ['设置', 'AI 判断、核对、图片采集的开关和参数'],
   };
   const NAV = [
     ['overview', '总览', Ic.IconHome], ['review', '核对', Ic.IconCheckboxTick], ['images', '图片采集', Ic.IconCamera],
@@ -762,6 +855,7 @@
       ${NAV.map(([k, t, I]) => html`<${Tooltip} key=${k} content=${t} position="right">
         <a className=${route === k ? 'on' : ''} href=${'#/' + k} aria-label=${t}><${I} /></a><//>`)}
       <span className="grow"></span>
+      <${Tooltip} content="设置（AI 判断 / 核对 / 采集）" position="right"><a className=${route === 'settings' ? 'on' : ''} href="#/settings" aria-label="设置"><${Ic.IconSetting} /></a><//>
       <${Popover} trigger="click" position="rightBottom" content=${html`<div style=${{ padding: 12, width: 300 }}>
           <${Input} value=${kw} onChange=${setKw} onEnterPress=${search} autoFocus showClear placeholder="景区名 / 别名 / 景区ID，回车"
             prefix=${html`<${Ic.IconSearch} style=${{ marginLeft: 6 }} />`} /></div>`}>
@@ -816,6 +910,7 @@
     else if (route === 'data') page = html`<${DataPage} ...${props} />`;
     else if (route === 'gallery') page = html`<${GalleryPage} ...${props} />`;
     else if (route === 'jobs') page = html`<${JobsPage} ...${props} />`;
+    else if (route === 'settings') page = html`<${SettingsPage} refreshHealth=${refreshHealth} />`;
     useEffect(() => { document.title = `${PAGES[route][0]} · 景区 POI 数据工作台`; }, [route]);
     return html`<div className="frame">
       <${Rail} route=${route} health=${health} follow=${follow} onReviewer=${() => setRv(true)} />
