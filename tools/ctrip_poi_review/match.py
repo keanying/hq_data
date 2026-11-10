@@ -195,6 +195,43 @@ def same_area(it, scenic, near=False):
     return city_ok and dist_ok
 
 
+PROVINCES = ["内蒙古", "黑龙江", "北京", "天津", "上海", "重庆", "河北", "山西", "辽宁", "吉林", "江苏", "浙江", "安徽", "福建", "江西", "山东",
+             "河南", "湖北", "湖南", "广东", "海南", "四川", "贵州", "云南", "陕西", "甘肃", "青海", "台湾", "广西", "西藏", "宁夏", "新疆", "香港", "澳门"]
+NEAR_KEEP_M = 30000   # 30km 内的结果不管写的哪个市都算本地（跨市边界的景点）
+FAR_M = 80000         # 80km 外、又对不上省市的算异地
+
+
+def _province_of(addr):
+    a = re.sub(r"\s+", "", addr or "")
+    for p in PROVINCES:
+        if a.startswith(p):
+            return p
+    return None
+
+
+def out_of_area(it, scenic):
+    """携程结果和客户景区不在同一省 / 市（如景区在云南保山，结果在湖北襄阳）→ True：不展示、不参与自动判断、不发给 AI。
+    依据：坐标距离、地址开头的省份、结果的城市 / 区县字段和地址里是否出现景区的市或区县名。信息不够判断时算本地（照常展示）。"""
+    dm = distance_m(it.get("lat"), it.get("lng"), scenic.get("lat"), scenic.get("lng"))
+    if dm is not None and dm <= NEAR_KEEP_M:
+        return False
+    a = re.sub(r"\s+", "", it.get("address") or "")
+    sp = _short(scenic.get("province"))
+    ap = _province_of(a)
+    if ap and sp and not (ap in sp or sp in ap):
+        return True  # 地址写的是别的省
+    city, dist = _short(scenic.get("city")), _short(scenic.get("district"))
+    areas = [_short(x) for x in (it.get("cityName"), it.get("city"), it.get("districtName"), _strip_upper(it.get("district") or "")) if x]
+    hay = areas + ([a] if a else [])
+    def hit(name):
+        return len(name) >= 2 and any(name[:2] in h or (len(h) >= 2 and h[:2] in name) for h in hay)
+    if (city and hit(city)) or (dist and hit(dist)):
+        return False
+    if dm is not None and dm > FAR_M:
+        return True
+    return bool(areas or ap)  # 有城市 / 省份信息却对不上 → 异地；完全没信息 → 算本地
+
+
 SAME_PLACE_M = 2000  # 多个同名 POI 之间相距 2km 内视为同一处
 
 

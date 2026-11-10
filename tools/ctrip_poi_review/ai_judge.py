@@ -11,6 +11,8 @@
     ai_min_confidence   自动通过 / 自动保留需要的最低置信度，默认 0.8
     ai_auto_approve     AI 有把握时是否自动审核通过（备注以「AI审核：」开头，方便人最后复核）
     ai_timeout_s        单次请求超时（秒）
+    ai_mode             all = 每个景区都过 AI，AI 判完直接审核完成（保留它判为属于的 POI，没有也完成）；
+                        fallback = 只在规则判不了时用，AI 有把握才通过
     ai_thinking         深度思考（默认关：请求里带 thinking: {"type": "disabled"}；始终非流式 stream: false，一次拿完整结果）
 
 发送给模型的只有：景区名称 / 别名 / 省市区 / 地址 / 坐标 / 等级 / 核心景点，和携程候选的名称 / 类型 / 城市区县 / 地址 / 距离。
@@ -32,7 +34,7 @@ import match
 
 DEFAULTS = dict(ai_enabled=False, ai_base_url="https://ark.cn-beijing.volces.com/api/v3", ai_model="glm-5-3-flash-260828",
                 ai_api_key="", ai_web_search=False, ai_max_keyword=3, ai_min_confidence=0.8, ai_auto_approve=True, ai_timeout_s=60,
-                ai_thinking=False)
+                ai_thinking=False, ai_mode="all")
 MAX_ITEMS = 30  # 一次最多给模型看的候选数
 
 # 调用日志：每次调用（成功 / 失败）一行 JSON，写 logs/ai_calls.jsonl，内存里留最近 300 条给设置页看
