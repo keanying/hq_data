@@ -463,7 +463,7 @@
       syncKept();
       S.res = null; S.keyword = ''; S.rawOpen = {}; S.domOpen = false; S.othersOpen = false; S.outsideOpen = false;
       S.searches = []; S.merged = null; stopSequence();
-      S.manualOff = new Set(); S.autoKept = new Set(); S.aiKept = new Set(); S.ai = null; clearInterval(S.aiTick); cancelAutoApprove(true); cancelIdleSkip(true); S.takenOver = false;
+      S.manualOff = new Set(); S.manualOn = new Set(); S.autoKept = new Set(); S.aiKept = new Set(); S.ai = null; clearInterval(S.aiTick); cancelAutoApprove(true); cancelIdleSkip(true); S.takenOver = false;
       $('#note').value = (S.detail.status && S.detail.status.note) || '';
       render();
       // 已审核（approval=1）的景区：不再自动搜索 / 自动保留 / 自动审核，只展示已保留的；要复核手动点搜索词或「重新搜索」
@@ -605,18 +605,20 @@
       if (!auto) return;
       const conf = Number(r.confidence) || 0;
       if (aiAll() && Number(S.detail.scenic.approval) !== 1) {
-        // AI 说了算：规则自动保留、但 AI 判为不属于的去掉（人手动保留的不动），然后不管是不是这个景区都审核完成
+        // AI 说了算：最终保留 = AI 判为属于的（置信度 ≥ 下限）；其余已保留的（规则选的、之前留下的）全部取消，
+        // 只有人在这次核对里亲手点选的不动。AI 一个都没选中 → 全部不选，照样审核完成
+        const want = new Set(keepKeys);
         let dropped = 0;
-        for (const [key, v] of Object.entries(r.decisions || {})) {
-          if (v.keep || v.confidence < minc || !S.autoKept.has(key) || S.decisions[key] !== 'keep') continue;
-          const it = pool.find((x) => x.key === key);
-          if (it) { try { await savePoi(it, false); S.autoKept.delete(key); dropped++; } catch (e) { /* 忽略 */ } }
+        for (const key of Object.keys(S.decisions)) {
+          if (S.decisions[key] !== 'keep' || want.has(key) || S.manualOn.has(key)) continue;
+          const it = pool.find((x) => x.key === key) || { key, poiId: key.replace(/^poi:/, '') };
+          try { await savePoi(it, false); S.autoKept.delete(key); dropped++; } catch (e) { /* 忽略 */ }
         }
         if (!S.detail || S.detail.scenic.id !== sid) return;
         const kept = Object.values(S.decisions).filter((v) => v === 'keep').length;
         render();
         maybeAutoApprove({ approve: true, aiAll: true,
-          reason: `AI审核：${r.summary || (keepKeys.length ? '有属于该景区的 POI' : '没有属于该景区的 POI')}（保留 ${kept} 个${dropped ? `，去掉规则误选 ${dropped} 个` : ''}，置信度 ${conf.toFixed(2)}）`,
+          reason: `AI审核：${r.summary || (keepKeys.length ? '有属于该景区的 POI' : '没有属于该景区的 POI')}（保留 ${kept} 个${dropped ? `，取消非 AI 选中的 ${dropped} 个` : ''}，置信度 ${conf.toFixed(2)}）`,
           similar: [], name_keep: keepKeys });
         return;
       }
@@ -698,14 +700,15 @@
       takeOver();
       try {
         await savePoi(item, keep);
-        if (keep) S.manualOff.delete(key); else { S.manualOff.add(key); S.autoKept.delete(key); } // 手动取消的不再自动选
+        if (keep) { S.manualOff.delete(key); S.manualOn.add(key); } else { S.manualOff.add(key); S.manualOn.delete(key); S.autoKept.delete(key); } // 手动取消的不再自动选
         render();
       } catch (e) { toast('保存失败：' + e.message, true); }
     }
     // 「地址相近」的 POI 自动保留（未审核的景区才做；手动取消过的不再选）
     const SIMILAR = 0.4;
     async function autoSelect() {
-      if (!prefs.auto_keep_similar || !S.detail || Number(S.detail.scenic.approval) === 1) return;
+      // 「每个景区都过 AI」模式：规则不再自动保留，最终保留什么只看 AI
+      if (aiAll() || !prefs.auto_keep_similar || !S.detail || Number(S.detail.scenic.approval) === 1) return;
       const s = S.detail.scenic, sid = s.id;
       const items = [...shown().sights, ...S.detail.candidates.map((c) => Object.assign(candAsItem(c), { address: c.address }))];
       const MJ = (S.merged && S.merged.judge) || {};
