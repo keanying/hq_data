@@ -125,8 +125,11 @@ class Service:
             try:
                 if sid in self.follow_pending:
                     self.follow_pending.remove(sid)
-                targets = db.crawl_targets(dict(scenic_id=sid))
+                st0 = {}
+                targets = db.crawl_targets(dict(scenic_id=sid), stats=st0)
                 if not targets:
+                    if st0.get("skipped"):
+                        self.flog(f"{sid}：保留的 {st0['skipped']} 个 POI 之前都采过，跳过")
                     continue
                 if self.follow_page is None:
                     self.follow_page = await self.browser.new_page()

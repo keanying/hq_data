@@ -139,6 +139,12 @@
     if (x.status === 'skip') return html`<${Tag} color="orange" size="small">已跳过<//>`;
     return html`<${Tag} color="grey" size="small">待核对<//>`;
   }
+  function collectTag(x) {
+    if (!x.collect) return html`<${Text} type="quaternary">—<//>`;
+    if (x.collect === 'done') return html`<${Tag} color="green" size="small">已采<//>`;
+    if (x.collect === 'partial') return html`<${Tag} color="orange" size="small">部分 ${x.collect_n}/${x.pois.length}<//>`;
+    return html`<${Tag} color="grey" size="small">未采<//>`;
+  }
   const CRAWL_ST = { done: ['green', '完成'], partial: ['orange', '部分'], failed: ['red', '失败'], running: ['blue', '采集中'] };
   const crawlTag = (s) => { const [c, t] = CRAWL_ST[s] || ['grey', s || '—']; return html`<${Tag} color=${c} size="small">${t}<//>`; };
   const JOB_ST = { queued: ['grey', '排队中'], running: ['blue', '运行中'], done: ['green', '完成'], failed: ['red', '失败'], cancelled: ['grey', '已取消'], need_human: ['orange', '需要人工'] };
@@ -232,7 +238,8 @@
         <${Stat} icon=${html`<${Ic.IconTick} />`} color="green" k="已审核" v=${fmt(o.approved)} s=${`自动 ${fmt(o.auto_approved)} · 人工 ${fmt(o.manual_approved)} · ${pct(o.approved, o.total)}%`} />
         <${Stat} icon=${html`<${Ic.IconCheckboxTick} />`} color="grey" k="待核对" v=${fmt(o.todo)} s=${html`<a onClick=${() => go('review')}>去核对</a>`} />
         <${Stat} icon=${html`<${Ic.IconAlertTriangle} />`} color="orange" k="已跳过（待人定）" v=${fmt(o.skipped)} s="核对页筛选「已跳过」处理" />
-        <${Stat} icon=${html`<${Ic.IconCamera} />`} color="blue" k="已采 POI" v=${fmt(crawl.done || 0)} s=${`可采 ${fmt(o.crawlable_pois)} · 部分 ${crawl.partial || 0} · 失败 ${crawl.failed || 0}`} />
+        <${Stat} icon=${html`<${Ic.IconCamera} />`} color="blue" k="已采景区" v=${fmt(o.scenics_collected)}
+          s=${`共 ${fmt(o.scenics_with_pois)} 个可采 · 部分 ${fmt(o.scenics_partial)} · POI 完成 ${fmt(crawl.done || 0)}/${fmt(o.crawlable_pois)}`} />
         <${Stat} icon=${html`<${Ic.IconGallery} />`} color="pink" k="点评图片" v=${fmt(o.images)} s=${`${o.ods_table || 'ODS'}：${fmt(o.ods_rows)} 行`} />
       </div>
       <div className="row2 fill">
@@ -380,6 +387,7 @@
       { title: '状态', dataIndex: 'status', width: 92, render: (v, r) => scenicTag(r) },
       { title: '保留的携程 POI', dataIndex: 'pois', render: (v) => html`<div className="tags">${(v || []).slice(0, 4).map((p) => html`<${Tag} key=${p.poiId} size="small" color="violet" type="light">${p.poiName}${p.images ? ` · ${p.images}` : ''}<//>`)}
           ${(v || []).length > 4 && html`<${Tag} size="small" color="grey">+${v.length - 4}<//>`}${!(v || []).length && html`<${Text} type="quaternary">—<//>`}</div>` },
+      { title: '图片采集', dataIndex: 'collect', width: 96, render: (v, r) => collectTag(r) },
       { title: '图片', dataIndex: 'images', width: 70, align: 'right', render: fmt },
       { title: '核对', dataIndex: 'updated_at', width: 150, render: (v, r) => html`<div className="cell-2"><div className="d">${r.reviewer || (/^自动审核/.test(r.note || '') ? 'auto' : '')}</div><div className="d nw">${v || ''}</div></div>` },
     ];
@@ -419,7 +427,9 @@
       </div>
       <h4 style=${{ margin: '8px 0' }}>保留的携程 POI（${(x.pois || []).length}）</h4>
       ${(x.pois || []).length ? x.pois.map((p) => html`<div className="poi-item" key=${p.poiId}>
-        <div className="t"><b>${p.poiName}</b><${Text} type="tertiary" size="small">poiId ${p.poiId}<//><span style=${{ flex: 1 }}></span><${Tag} size="small" color=${p.images ? 'green' : 'grey'}>图片 ${p.images || 0}<//></div>
+        <div className="t"><b>${p.poiName}</b><${Text} type="tertiary" size="small">poiId ${p.poiId}<//><span style=${{ flex: 1 }}></span>
+          ${p.crawl ? crawlTag(p.crawl) : html`<${Tag} size="small" color="grey">未采<//>`}<${Tag} size="small" color=${p.images ? 'green' : 'grey'}>图片 ${p.images || 0}<//></div>
+        ${p.crawl_msg && html`<div className="d">采集：${p.crawl_msg}</div>`}
         <div className="d"><${Ic.IconMapPin} size="small" /> ${p.addr || '—'}${p.lat ? ` · ${p.lon}, ${p.lat}` : ''}</div>
         <div className="a">${p.poiUri && html`<a href=${p.poiUri} target="_blank" rel="noreferrer">携程页面 <${Ic.IconExternalOpen} size="small" /></a>`}
           <a onClick=${() => { onClose(); go('gallery', { poi_id: p.poiId }); }}>看这个 POI 的图片</a></div>

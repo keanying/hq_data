@@ -266,11 +266,14 @@ async def crawl_all(get_page, f, max_pages=20, max_images=300, limit=0, refresh=
                     log=print, should_stop=lambda: False, progress=lambda done, total: None,
                     empty_limit=10, on_crawler=None):
     """对筛选范围内已审核的景区，逐个 POI 采集点评图片。get_page 为 async 函数，返回可用的 Playwright page。"""
-    targets = db.crawl_targets(f, refresh=refresh)
+    st0 = {}
+    targets = db.crawl_targets(f, refresh=refresh, stats=st0)
     if limit:
         targets = targets[:limit]
     total = len(targets)
-    log(f"待采集 POI：{total} 个（每个最多 {max_pages} 页 / {max_images} 张）")
+    skipped = st0.get("skipped") or 0
+    log(f"待采集 POI：{total} 个（每个最多 {max_pages} 页 / {max_images} 张）"
+        + (f"；{skipped} 个之前采过，跳过（要重采请勾「重采」/ --refresh）" if skipped else ""))
     stats = dict(pois=0, images=0, failed=0)
     page = None
     for i, t in enumerate(targets, 1):

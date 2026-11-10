@@ -204,6 +204,9 @@ def init_db():
             align_collation(cur, t, col)
     ensure_poi_info_column()
     ensure_image_columns()
+    n = mark_interrupted()
+    if n:
+        print(f"上次有 {n} 个 POI 采集到一半被中断，已记为「部分」，采到的页不会再采", flush=True)
     migrate_image_ids(log=lambda m: print(m, flush=True))
     with cursor() as cur:  # 旧版「已完成」状态同步到 approval
         cur.execute(f"""UPDATE {SCENIC_TABLE} s JOIN {STATUS_TABLE} st ON st.scenic_id = s.{C['id']}
@@ -609,8 +612,33 @@ def addr_put(poi_id, biz_id, name, address, page_url):
 
 
 # ---------------------------------------------------------------- 点评图片（景点图像识别）
-def crawl_targets(f, refresh=False):
-    """已审核通过（approval=1）的景区里，ctrip_poi_info 保留的每个 POI。默认跳过已采完的。"""
+# 这些原因再采也一样，算「采过了」，不自动重采
+PERMANENT_FAIL = ("页面上的 poiId", "没读到第一页点评")
+
+
+def crawled_set():
+    """采过的 (景区ID, poiId)：采完的、采到过至少一页的（中途停了也算）、链接不对 / 页面没点评的。
+    只有「一页都没采到的临时失败」（网络、异常、启动时中断在第一页之前）才会再采。勾「重采」可强制重采。"""
+    with cursor() as cur:
+        cur.execute(f"SELECT scenic_id, poi_id, status, pages_done, message FROM {CRAWL_TABLE}")
+        rows = cur.fetchall()
+    return {(r["scenic_id"], str(r["poi_id"])) for r in rows
+            if r["status"] == "done" or (r["pages_done"] or 0) > 0 or str(r["message"] or "").startswith(PERMANENT_FAIL)}
+
+
+def mark_interrupted():
+    """服务 / 程序上次在采集中途被关掉：把还是 running 的记录改成 partial（采到过的页不再重采）。"""
+    with cursor() as cur:
+        if not table_exists(cur, CRAWL_TABLE):
+            return 0
+        n = cur.execute(f"""UPDATE {CRAWL_TABLE} SET status = 'partial',
+                            message = CONCAT('上次运行中断（已采 ', pages_done, ' 页）') WHERE status = 'running'""")
+    return n or 0
+
+
+def crawl_targets(f, refresh=False, stats=None):
+    """已审核通过（approval=1）的景区里，ctrip_poi_info 保留的每个 POI。默认跳过采过的（见 crawled_set）。
+    stats 传一个 dict 进来会填 skipped = 因为采过而跳过的 POI 数。"""
     where, params = _filters(dict(f, status="done"))
     city_order, city_params = ((f"FIELD(s.{C['city']}, {','.join(['%s'] * len(DEFAULT_CITIES))}), ", list(DEFAULT_CITIES)) if DEFAULT_CITIES
                                else (f"s.{C['province']}, ", []))
@@ -620,18 +648,18 @@ def crawl_targets(f, refresh=False):
                         AND s.{POI_INFO} IS NOT NULL AND s.{POI_INFO} <> '[]'
                         ORDER BY {city_order}s.{C['city']}, {GRADE_ORDER}, s.{C['id']}""", params + city_params)
         rows = list(cur.fetchall())
-        done = set()
-        if not refresh:
-            cur.execute(f"SELECT scenic_id, poi_id FROM {CRAWL_TABLE} WHERE status = 'done'")
-            done = {(r["scenic_id"], str(r["poi_id"])) for r in cur.fetchall()}
-    out = []
+    done = set() if refresh else crawled_set()
+    out, skipped = [], 0
     for r in rows:
         for p in _parse_info(r.pop("poi_info")):
             if not str(p.get("poiId", "")).isdigit() or not p.get("poiUri"):
                 continue
             if (r["id"], str(p["poiId"])) in done:
+                skipped += 1
                 continue
             out.append(dict(scenic=r, poi=p))
+    if stats is not None:
+        stats["skipped"] = skipped
     return out
 
 
@@ -938,11 +966,21 @@ def overview():
         if table_exists(cur, ODS_TABLE):
             cur.execute(f"SELECT COUNT(*) n FROM {ODS_TABLE}")
             ods = cur.fetchone()["n"]
-    crawlable = sum(1 for _ in crawl_targets({}, refresh=True))
+    allt = crawl_targets({}, refresh=True)
+    crawlable = len(allt)
+    got = crawled_set()
+    per = {}
+    for t in allt:
+        k = t["scenic"]["id"]
+        a, b = per.get(k, (0, 0))
+        per[k] = (a + 1, b + ((k, str(t["poi"]["poiId"])) in got))
+    scenics_collected = sum(1 for a, b in per.values() if a == b)
+    scenics_partial = sum(1 for a, b in per.values() if 0 < b < a)
     total = sum(int(c["n"] or 0) for c in cs)
     skipped = sum(int(c.get("skipped") or 0) for c in cs)
     return dict(total=total, approved=approved, auto_approved=auto_n, manual_approved=approved - auto_n, skipped=skipped,
-                todo=total - approved - skipped, crawl=crawl, crawlable_pois=crawlable, images=images, ods_rows=ods,
+                todo=total - approved - skipped, crawl=crawl, crawlable_pois=crawlable,
+                scenics_with_pois=len(per), scenics_collected=scenics_collected, scenics_partial=scenics_partial, images=images, ods_rows=ods,
                 ods_table=ODS_TABLE.replace("`", ""), cities=[dict(c, images=int((img_city.get(c["city"]) or {}).get("images") or 0),
                                                                    pois=int((img_city.get(c["city"]) or {}).get("pois") or 0)) for c in cs])
 
@@ -965,12 +1003,26 @@ def scenic_table(f, offset=0, limit=50):
                             WHERE scenic_id IN ({','.join(['%s'] * len(ids))}) GROUP BY scenic_id, poi_id""", ids)
             for x in cur.fetchall():
                 counts.setdefault(x["scenic_id"], {})[str(x["poi_id"])] = x["n"]
+            cur.execute(f"""SELECT scenic_id, poi_id, status, pages_done, message, updated_at FROM {CRAWL_TABLE}
+                            WHERE scenic_id IN ({','.join(['%s'] * len(ids))})""", ids)
+            crawls = {(x["scenic_id"], str(x["poi_id"])): x for x in cur.fetchall()}
+        else:
+            crawls = {}
     for r in rows:
         r["pois"] = _normalize(_parse_info(r.pop("poi_info")))
         c = counts.get(r["id"], {})
+        n_col = 0
         for p in r["pois"]:
             p["images"] = c.get(str(p["poiId"]), 0)
+            cr = crawls.get((r["id"], str(p["poiId"])))
+            p["crawl"] = cr["status"] if cr else None
+            p["crawl_msg"] = cr["message"] if cr else None
+            p["collected"] = bool(cr and (cr["status"] == "done" or (cr["pages_done"] or 0) > 0
+                                          or str(cr["message"] or "").startswith(PERMANENT_FAIL)))
+            n_col += p["collected"]
         r["images"] = sum(c.values())
+        r["collect_n"] = n_col
+        r["collect"] = None if not r["pois"] else "done" if n_col == len(r["pois"]) else "partial" if n_col else "none"
     return dict(total=total, items=_jsonable(rows))
 
 
