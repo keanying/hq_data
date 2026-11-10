@@ -4,6 +4,8 @@
 (() => {
   'use strict';
   const EMBED = window.HQ_EMBED || null;
+  // 图标：嵌在工作台里用 layui 图标（/web/vendor/layui-icons.css）；注入携程页面时没有这个文件，用文字符号
+  const IC = (name, fallback) => (EMBED ? `<i class="layui-icon layui-icon-${name}"></i>` : fallback);
   if ((!EMBED && window.top !== window) || window.__hqPanel) return;
   window.__hqPanel = true;
 
@@ -53,7 +55,7 @@
     (EMBED || document.documentElement).appendChild(host);
     if (EMBED) host.classList.add('embed');
     const root = host.attachShadow({ mode: 'open' });
-    root.innerHTML = `
+    root.innerHTML = `${EMBED ? '<link rel="stylesheet" href="/web/vendor/layui-icons.css">' : ''}
 <style>
   :host { all: initial; }
   :host(.embed) { display: block; height: 100%; }
@@ -166,6 +168,33 @@
   :host(.embed) footer button { height: 38px; border-radius: 10px; }
   :host(.embed) footer button.primary { background: linear-gradient(135deg, #8b6cff, #6c4dff); border: 0; box-shadow: 0 6px 16px rgba(108, 77, 255, .28); }
   :host(.embed) .auto-banner, :host(.embed) .idle-banner { border-radius: 12px; }
+  /* 左右两栏：左边景区信息 + 搜索词（不动），右边携程搜索结果 / 离线候选（各自滚动），方便对照核对 */
+  .split { display: block; }
+  :host(.embed) .body { overflow: hidden; padding: 0; display: flex; }
+  :host(.embed) .split { flex: 1; min-height: 0; display: grid; grid-template-columns: minmax(340px, 34%) minmax(0, 1fr); }
+  :host(.embed) .side, :host(.embed) .maincol { min-height: 0; overflow-y: auto; scrollbar-gutter: stable; scrollbar-width: thin; }
+  :host(.embed) .side { padding: 16px 16px 100px 20px; border-right: 1px solid #f1f1f4; background: #fcfcfd; }
+  :host(.embed) .maincol { padding: 16px 22px 100px 18px; }
+  :host(.embed) .side::-webkit-scrollbar, :host(.embed) .maincol::-webkit-scrollbar { width: 6px; }
+  :host(.embed) .side::-webkit-scrollbar-thumb, :host(.embed) .maincol::-webkit-scrollbar-thumb { background: rgba(28, 31, 35, .18); border-radius: 3px; }
+  :host(.embed) .side .card { margin-bottom: 14px; }
+  :host(.embed) .side .kv { grid-template-columns: 64px minmax(0, 1fr); row-gap: 8px; font-size: 13px; }
+  :host(.embed) .side .kv > div b { font-weight: 600; }
+  :host(.embed) .side .ttl { margin-bottom: 12px; }
+  :host(.embed) .side .ttl .kept { flex-basis: 100%; margin-left: 0; margin-top: 4px; }
+  :host(.embed) .side-sec { margin-top: 4px; }
+  :host(.embed) .side-sec .muted { font-size: 12px; }
+  :host(.embed) .side .tools { gap: 6px; }
+  :host(.embed) .maincol > .tools:first-child { margin-top: 0; }
+  :host(.embed) .body > .muted, :host(.embed) .body > .empty-state { flex: 1; padding: 16px 20px; align-self: flex-start; }
+  /* layui 图标 */
+  :host(.embed) .layui-icon { font-size: 15px; line-height: 1; vertical-align: -2px; }
+  :host(.embed) header .layui-icon { font-size: 16px; vertical-align: 0; }
+  :host(.embed) .ttl-main { display: inline-flex; align-items: center; gap: 6px; }
+  :host(.embed) .ttl-main .layui-icon { font-size: 18px; color: #6c4dff; font-weight: 400; }
+  :host(.embed) .addr .pin .layui-icon, :host(.embed) .addr.none .layui-icon { color: #e0703a; font-size: 14px; }
+  :host(.embed) .chip .layui-icon { font-size: 12px; vertical-align: -1px; }
+  :host(.embed) footer button .layui-icon { font-size: 15px; margin-right: 2px; }
   :host(.embed) .empty-state { text-align: center; padding: 64px 16px; color: rgba(28, 31, 35, .62); }
   :host(.embed) .empty-state b { display: block; font-size: 16px; color: #1c1f23; margin-bottom: 6px; }
   :host(.embed) .empty-state .acts { margin-top: 16px; display: flex; gap: 8px; justify-content: center; }
@@ -253,11 +282,11 @@
 <div class="panel hidden" id="panel">
   <div class="grip" id="grip" title="拖动调整宽度"></div>
   <header>
-    <b>景区 ↔ 携程POI</b>
+    <b class="ttl-main">景区 ${IC('link', '↔')} 携程POI</b>
     <span class="grow" id="progress"></span>
-    <button id="prev" title="上一个 (←)">‹</button>
-    <button id="next" title="下一个 (→)">›</button>
-    <button id="gear" title="设置">⚙</button>
+    <button id="prev" title="上一个 (←)">${IC('left', '‹')}</button>
+    <button id="next" title="下一个 (→)">${IC('right', '›')}</button>
+    <button id="gear" title="设置">${IC('set', '⚙')}</button>
     <button id="close" title="收起 (Esc)">✕</button>
   </header>
   <div class="prog" title="当前城市范围内 approval=1 的景区数"><div class="bar"><i id="prog-bar" style="width:0"></i></div><span id="prog-text"></span></div>
@@ -283,15 +312,15 @@
     <select id="f-grade" title="景区等级"><option value="">全部等级</option><option>5A</option><option>4A</option><option>5A,4A</option><option>3A</option><option>2A</option><option>1A</option></select>
     <select id="f-status" title="审核状态"><option value="todo">待核对</option><option value="done">已审核</option><option value="skip">已跳过</option><option value="auto">自动通过</option><option value="all">全部</option></select>
     <input type="text" id="f-q" placeholder="景区名 / ID">
-    <button id="f-apply">筛选</button>
-    <button id="export" title="导出 CSV 到工具目录">导出</button>
+    <button id="f-apply">${IC('search', '')} 筛选</button>
+    <button id="export" title="导出 CSV">${IC('export', '')} 导出</button>
   </div>
   <div class="body" id="body"><div class="muted">加载中…</div></div>
   <div class="toast" id="toast"></div>
   <footer>
     <input type="text" id="note" placeholder="景区备注（可选）">
-    <button id="skip" title="跳过 (S)">跳过</button>
-    <button class="primary" id="done" title="审核完成（approval=1）并下一个 (Enter)">审核完成 ↵</button>
+    <button id="skip" title="跳过 (S)">${IC('next', '')} 跳过</button>
+    <button class="primary" id="done" title="审核完成（approval=1）并下一个 (Enter)">${IC('ok', '')} 审核完成 ${EMBED ? '' : '↵'}</button>
   </footer>
 </div>`;
     const $ = (sel) => root.querySelector(sel);
@@ -699,11 +728,11 @@
       if (it.address) {
         const k = it.key || (it.ctrip_poi_id ? 'poi:' + it.ctrip_poi_id : null);
         const doorTag = k && S.merged && S.merged.judge && (S.merged.judge.door_match || []).includes(k) ? '<span class="tag good" title="路名+门牌号与客户地址一致">门牌一致</span>' : '';
-        return `<div class="addr"><span class="pin">📍</span><span>${esc(it.address)}</span>${doorTag}${addrBadges(it.address, s)}<span class="src">${esc(it.addressSource || '')}</span></div>`;
+        return `<div class="addr"><span class="pin">${IC('location', '📍')}</span><span>${esc(it.address)}</span>${doorTag}${addrBadges(it.address, s)}<span class="src">${esc(it.addressSource || '')}</span></div>`;
       }
-      if (it.addrLoading) return '<div class="addr none">📍 正在打开详情页读取地址…</div>';
+      if (it.addrLoading) return `<div class="addr none">${IC('location', '📍')} 正在打开详情页读取地址…</div>`;
       const url = it.url || it.ctrip_url;
-      return `<div class="addr none">📍 ${it.addrError ? '没读到地址' : '暂无地址'}${url ? ` <button class="link" ${fetchAttr}>查地址</button>` : ''}</div>`;
+      return `<div class="addr none">${IC('location', '📍')} ${it.addrError ? '没读到地址' : '暂无地址'}${url ? ` <button class="link" ${fetchAttr}>查地址</button>` : ''}</div>`;
     }
     function candTag(c) {
       if (!c) return '';
@@ -792,13 +821,13 @@
       const chipHtml = (k, cls) => {
         const done = S.searches.find((x) => x.kw === k);
         const n = done ? (done.res.items || []).filter(isPoi).length : null;
-        return `<button class="chip ${cls || ''} ${k === S.keyword ? 'active' : ''} ${done ? 'done' : ''}" data-kw="${esc(k)}" title="${done ? '已搜，POI ' + n + ' 条；点击切到这个词（R 重新搜）' : '点击搜索'}">${done ? '✓ ' : ''}${esc(k)}${done ? ` <small>${n}</small>` : ''}</button>`;
+        return `<button class="chip ${cls || ''} ${k === S.keyword ? 'active' : ''} ${done ? 'done' : ''}" data-kw="${esc(k)}" title="${done ? '已搜，POI ' + n + ' 条；点击切到这个词（R 重新搜）' : '点击搜索'}">${done ? IC('ok', '✓') + ' ' : ''}${esc(k)}${done ? ` <small>${n}</small>` : ''}</button>`;
       };
       const chips = keywordChips(s).map((k) => chipHtml(k)).join('');
       const spots = spotChips().filter((k) => !keywordChips(s).includes(k));
       const spotRow = spots.length ? `<div class="tools"><span class="muted">核心景点</span>${spots.map((k) => chipHtml(k, 'spot')).join('')}</div>` : '';
 
-      b.innerHTML = `
+      b.innerHTML = `<div class="split"><aside class="side">
         <div class="card">
           <div class="ttl"><h3>${esc(s.name)}</h3><span class="tag ${s.grade === '5A' ? 'g5' : ''}">${esc(s.grade || '')}</span>
             ${Number(s.approval) === 1 ? '<span class="tag good">已审核</span>' : st && st.status === 'skip' ? '<span class="tag warn">已跳过</span>' : '<span class="tag">未审核</span>'}
@@ -813,15 +842,17 @@
             <span>已保留</span><div>${(S.detail.kept || []).length ? (S.detail.kept || []).map((k) => `<span class="tag good">${esc(k.poiName || k.poiId)}</span>`).join(' ') : '<span class="muted">（无）</span>'}</div>
           </div>
         </div>
+        <div class="sec side-sec"><b>搜索词</b><span class="muted">点一下在携程里搜</span></div>
         <div class="tools">${chips}</div>${spotRow}
+        </aside><section class="maincol">
         <div class="tools">
           <input type="text" id="kw" placeholder="自定义关键词（按 / 聚焦）" style="flex:1;min-width:140px">
-          <button id="kw-go">搜索</button>
+          <button id="kw-go">${IC('search', '')} 搜索</button>
           <label class="muted"><input type="checkbox" id="sight-only" ${prefs.sight_only ? 'checked' : ''}> 不显示酒店等非POI</label>
         </div>
         <div class="sec"><b>携程搜索</b>${S.seq ? `<span class="tag warn">依次搜索 ${S.seq.i + 1}/${S.seq.kws.length}</span><button id="stop-seq" title="不再继续搜下一个关键词">停止</button>` : ''}${S.keyword ? `<span class="muted">「${esc(S.keyword)}」${capLabel ? ' · ' + esc(capLabel) : ''}${S.res && S.res.cached ? ' · 缓存 ' + esc(S.res.searched_at) : ''}</span>
-          <button id="re-search" title="在携程页面重新输入搜索 (R)">重新搜索</button>` : ''}
-          ${missingAddr ? `<button id="fill-addr" title="逐个打开携程详情页读取地址">补全地址（${missingAddr}）</button>` : ''}</div>
+          <button id="re-search" title="在携程页面重新输入搜索 (R)">${IC('refresh', '')} 重新搜索</button>` : ''}
+          ${missingAddr ? `<button id="fill-addr" title="逐个打开携程详情页读取地址">${IC('location', '')} 补全地址（${missingAddr}）</button>` : ''}</div>
         ${S.idle ? `<div class="idle-banner"><div class="txt"><b>需要人工审核</b>：${esc(S.idle.reason)}<br><span id="idle-left">${S.idle.left}</span> 秒内无人操作将跳过并进入下一个（之后可在「已跳过」里处理）</div><button id="take-over">我来处理</button></div>` : ''}
         ${S.autoApprove ? `<div class="auto-banner"><div class="txt"><b>✓ 名称一致（地址相近 / 门牌一致 / 同省市区）</b>，<span id="auto-left">${S.autoApprove.left}</span> 秒后自动审核通过并进入下一个<br>${esc(S.autoApprove.reason)}</div><button id="cancel-auto">取消（Esc）</button></div>`
           : (MJ.reason && !S.loading && !S.seq && !S.idle && Number(s.approval) !== 1 ? `<div class="judge-note">自动审核：${esc(MJ.approve ? '可通过（已取消或未开启）' : MJ.reason + (S.searches.length > 1 ? `（已搜 ${S.searches.length} 个词）` : ''))}</div>` : '')}
@@ -834,7 +865,8 @@
         ${other.length ? `<div class="sec"><b>其他已保留（不在当前搜索结果里，${other.length}）</b></div>` + other.map((k) => `<div class="row pick keep" data-runkeep="${esc(k.poiId)}" title="点这一行：取消保留"><div></div><div>
             <div class="l1">${k.poiUri ? `<a href="${esc(k.poiUri)}" target="_blank" rel="noopener">${esc(k.poiName || k.poiId)}</a>` : `<b>${esc(k.poiName || k.poiId)}</b>`}</div>
             <div class="meta"><span>poiId ${esc(k.poiId)}</span></div></div>
-            <div class="acts"><span class="pick-box on"></span></div></div>`).join('') : ''}`;
+            <div class="acts"><span class="pick-box on"></span></div></div>`).join('') : ''}
+        </section></div>`;
     }
 
     // ---------------------------------------------------------------- events
