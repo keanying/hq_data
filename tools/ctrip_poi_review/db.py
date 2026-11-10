@@ -46,6 +46,7 @@ ADDR_TABLE = ident(ENV("ADDR_TABLE", "ctrip_poi_address_cache"))
 IMAGE_TABLE = ident(ENV("IMAGE_TABLE", "scenic_poi_image"))
 CRAWL_TABLE = ident(ENV("CRAWL_TABLE", "scenic_poi_image_crawl"))
 AI_TABLE = ident(ENV("AI_TABLE", "scenic_ai_judge"))
+DELETED_TABLE = ident(ENV("IMAGE_DELETED_TABLE", "scenic_poi_image_deleted"))
 # 交付表（你建好的分区天表）。不存在时只写工具自己的 scenic_poi_image
 ODS_TABLE = ident(ENV("ODS_IMAGE_TABLE", "ods_prd_poi_image_di"))
 ODS_COORD = ENV("ODS_COORD", "wgs84").lower()          # wgs84：客户景区坐标(GCJ02)换算成 WGS84 再写；gcj02：原样写
@@ -90,6 +91,11 @@ DDL = [
 ) DEFAULT CHARSET=utf8mb4 COMMENT='携程 POI 地址缓存（打开详情页读取）'""",
 ]
 DDL += [
+    f"""CREATE TABLE IF NOT EXISTS {DELETED_TABLE} (
+  record_id VARCHAR(64) NOT NULL PRIMARY KEY COMMENT '被删除图片的 record_id（再次采集时跳过）',
+  scenic_id VARCHAR(64) NULL, poi_id BIGINT NULL, image_url VARCHAR(512) NULL,
+  deleted_by VARCHAR(64) NULL, deleted_at DATETIME DEFAULT CURRENT_TIMESTAMP
+) DEFAULT CHARSET=utf8mb4 COMMENT='人工删除的点评图片（不再采集、不进交付表）'""",
     f"""CREATE TABLE IF NOT EXISTS {AI_TABLE} (
   scenic_id VARCHAR(64) NOT NULL, sig CHAR(40) NOT NULL COMMENT '模型 + 候选集合的签名',
   model VARCHAR(128) NULL, result JSON NULL COMMENT 'AI 判断结果（每个 POI 保留与否、置信度、理由）',
@@ -754,6 +760,8 @@ def images_insert(rows):
         rids = [r["record_id"] for r in rows]
         cur.execute(f"SELECT record_id FROM {IMAGE_TABLE} WHERE record_id IN ({','.join(['%s'] * len(rids))})", rids)
         have = {x["record_id"] for x in cur.fetchall()}
+        cur.execute(f"SELECT record_id FROM {DELETED_TABLE} WHERE record_id IN ({','.join(['%s'] * len(rids))})", rids)
+        have |= {x["record_id"] for x in cur.fetchall()}  # 人工删过的不再写回
         todo = [r for r in rows if r["record_id"] not in have]
         if not todo:
             return 0
@@ -1138,3 +1146,23 @@ def ai_cache_put(scenic_id, sig, result):
         cur.execute(f"""INSERT INTO {AI_TABLE} (scenic_id, sig, model, result) VALUES (%s, %s, %s, %s)
                         ON DUPLICATE KEY UPDATE model=VALUES(model), result=VALUES(result), created_at=CURRENT_TIMESTAMP""",
                     (scenic_id, sig, result.get("model"), json.dumps(result, ensure_ascii=False)))
+
+
+def images_delete(record_ids, by=None):
+    """删除图片：从工具的图片表和交付表里删掉，并记进 scenic_poi_image_deleted（之后重采也不会写回）。返回各表删除条数。"""
+    ids = sorted({str(x) for x in record_ids or [] if x})
+    if not ids:
+        return dict(deleted=0, ods_deleted=0)
+    ph = ",".join(["%s"] * len(ids))
+    with cursor() as cur:
+        cur.execute(f"SELECT record_id, scenic_id, poi_id, image_url FROM {IMAGE_TABLE} WHERE record_id IN ({ph})", ids)
+        rows = list(cur.fetchall())
+        found = {r["record_id"] for r in rows}
+        cur.executemany(f"INSERT IGNORE INTO {DELETED_TABLE} (record_id, scenic_id, poi_id, image_url, deleted_by) VALUES (%s, %s, %s, %s, %s)",
+                        [(r["record_id"], r["scenic_id"], r["poi_id"], r["image_url"], by) for r in rows]
+                        + [(x, None, None, None, by) for x in ids if x not in found])
+        n = cur.execute(f"DELETE FROM {IMAGE_TABLE} WHERE record_id IN ({ph})", ids) or 0
+        m = 0
+        if table_exists(cur, ODS_TABLE):
+            m = cur.execute(f"DELETE FROM {ODS_TABLE} WHERE record_id IN ({ph})", ids) or 0
+    return dict(deleted=n, ods_deleted=m)
