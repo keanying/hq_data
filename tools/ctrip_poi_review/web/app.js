@@ -157,7 +157,7 @@
     if (x.collect === 'partial') return html`<${Tag} color="orange" size="small">部分 ${x.collect_n}/${x.pois.length}<//>`;
     return html`<${Tag} color="grey" size="small">未采<//>`;
   }
-  const CRAWL_ST = { done: ['green', '完成'], empty: ['grey', '无图'], partial: ['orange', '部分'], failed: ['red', '失败'], running: ['blue', '采集中'] };
+  const CRAWL_ST = { done: ['green', '完成'], empty: ['grey', '无图'], limited: ['orange', '疑似限流'], partial: ['orange', '部分'], failed: ['red', '失败'], running: ['blue', '采集中'] };
   const crawlTag = (s) => { const [c, t] = CRAWL_ST[s] || ['grey', s || '—']; return html`<${Tag} color=${c} size="small">${t}<//>`; };
   const JOB_ST = { queued: ['grey', '排队中'], running: ['blue', '运行中'], done: ['green', '完成'], failed: ['red', '失败'], cancelled: ['grey', '已取消'], need_human: ['orange', '需要人工'] };
   const jobTag = (s) => { const [c, t] = JOB_ST[s] || ['grey', s]; return html`<${Tag} color=${c} size="small">${t}<//>`; };
@@ -174,6 +174,10 @@
   function followState(f) {
     if (!f || !f.enabled) return ['grey', '已关闭', '审核通过后不会自动采图片'];
     if (f.paused) return ['orange', '已暂停', f.message ? `原因：${f.message}` : '队列保留着，点「继续采集」接着采'];
+    if (f.cool_until) {
+      const left = Math.max(0, Math.round(f.cool_until - Date.now() / 1000));
+      return ['orange', `冷却 ${Math.floor(left / 60)}:${String(left % 60).padStart(2, '0')}`, `${f.cool_reason || '疑似限流，暂停中'}；到时间自动继续，也可以点「继续」提前开始`];
+    }
     if (f.current) return ['blue', '采集中', `正在采 ${f.current}`];
     if (f.pending) return ['blue', '排队中', `还有 ${f.pending} 个景区等着采`];
     return ['green', '空闲', '审核通过（含规则自动通过、AI 通过）的景区会自动开始采'];
@@ -193,8 +197,9 @@
   function FollowControls({ follow, refresh }) {
     const f = follow || {};
     const [c, t, desc] = followState(f);
-    const toggle = () => setFollow(f.paused ? { resume: true } : { pause: true }, refresh);
-    const action = !f.enabled ? '' : f.paused ? '继续' : '暂停';
+    const waiting = f.paused || !!f.cool_until;
+    const toggle = () => setFollow(waiting ? { resume: true } : { pause: true }, refresh);
+    const action = !f.enabled ? '' : waiting ? '继续' : '暂停';
     return html`<span className="fc">
       <${Switch} size="small" checked=${!!f.enabled} onChange=${(v) => setFollow({ enabled: v }, refresh)} />
       <b className="fc-name">边核对边采集</b>
@@ -202,13 +207,14 @@
       <${Tooltip} content=${f.enabled ? `${desc}；点击${action}采集` : desc}>
         <button className=${'fc-btn ' + c} disabled=${!f.enabled} onClick=${toggle}>
           <span className="st"><i></i>${t}</span>
-          ${action && html`<span className="act">${f.paused ? html`<${Ic.IconPlay} size="small" />` : html`<${Ic.IconPause} size="small" />`}${action}</span>`}
+          ${action && html`<span className="act">${waiting ? html`<${Ic.IconPlay} size="small" />` : html`<${Ic.IconPause} size="small" />`}${action}</span>`}
         </button>
       <//>
       <span className="fc-sep"></span>
       <span className="fc-chip"><em>队列</em><b>${fmt(f.pending || 0)}</b> 个景区</span>
       <${Tooltip} content="本次启动服务以来的累计，重启后从 0 开始"><span className="fc-chip"><em>本次已采</em><b>${fmt(f.done || 0)}</b> 个景区 · 新增 <b>${fmt(f.images || 0)}</b> 张图</span><//>
       ${f.failed ? html`<span className="fc-chip bad"><em>失败</em><b>${fmt(f.failed)}</b> 个景区</span>` : null}
+      ${f.limited ? html`<${Tooltip} content="页面 / 接口没给数据，可能被携程限流；这些 POI 不算采过，之后会重采"><span className="fc-chip bad"><em>疑似限流</em><b>${fmt(f.limited)}</b> 个 POI</span><//>` : null}
     </span>`;
   }
 
@@ -416,7 +422,7 @@
           <a onClick=${() => go('gallery', { scenic_id: r.scenic_id, poi_id: r.poi_id })}>看图片</a>
           ${r.poi_uri && html`<a className="sec" href=${r.poi_uri} target="_blank" rel="noreferrer">携程页面</a>`}</span>` },
     ];
-    const statusOpts = [{ value: '', label: '全部' }, { value: 'done', label: '完成' }, { value: 'empty', label: '无图' }, { value: 'partial', label: '部分' }, { value: 'failed', label: '失败' }, { value: 'running', label: '采集中' }];
+    const statusOpts = [{ value: '', label: '全部' }, { value: 'done', label: '完成' }, { value: 'empty', label: '无图' }, { value: 'limited', label: '疑似限流' }, { value: 'partial', label: '部分' }, { value: 'failed', label: '失败' }, { value: 'running', label: '采集中' }];
     return html`<div className="page">
       <div className="row2 even" style=${{ flex: 'none' }}>
         <${Card} title="批量采集" sub="已审核景区保留的 POI"
@@ -1019,7 +1025,7 @@
         const body = {};
         for (const k of [...AI_FIELDS, 'reviewer', 'throttle_ms', 'auto_search', 'auto_keep_similar', 'auto_approve', 'auto_approve_delay_ms', 'idle_skip',
           'idle_skip_sec', 'search_more', 'search_core_spots', 'max_extra', 'auto_address', 'auto_collect', 'collect_max_pages', 'collect_max_images',
-          'collect_empty_pages']) body[k] = st[k];
+          'collect_empty_pages', 'collect_limit_streak', 'collect_cooldown_min', 'collect_daily_poi_cap']) body[k] = st[k];
         if (key.trim()) body.ai_api_key = key.trim();
         const r = await post('/api/settings', body);
         setSt(r); setKey('');
@@ -1091,6 +1097,9 @@
               <${Field} label="每个 POI"><span className="lbl">最多</span><${InputNumber} hideButtons value=${st.collect_max_pages} onChange=${set('collect_max_pages')} min=${1} style=${{ width: 90 }} suffix="页" />
                 <${InputNumber} hideButtons value=${st.collect_max_images} onChange=${set('collect_max_images')} min=${0} style=${{ width: 100 }} suffix="张" />
                 <span className="lbl">连续</span><${InputNumber} hideButtons value=${st.collect_empty_pages} onChange=${set('collect_empty_pages')} min=${0} style=${{ width: 90 }} suffix="页" /><span className="lbl">无新图换下一个</span><//>
+              <${Field} label="被限流时"><span className="lbl">连续</span><${InputNumber} hideButtons value=${st.collect_limit_streak} onChange=${set('collect_limit_streak')} min=${1} style=${{ width: 80 }} suffix="个" />
+                <span className="lbl">POI 疑似限流就暂停</span><${InputNumber} hideButtons value=${st.collect_cooldown_min} onChange=${set('collect_cooldown_min')} min=${1} style=${{ width: 100 }} suffix="分钟" /><span className="lbl">，到时间自动继续</span><//>
+              <${Field} label="每日上限"><span className="lbl">每天最多采</span><${InputNumber} hideButtons value=${st.collect_daily_poi_cap} onChange=${set('collect_daily_poi_cap')} min=${0} style=${{ width: 110 }} suffix="个 POI" /><span className="lbl">0 = 不限；到了暂停到第二天</span><//>
             </div>
             <div style=${{ marginTop: 14, textAlign: 'right' }}><${Button} theme="solid" onClick=${save} loading=${busy}>保存<//></div>
           <//>

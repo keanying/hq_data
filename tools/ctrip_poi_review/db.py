@@ -131,7 +131,7 @@ DDL += [
     f"""CREATE TABLE IF NOT EXISTS {CRAWL_TABLE} (
   scenic_id VARCHAR(64) NOT NULL, poi_id BIGINT NOT NULL,
   poi_name VARCHAR(255) NULL, poi_uri VARCHAR(512) NULL,
-  status VARCHAR(16) NULL COMMENT 'running / done / empty(无图) / partial / failed',
+  status VARCHAR(16) NULL COMMENT 'running / done / empty(无图) / limited(疑似限流，待重采) / partial / failed',
   pages_done INT NOT NULL DEFAULT 0 COMMENT '已翻到第几页',
   total_count INT NULL COMMENT '点评总数', review_qty INT NOT NULL DEFAULT 0 COMMENT '已读点评数',
   image_qty INT NOT NULL DEFAULT 0 COMMENT '已入库图片数',
@@ -221,7 +221,10 @@ def init_db():
     ensure_image_columns()
     n = mark_no_image()
     if n:
-        print(f"{n} 个 POI 之前记为「失败 · 没读到第一页点评」，其实是没有图片，已改为「无图」", flush=True)
+        print(f"{n} 个 POI 之前记为「失败 · 没读到第一页点评」，已改为「疑似限流」，之后会重采", flush=True)
+    n = restore_limited()
+    if n:
+        print(f"{n} 个 POI 之前记为「无图」，但原因是页面 / 接口没给数据（很可能是被限流），已改回「疑似限流」，之后会重采", flush=True)
     n = mark_interrupted()
     if n:
         print(f"上次有 {n} 个 POI 采集到一半被中断，已记为「部分」，采到的页不会再采", flush=True)
@@ -650,16 +653,35 @@ def crawled_set():
         cur.execute(f"SELECT scenic_id, poi_id, status, pages_done, message FROM {CRAWL_TABLE}")
         rows = cur.fetchall()
     return {(r["scenic_id"], str(r["poi_id"])) for r in rows
-            if r["status"] in ("done", "empty") or (r["pages_done"] or 0) > 0 or str(r["message"] or "").startswith(PERMANENT_FAIL)}
+            if r["status"] != "limited" and (r["status"] in ("done", "empty") or (r["pages_done"] or 0) > 0
+                                             or str(r["message"] or "").startswith(PERMANENT_FAIL))}  # 疑似限流的不算采过，会重采
 
 
-def mark_no_image():
-    """旧版把「页面没有点评 / 没有图片」记成了失败：改成 empty（无图，正常情况）。"""
+def crawl_today_count():
+    """今天已经采过（不论结果）的 POI 数，用于每日上限。"""
+    with cursor() as cur:
+        cur.execute(f"SELECT COUNT(*) n FROM {CRAWL_TABLE} WHERE updated_at >= CURDATE() AND status <> 'running'")
+        return cur.fetchone()["n"] or 0
+
+
+def restore_limited():
+    """旧版把「页面没返回点评数据 / 点评列表为空 / 接口 items 为空」都记成了「无图」，其实很可能是被限流：
+    改回 limited（疑似限流，待重采）。页面明确写着图片总数 0 的不动。"""
     with cursor() as cur:
         if not table_exists(cur, CRAWL_TABLE):
             return 0
-        n = cur.execute(f"""UPDATE {CRAWL_TABLE} SET status = 'empty',
-                            message = '该 POI 没有图片数据（页面没有返回点评数据）'
+        n = cur.execute(f"""UPDATE {CRAWL_TABLE} SET status = 'limited', message = CONCAT('疑似限流（旧记录「', message, '」），待重采')
+                            WHERE status = 'empty' AND (message LIKE %s OR message LIKE %s OR message LIKE %s)""",
+                        ("%页面没有返回点评数据%", "%页面没有点评%", "%接口返回 items 为空%"))
+    return n or 0
+
+
+def mark_no_image():
+    """更早的版本把「没读到第一页点评」记成了失败：这多半是页面没给数据（可能被限流），改成 limited（疑似限流，待重采）。"""
+    with cursor() as cur:
+        if not table_exists(cur, CRAWL_TABLE):
+            return 0
+        n = cur.execute(f"""UPDATE {CRAWL_TABLE} SET status = 'limited', message = CONCAT('疑似限流（旧记录「', message, '」），待重采')
                             WHERE status = 'failed' AND pages_done = 0 AND message LIKE %s""", ("没读到第一页点评%",))
     return n or 0
 
@@ -1095,7 +1117,7 @@ def scenic_table(f, offset=0, limit=50):
             cr = crawls.get((r["id"], str(p["poiId"])))
             p["crawl"] = cr["status"] if cr else None
             p["crawl_msg"] = cr["message"] if cr else None
-            p["collected"] = bool(cr and (cr["status"] in ("done", "empty") or (cr["pages_done"] or 0) > 0
+            p["collected"] = bool(cr and cr["status"] != "limited" and (cr["status"] in ("done", "empty") or (cr["pages_done"] or 0) > 0
                                           or str(cr["message"] or "").startswith(PERMANENT_FAIL)))
             n_col += p["collected"]
         r["images"] = sum(c.values())

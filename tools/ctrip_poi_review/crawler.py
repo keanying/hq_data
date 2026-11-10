@@ -101,6 +101,8 @@ JS_NEXT_STATE = """(el) => {
 
 SKIP_MSG = "手动跳到下一个 POI"
 NO_DATA_MSG = "该 POI 没有图片数据"
+LIMIT_MSG = "疑似限流"  # 页面 / 接口没给数据，但不能确定这个 POI 真的没图：记为 limited，之后重采；连续出现会暂停冷却
+LIMIT_HINT = "（之后会重采；一直这样可在服务打开的浏览器里登录携程再试）"
 
 
 class CommentImageCrawler:
@@ -191,8 +193,12 @@ class CommentImageCrawler:
                 stat["image_total"] = 0
                 stat["stop"] = NO_DATA_MSG + "（页面图片总数 0），换下一个 POI"
                 return stat
-            if ssr and (ssr.get("commentTotal") == 0 or ssr.get("items") == []):
-                stat["stop"] = NO_DATA_MSG + "（页面没有点评），换下一个 POI"
+            if ssr and ssr.get("commentTotal") == 0:
+                stat["stop"] = NO_DATA_MSG + "（页面点评总数 0），换下一个 POI"
+                return stat
+            if ssr and ssr.get("items") == []:  # 页面说有点评 / 图片（或没说），点评列表却是空的
+                stat["limited"] = True
+                stat["stop"] = f"{LIMIT_MSG}：页面点评列表为空（点评总数 {ssr.get('commentTotal')}，图片总数 {ssr.get('imageCount')}）{LIMIT_HINT}"
                 return stat
             js = None
             if ssr and ssr.get("items") is not None:
@@ -215,7 +221,8 @@ class CommentImageCrawler:
                 stat["stop"] = SKIP_MSG
                 return stat
             if not js:
-                stat["stop"] = NO_DATA_MSG + "（页面没有返回点评数据），换下一个 POI"
+                stat["limited"] = True
+                stat["stop"] = f"{LIMIT_MSG}：页面没有返回点评数据{LIMIT_HINT}"
                 return stat
             last_ids = None
             collect_time = datetime.now(CN_TZ).strftime("%Y-%m-%d %H:%M:%S")
@@ -230,8 +237,14 @@ class CommentImageCrawler:
                 items, total = comment_result(js)
                 ids = [it.get("commentId") for it in items]
                 if not items:
-                    stat["stop"] = (NO_DATA_MSG + "（接口返回 items 为空），换下一个 POI") if stat["pages"] == 0 \
-                        else "没有更多点评（接口返回 items 为空）"
+                    known = total if total is not None else (ssr or {}).get("commentTotal")
+                    if stat["pages"] == 0 and not known and not image_total:
+                        stat["stop"] = NO_DATA_MSG + "（接口没有点评，页面也没显示有点评 / 图片），换下一个 POI"
+                    elif known and stat["reviews"] < int(known) - 10 or (stat["pages"] == 0 and (known or image_total)):
+                        stat["limited"] = True  # 还没翻完（或页面说有图）接口却给了空列表
+                        stat["stop"] = f"{LIMIT_MSG}：第 {stat['pages'] + 1} 页接口返回空（已读 {stat['reviews']}/{known or '?'} 条点评）{LIMIT_HINT}"
+                    else:
+                        stat["stop"] = "没有更多点评（接口返回 items 为空）"
                     break
                 if ids == last_ids:
                     stat["stop"] = "翻页后内容没变，停止"
@@ -276,23 +289,73 @@ class CommentImageCrawler:
                     break
                 if not js:
                     await self._check_blocked()
-                    stat["stop"] = "点「下一页」后没等到点评返回"
+                    stat["limited"] = True
+                    stat["stop"] = f"{LIMIT_MSG}：点「下一页」后没等到点评返回（已读 {stat['pages']} 页）{LIMIT_HINT}"
                     break
             return stat
         finally:
             page.remove_listener("response", on_resp)
             stop = stat["stop"] or ""
             ok = stop and not stop.startswith(("没读到", "点「下一页」后", "已取消", "页面上的 poiId", "页面打不开"))
-            if stop.startswith(NO_DATA_MSG) and stat["pages"] == 0:
-                st = "empty"  # 这个 POI 本来就没有图片 / 点评：正常情况，不算失败，也不再采
+            if stat.get("limited"):
+                st = "limited"  # 疑似限流：不算采过，之后重采（已存的图片按 record_id 去重，不会重复）
+            elif stop.startswith(NO_DATA_MSG) and stat["pages"] == 0:
+                st = "empty"  # 页面明确写着图片 / 点评总数 0：正常情况，不算失败，也不再采
             else:
                 st = "done" if ok else ("failed" if stat["pages"] == 0 else "partial")
             db.crawl_put(sid, pid, status=st, message=stop or "中断")
 
 
+class Throttle:
+    """被限流时主动放慢：连续 streak 个 POI「疑似限流」就冷却 cooldown_min 分钟；每天最多采 daily_cap 个 POI（0 = 不限）。"""
+    def __init__(self, streak=3, cooldown_min=30, daily_cap=0):
+        self.streak_limit, self.cooldown_min, self.daily_cap = max(1, int(streak or 3)), max(1, float(cooldown_min or 30)), int(daily_cap or 0)
+        self.streak = 0
+        self.until = 0.0   # 冷却到什么时候（time.time()）
+        self.reason = ""
+
+    @classmethod
+    def from_prefs(cls, prefs):
+        return cls(prefs.get("collect_limit_streak") or 3, prefs.get("collect_cooldown_min") or 30, prefs.get("collect_daily_poi_cap") or 0)
+
+    def record(self, stat):
+        """每采完一个 POI 调一次；需要冷却时返回原因。"""
+        if stat.get("limited"):
+            self.streak += 1
+            if self.streak >= self.streak_limit:
+                self.streak = 0
+                self.until = time.time() + self.cooldown_min * 60
+                self.reason = f"连续 {self.streak_limit} 个 POI 疑似限流，暂停 {self.cooldown_min:g} 分钟后自动继续"
+                return self.reason
+        else:
+            self.streak = 0
+        return None
+
+    def daily_full(self):
+        if self.daily_cap and db.crawl_today_count() >= self.daily_cap:
+            now = datetime.now()
+            self.until = (now.replace(hour=0, minute=0, second=0, microsecond=0) + timedelta(days=1, minutes=5)).timestamp()
+            self.reason = f"今天已采 {self.daily_cap} 个 POI（每日上限），明天 0 点后自动继续"
+            return self.reason
+        return None
+
+    def left(self):
+        return max(0, int(self.until - time.time()))
+
+    async def wait(self, should_stop=lambda: False, log=print, tick=60):
+        """冷却等待（可被停止打断），每分钟打一行剩余时间。"""
+        last = 0
+        while self.left() > 0 and not should_stop():
+            if time.time() - last >= tick:
+                log(f"冷却中：{self.reason}，还剩 {self.left() // 60} 分 {self.left() % 60} 秒")
+                last = time.time()
+            await asyncio.sleep(min(5, self.left() or 1))
+        self.until, self.reason = 0.0, ""
+
+
 async def crawl_all(get_page, f, max_pages=20, max_images=300, limit=0, refresh=False, poi_delay=(2.0, 4.0),
                     log=print, should_stop=lambda: False, progress=lambda done, total: None,
-                    empty_limit=10, on_crawler=None):
+                    empty_limit=10, on_crawler=None, throttle=None):
     """对筛选范围内已审核的景区，逐个 POI 采集点评图片。get_page 为 async 函数，返回可用的 Playwright page。"""
     st0 = {}
     targets = db.crawl_targets(f, refresh=refresh, stats=st0)
@@ -302,12 +365,19 @@ async def crawl_all(get_page, f, max_pages=20, max_images=300, limit=0, refresh=
     skipped = st0.get("skipped") or 0
     log(f"待采集 POI：{total} 个（每个最多 {max_pages} 页 / {max_images} 张）"
         + (f"；{skipped} 个之前采过，跳过（要重采请勾「重采」/ --refresh）" if skipped else ""))
-    stats = dict(pois=0, images=0, failed=0)
+    stats = dict(pois=0, images=0, failed=0, limited=0)
+    throttle = throttle or Throttle()
     page = None
     for i, t in enumerate(targets, 1):
         if should_stop():
             log("已取消")
             break
+        if throttle.daily_full():
+            log(throttle.reason)
+            await throttle.wait(should_stop, log)
+            if should_stop():
+                log("已取消")
+                break
         page = page or await get_page()
         crawler = CommentImageCrawler(page, max_pages=max_pages, max_images=max_images, log=log, empty_limit=empty_limit)
         if on_crawler:
@@ -319,6 +389,10 @@ async def crawl_all(get_page, f, max_pages=20, max_images=300, limit=0, refresh=
             stats["images"] += st["images"]
             log(f"[{i}/{total}] {name}：{st['pages']} 页，点评 {st['reviews']}/{st['total']}，新增图片 {st['images']}"
                 f"（主页图片总数 {st.get('image_total') if st.get('image_total') is not None else '未读到'}）；{st['stop']}")
+            stats["limited"] += bool(st.get("limited"))
+            if throttle.record(st):
+                log(throttle.reason)
+                await throttle.wait(should_stop, log)
         except NeedHuman as e:
             log(f"[{i}/{total}] {name}：{e}")
             raise
@@ -330,8 +404,9 @@ async def crawl_all(get_page, f, max_pages=20, max_images=300, limit=0, refresh=
                 on_crawler(None, None)
         progress(i, total)
         await asyncio.sleep(random.uniform(*poi_delay))
-    log(f"完成：POI {stats['pois']} 个，新增图片 {stats['images']} 张，失败 {stats['failed']}")
+    log(f"完成：POI {stats['pois']} 个，新增图片 {stats['images']} 张，失败 {stats['failed']}"
+        + (f"，疑似限流 {stats['limited']} 个（之后会重采）" if stats["limited"] else ""))
     return stats
 
 
-__all__ = ["CommentImageCrawler", "crawl_all", "rows_from_items", "comment_result", "parse_ms_date", "NeedHuman"]
+__all__ = ["CommentImageCrawler", "Throttle", "crawl_all", "rows_from_items", "comment_result", "parse_ms_date", "NeedHuman"]

@@ -482,7 +482,7 @@ async def ai_judge_scenic(cfg, detail, items):
 class Prefs(dict):
     def __init__(self, path):
         super().__init__(reviewer="", throttle_ms=2500, sight_only=False, auto_search=True, input_selector="",
-                         panel_width=560, push_page=False, auto_address=False, auto_keep_similar=True, auto_approve=True, auto_approve_delay_ms=2000, auto_collect=True, collect_max_pages=20, collect_max_images=300, collect_empty_pages=10, search_more=True, search_core_spots=False, max_extra=8, idle_skip=True, idle_skip_sec=10,
+                         panel_width=560, push_page=False, auto_address=False, auto_keep_similar=True, auto_approve=True, auto_approve_delay_ms=2000, auto_collect=True, collect_max_pages=20, collect_max_images=300, collect_empty_pages=10, collect_limit_streak=3, collect_cooldown_min=30, collect_daily_poi_cap=0, search_more=True, search_core_spots=False, max_extra=8, idle_skip=True, idle_skip_sec=10,
                          filters=dict(city="", grade="", status="todo", q=""), **ai_judge.DEFAULTS)
         self.path = path
         if path.exists():

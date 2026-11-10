@@ -76,7 +76,8 @@ class Service:
         # 边核对边采集：审核通过的景区排进采图队列，用单独的标签页在后台采
         self.follow_q: asyncio.Queue = asyncio.Queue()
         self.follow_pending: list[str] = []
-        self.follow = dict(paused=False, current=None, done=0, images=0, failed=0, message="")
+        self.follow = dict(paused=False, current=None, done=0, images=0, failed=0, limited=0, message="", cool_until=0, cool_reason="")
+        self.follow_throttle = None
         self.follow_log = collections.deque(maxlen=300)
         self.follow_page = None
         # 正在采集的 POI（follow = 边核对边采集，job = 任务中心的采集任务），用于展示进度和「下一个 POI」
@@ -136,9 +137,15 @@ class Service:
                     continue
                 if self.follow_page is None:
                     self.follow_page = await self.browser.new_page()
+                th = self.follow_throttle = self.follow_throttle or crawler.Throttle.from_prefs(self.prefs)
+                th.streak_limit = max(1, int(self.prefs.get("collect_limit_streak") or 3))  # 设置页改了立即生效
+                th.cooldown_min = max(1, float(self.prefs.get("collect_cooldown_min") or 30))
+                th.daily_cap = int(self.prefs.get("collect_daily_poi_cap") or 0)
                 mp = int(self.prefs.get("collect_max_pages") or 20)
                 mi = int(self.prefs.get("collect_max_images") if self.prefs.get("collect_max_images") is not None else 300)
                 for t in targets:
+                    if th.daily_full():
+                        await self.follow_cool(th)
                     name = f"{t['scenic']['name']} / {t['poi'].get('poiName')}"
                     self.follow["current"] = name
                     c = crawler.CommentImageCrawler(self.follow_page, max_pages=mp, max_images=mi, log=self.flog,
@@ -149,7 +156,11 @@ class Service:
                     finally:
                         self.track("follow", None, None)
                     self.follow["images"] += st["images"]
+                    self.follow["limited"] += bool(st.get("limited"))
                     self.flog(f"{name}：{st['pages']} 页，新增图片 {st['images']}；{st['stop']}")
+                    if th.record(st):
+                        self.follow["current"] = None
+                        await self.follow_cool(th)
                 self.follow["done"] += 1
             except crawler.NeedHuman as e:
                 self.follow.update(paused=True, message=str(e))
@@ -161,6 +172,14 @@ class Service:
                 self.flog(f"{sid} 采集失败：{type(e).__name__}: {e}")
             finally:
                 self.follow["current"] = None
+
+    async def follow_cool(self, th):
+        """疑似限流 / 到每日上限：冷却等待（页面上显示原因和剩余时间，可点「立即继续」提前结束）。"""
+        self.follow.update(cool_until=th.until, cool_reason=th.reason)
+        self.flog(f"冷却：{th.reason}")
+        await th.wait(lambda: not self.follow.get("cool_until"), self.flog, tick=300)
+        self.follow.update(cool_until=0, cool_reason="")
+        self.flog("冷却结束，继续采集")
 
     async def get_review_searcher(self):
         """核对用的搜索：服务端浏览器里单独一个标签页，不和后台任务抢。"""
@@ -217,7 +236,8 @@ class Service:
                                            limit=int(p.get("limit") or 0), refresh=bool(p.get("refresh")),
                                            log=job.write, should_stop=stop, progress=progress,
                                            empty_limit=int(p["empty_pages"]) if p.get("empty_pages") not in (None, "") else self.empty_limit(),
-                                           on_crawler=lambda c, t: self.track("job", c, t, job.id))
+                                           on_crawler=lambda c, t: self.track("job", c, t, job.id),
+                                           throttle=crawler.Throttle.from_prefs(self.prefs))
         raise ValueError(f"未知任务类型 {job.type}")
 
 
@@ -287,6 +307,10 @@ def create_app(args):
             svc.prefs.save()
         if payload.get("resume"):
             svc.follow.update(paused=False, message="")
+            if svc.follow.get("cool_until"):  # 冷却中点「继续」= 提前结束冷却
+                svc.follow["cool_until"] = 0
+                if svc.follow_throttle:
+                    svc.follow_throttle.until = 0
         if payload.get("pause"):
             svc.follow["paused"] = True
         return follow_state()
@@ -448,7 +472,7 @@ def create_app(args):
         return job.brief()
 
     # ---------------- 设置（AI 配置 + 核对 / 采集开关）
-    SETTING_KEYS = ["reviewer", "throttle_ms", "auto_search", "auto_keep_similar", "auto_approve", "auto_approve_delay_ms", "idle_skip",
+    SETTING_KEYS = ["collect_limit_streak", "collect_cooldown_min", "collect_daily_poi_cap", "reviewer", "throttle_ms", "auto_search", "auto_keep_similar", "auto_approve", "auto_approve_delay_ms", "idle_skip",
                     "idle_skip_sec", "search_more", "search_core_spots", "max_extra", "auto_address", "auto_collect", "collect_max_pages",
                     "collect_max_images", "collect_empty_pages"] + [k for k in ai_judge.DEFAULTS if k != "ai_api_key"]
 
