@@ -377,7 +377,7 @@ python cs_synth.py --data-dir <解压后的包>/data --scenic-city 北京市 --i
 python cs_synth.py --load-jsonl out/cs_synth_20261110/dialogs.jsonl                          # 已生成的补写进 MySQL
 ```
 
-- **景区联动**：原始 `attraction_id = ctrip_<携程景点ID>` → 携程主档 → 我们客户景区表里**已审核**且 `ctrip_poi_info` 含该 POI 的景区，
+- **景区联动**：原始 `attraction_id = ctrip_<携程景点ID>` → 携程主档（数据目录里的 `dim.dim_prd_attraction_df.csv`，MySQL 有 `ctrip_attraction_master` 也一起用；不需要单独导入）→ 我们客户景区表里**已审核**且 `ctrip_poi_info` 含该 POI 的景区，
   `scenic_id` / `scenic_name` 取我们的景区；对不上的默认不生成（可勾「对不到我们景区的也生成」）。核对的景区越多，能用的原始对话越多。
   原始问的是景区里的某个景点时（如「中国科学技术馆」→「北京奥林匹克公园」），会保留具体景点名，不把它的信息说成整个景区的。
 - AI 配置用「设置 → AI 判断」的（非流式、关闭深度思考）。默认只用 `真实`、`train` 的原始对话（不把验证 / 测试集改写进训练数据）。

@@ -92,15 +92,44 @@ def load_source(data_dir, log=print):
     return out
 
 
-def scenic_map(log=print):
+MASTER_CSV = ("dim.dim_prd_attraction_df.csv",)  # 数据包里的携程景点主档：含 ctrip_poi_id、ctrip_business_id
+
+
+def biz_to_poi(data_dir=None, log=print):
+    """携程景点ID（businessId）→ {poiId}：优先用数据目录里的 dim.dim_prd_attraction_df.csv，MySQL 里有携程主档表也一起用。"""
+    import db
+    biz2poi, srcs = {}, []
+    if data_dir:
+        d = Path(data_dir)
+        f = next((p for n in MASTER_CSV for p in [d / n, *d.rglob(n)] if p.exists()), None)
+        if f:
+            n0 = 0
+            for r in csv.DictReader(f.open(encoding="utf-8-sig")):
+                b, p = str(r.get("ctrip_business_id") or "").strip(), str(r.get("ctrip_poi_id") or "").strip()
+                if b and p:
+                    biz2poi.setdefault(b, set()).add(p)
+                    n0 += 1
+            srcs.append(f"{f.name}（{n0} 条）")
+    with db.cursor() as cur:
+        if db.table_exists(cur, db.MASTER_TABLE):
+            cur.execute(f"SELECT ctrip_poi_id, ctrip_business_id FROM {db.MASTER_TABLE} WHERE ctrip_business_id IS NOT NULL")
+            rows = cur.fetchall()
+            for r in rows:
+                biz2poi.setdefault(str(r["ctrip_business_id"]), set()).add(str(r["ctrip_poi_id"]))
+            srcs.append(f"MySQL {db.MASTER_TABLE}（{len(rows)} 条）")
+    if not srcs:
+        raise RuntimeError("找不到携程景点主档（景点ID → poiId 的对应关系）：数据目录里没有 dim.dim_prd_attraction_df.csv，"
+                           f"MySQL 里也没有 {db.MASTER_TABLE}。把数据包里的 dim.dim_prd_attraction_df.csv 放进数据目录即可")
+    log("携程景点ID → poiId 对应关系来自：" + "、".join(srcs))
+    return biz2poi
+
+
+def scenic_map(log=print, data_dir=None):
     """携程景点ID（businessId）→ [{scenic_id, scenic_name, city}]：经携程主档对到已审核的客户景区。"""
     import db
     out = {}
+    biz2poi = biz_to_poi(data_dir, log)
     with db.cursor() as cur:
-        cur.execute(f"SELECT ctrip_poi_id, ctrip_business_id FROM {db.MASTER_TABLE} WHERE ctrip_business_id IS NOT NULL")
-        biz2poi = {}
-        for r in cur.fetchall():
-            biz2poi.setdefault(str(r["ctrip_business_id"]), set()).add(str(r["ctrip_poi_id"]))
         cur.execute(f"""SELECT s.{db.C['id']} id, s.{db.C['name']} name, s.{db.C['city']} city, s.{db.POI_INFO} info FROM {db.SCENIC_TABLE} s
                         WHERE COALESCE(s.{db.APPROVAL}, 0) = 1 AND s.{db.POI_INFO} IS NOT NULL AND s.{db.POI_INFO} <> '[]'""")
         poi2scenic = {}
@@ -357,7 +386,7 @@ def select(args, log=print):
     want = lambda v, x: not v or (x or "") in v.split(",")  # noqa: E731
     src = [s for s in src_all if want(args.data_type, s["data_type"]) and (args.split == "all" or want(args.split, s["split"]))
            and want(args.city, s["city"]) and want(args.intent, s["intent"]) and (s["turns"] or s["full"])]
-    smap = {} if args.no_db else scenic_map(log)
+    smap = {} if args.no_db else scenic_map(log, args.data_dir)
     only = {x.strip() for x in (getattr(args, "scenic", "") or "").split(",") if x.strip()}
     scity = {x.strip() for x in (getattr(args, "scenic_city", "") or "").split(",") if x.strip()}
     picked = []
