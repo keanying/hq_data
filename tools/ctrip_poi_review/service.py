@@ -402,8 +402,10 @@ def create_app(args):
         logs = []
         try:
             res = await asyncio.to_thread(cs_synth.preview, a, logs.append)
-        except FileNotFoundError as e:
+        except (FileNotFoundError, RuntimeError) as e:
             raise HTTPException(400, str(e)) from e
+        except Exception as e:  # noqa: BLE001  其他错误也给页面一个看得懂的原因，不要 500
+            raise HTTPException(400, f"{type(e).__name__}: {e}") from e
         if payload.get("data_dir"):
             svc.prefs["cs_data_dir"] = payload["data_dir"]
             svc.prefs.save()
