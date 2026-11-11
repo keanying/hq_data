@@ -69,6 +69,7 @@ class Service:
         profile.mkdir(parents=True, exist_ok=True)
         self.prefs = review.Prefs(profile / "hq_prefs.json")
         self.browser = review.LazyBrowser(args, prefs=self.prefs)
+        self.gate = review.BrowserGate()  # 浏览器使用中 / 重建中的协调
         self.current: Job | None = None
         self.review_searcher = None
         self._rs_lock = asyncio.Lock()
@@ -105,7 +106,11 @@ class Service:
         return 10 if v in (None, "") else int(v)
 
     async def rpc(self, method, payload):
-        res = await self._rpc(method, payload)
+        if method in ("search", "fetch_address", "locate_input"):  # 要用浏览器的：重建时等一等
+            async with self.gate.use():
+                res = await self._rpc(method, payload)
+        else:
+            res = await self._rpc(method, payload)
         if method == "status" and (payload or {}).get("status") == "done":
             self.enqueue_follow(payload.get("scenic_id"))
         return res
@@ -135,8 +140,6 @@ class Service:
                     if st0.get("skipped"):
                         self.flog(f"{sid}：保留的 {st0['skipped']} 个 POI 之前都采过，跳过")
                     continue
-                if self.follow_page is None:
-                    self.follow_page = await self.browser.new_page()
                 th = self.follow_throttle = self.follow_throttle or crawler.Throttle.from_prefs(self.prefs)
                 th.streak_limit = max(1, int(self.prefs.get("collect_limit_streak") or 3))  # 设置页改了立即生效
                 th.cooldown_min = max(1, float(self.prefs.get("collect_cooldown_min") or 30))
@@ -148,13 +151,16 @@ class Service:
                         await self.follow_cool(th)
                     name = f"{t['scenic']['name']} / {t['poi'].get('poiName')}"
                     self.follow["current"] = name
-                    c = crawler.CommentImageCrawler(self.follow_page, max_pages=mp, max_images=mi, log=self.flog,
-                                                    empty_limit=self.empty_limit())
-                    self.track("follow", c, t)
-                    try:
-                        st = await c.crawl(t)
-                    finally:
-                        self.track("follow", None, None)
+                    async with self.gate.use():  # 采一个 POI 期间不重建浏览器；重建后用新的标签页
+                        if self.follow_page is None or self.follow_page.is_closed():
+                            self.follow_page = await self.browser.new_page()
+                        c = crawler.CommentImageCrawler(self.follow_page, max_pages=mp, max_images=mi, log=self.flog,
+                                                        empty_limit=self.empty_limit())
+                        self.track("follow", c, t)
+                        try:
+                            st = await c.crawl(t)
+                        finally:
+                            self.track("follow", None, None)
                     self.follow["images"] += st["images"]
                     self.follow["limited"] += bool(st.get("limited"))
                     self.flog(f"{name}：{st['pages']} 页，新增图片 {st['images']}；{st['stop']}")
@@ -181,9 +187,33 @@ class Service:
         self.follow.update(cool_until=0, cool_reason="")
         self.flog("冷却结束，继续采集")
 
+    async def restart_browser(self, reason="手动重启"):
+        """重建浏览器：等正在用浏览器的操作做完（最多 5 分钟），关掉整个浏览器，下次用的时候重新启动（用户目录不变，登录状态保留）。"""
+        async def do():
+            await self.browser.restart(reason)
+            self.review_searcher = None
+            self.follow_page = None
+        self.flog(f"浏览器重建：{reason}")
+        await self.gate.exclusive(do)
+        self.flog("浏览器已关闭，下次用到时重新启动")
+
+    async def browser_scheduler(self):
+        """每 browser_restart_min 分钟（默认 20，0 = 不自动）重建一次浏览器。只在浏览器开着时计时。"""
+        while True:
+            await asyncio.sleep(20)
+            try:
+                mins = float(self.prefs.get("browser_restart_min") or 0)
+                st = self.browser.started_at
+                if mins > 0 and st and time.time() - st >= mins * 60 and not self.gate.restarting:
+                    await self.restart_browser(f"定时重建（每 {mins:g} 分钟）")
+            except Exception as e:  # noqa: BLE001
+                self.flog(f"浏览器重建失败：{type(e).__name__}: {e}")
+
     async def get_review_searcher(self):
         """核对用的搜索：服务端浏览器里单独一个标签页，不和后台任务抢。"""
         async with self._rs_lock:
+            if self.review_searcher is not None and self.review_searcher.page.is_closed():
+                self.review_searcher = None
             if self.review_searcher is None:
                 page = await self.browser.new_page()
                 self.review_searcher = review.CtripSearcher(page, self.prefs, self.args.start_url, self.args.pattern)
@@ -227,7 +257,11 @@ class Service:
                                  dry_run=bool(p.get("dry_run")), verbose=bool(p.get("verbose", True)),
                                  reviewer=p.get("reviewer") or "auto", max_fail=5)
             ai_cfg = ai_judge.config(self.prefs) if p.get("use_ai", True) else None
-            return await review.auto_review(ns, self.browser.get_searcher, log=job.write, should_stop=stop, progress=progress,
+            guarded = review.GuardedSearcher(self.browser.get_searcher, self.gate)
+
+            async def get_guarded():
+                return guarded
+            return await review.auto_review(ns, get_guarded, log=job.write, should_stop=stop, progress=progress,
                                             on_approved=on_ok, ai_cfg=ai_cfg)
         if job.type == "images":
             f = dict(city=p.get("city") or "", grade=p.get("grade") or "", q=p.get("q") or "")
@@ -237,7 +271,7 @@ class Service:
                                            log=job.write, should_stop=stop, progress=progress,
                                            empty_limit=int(p["empty_pages"]) if p.get("empty_pages") not in (None, "") else self.empty_limit(),
                                            on_crawler=lambda c, t: self.track("job", c, t, job.id),
-                                           throttle=crawler.Throttle.from_prefs(self.prefs))
+                                           throttle=crawler.Throttle.from_prefs(self.prefs), guard=self.gate.use)
         raise ValueError(f"未知任务类型 {job.type}")
 
 
@@ -248,6 +282,7 @@ def create_app(args):
         loop = asyncio.get_running_loop()
         loop.create_task(svc.worker())
         loop.create_task(svc.follow_worker())
+        loop.create_task(svc.browser_scheduler())
         url = f"http://{args.host}:{args.port}"
         loop.call_later(0.5, lambda: print(f"服务已就绪：{url}  （浏览器打开即是工作台；Ctrl+C 停止）", flush=True))
         yield
@@ -472,7 +507,7 @@ def create_app(args):
         return job.brief()
 
     # ---------------- 设置（AI 配置 + 核对 / 采集开关）
-    SETTING_KEYS = ["collect_limit_streak", "collect_cooldown_min", "collect_daily_poi_cap", "reviewer", "throttle_ms", "auto_search", "auto_keep_similar", "auto_approve", "auto_approve_delay_ms", "idle_skip",
+    SETTING_KEYS = ["browser_restart_min", "collect_limit_streak", "collect_cooldown_min", "collect_daily_poi_cap", "reviewer", "throttle_ms", "auto_search", "auto_keep_similar", "auto_approve", "auto_approve_delay_ms", "idle_skip",
                     "idle_skip_sec", "search_more", "search_core_spots", "max_extra", "auto_address", "auto_collect", "collect_max_pages",
                     "collect_max_images", "collect_empty_pages"] + [k for k in ai_judge.DEFAULTS if k != "ai_api_key"]
 
@@ -515,6 +550,22 @@ def create_app(args):
     def ai_log(limit: int = 100):
         """最近的 AI 调用记录（成功 / 失败、原因、用时、request id），完整日志在 logs/ai_calls.jsonl。"""
         return dict(items=ai_judge.recent_calls(min(max(limit, 1), 300)), file=str(ai_judge.LOG_PATH))
+
+    @app.get("/api/browser")
+    def browser_info():
+        """服务用的浏览器：类型、版本（UA）、用户目录、是否在运行、运行了多久、下次定时重建、已重建次数。"""
+        info = svc.browser.info()
+        mins = float(svc.prefs.get("browser_restart_min") or 0)
+        info.update(restart_min=mins, restarting=svc.gate.restarting, in_use=svc.gate.active,
+                    next_restart=(info["started_at"] + mins * 60) if (mins > 0 and info["started_at"]) else None, now=time.time())
+        return info
+
+    @app.post("/api/browser/restart")
+    async def browser_restart():
+        if svc.gate.restarting:
+            return dict(ok=False, message="正在重建")
+        asyncio.get_running_loop().create_task(svc.restart_browser("手动重启"))
+        return dict(ok=True, message="已开始：等正在用浏览器的操作做完就重启")
 
     @app.get("/api/crawl")
     def crawl_state():

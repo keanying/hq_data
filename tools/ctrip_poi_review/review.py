@@ -13,6 +13,7 @@
 """
 import argparse
 import asyncio
+import contextlib
 import csv
 import json
 import random
@@ -482,7 +483,7 @@ async def ai_judge_scenic(cfg, detail, items):
 class Prefs(dict):
     def __init__(self, path):
         super().__init__(reviewer="", throttle_ms=2500, sight_only=False, auto_search=True, input_selector="",
-                         panel_width=560, push_page=False, auto_address=False, auto_keep_similar=True, auto_approve=True, auto_approve_delay_ms=2000, auto_collect=True, collect_max_pages=20, collect_max_images=300, collect_empty_pages=10, collect_limit_streak=3, collect_cooldown_min=30, collect_daily_poi_cap=0, search_more=True, search_core_spots=False, max_extra=8, idle_skip=True, idle_skip_sec=10,
+                         panel_width=560, push_page=False, auto_address=False, auto_keep_similar=True, auto_approve=True, auto_approve_delay_ms=2000, auto_collect=True, collect_max_pages=20, collect_max_images=300, collect_empty_pages=10, collect_limit_streak=3, collect_cooldown_min=30, collect_daily_poi_cap=0, browser_restart_min=20, search_more=True, search_core_spots=False, max_extra=8, idle_skip=True, idle_skip_sec=10,
                          filters=dict(city="", grade="", status="todo", q=""), **ai_judge.DEFAULTS)
         self.path = path
         if path.exists():
@@ -804,12 +805,67 @@ async def auto_review(args, get_searcher, log=print, should_stop=lambda: False, 
     return stats
 
 
+class BrowserGate:
+    """浏览器的「使用中 / 重建中」协调：每次用浏览器（搜索、采一个 POI…）都在 use() 里；
+    重建时先不让新的操作开始，等正在用的都结束（最多 wait_s 秒），再关掉重开。"""
+    def __init__(self):
+        self.active = 0
+        self.restarting = False
+
+    @contextlib.asynccontextmanager
+    async def use(self):
+        while self.restarting:
+            await asyncio.sleep(0.5)
+        self.active += 1
+        try:
+            yield
+        finally:
+            self.active -= 1
+
+    async def exclusive(self, fn, wait_s=300):
+        self.restarting = True
+        try:
+            t0 = time.time()
+            while self.active > 0 and time.time() - t0 < wait_s:
+                await asyncio.sleep(0.5)
+            await fn()
+        finally:
+            self.restarting = False
+
+
+class GuardedSearcher:
+    """批量审核用：每次搜索都在 gate.use() 里，重建浏览器时不会被打断；重建后自动换成新的搜索页。"""
+    def __init__(self, get_searcher, gate):
+        self.get_searcher, self.gate = get_searcher, gate
+
+    async def search(self, kwd):
+        async with self.gate.use():
+            return await (await self.get_searcher()).search(kwd)
+
+
 class LazyBrowser:
-    """需要时才启动浏览器；CLI 的 auto / images 和服务用。prefs 可传入共用的设置对象。"""
+    """需要时才启动浏览器；CLI 的 auto / images 和服务用。prefs 可传入共用的设置对象。restart() 后下次用时重新启动。"""
     def __init__(self, args, prefs=None):
         self.args, self.pw, self.ctx, self.page, self.searcher = args, None, None, None, None
         self.prefs, self._prefs_override = prefs, prefs
         self._lock = asyncio.Lock()
+        self.started_at = None
+        self.restarts = 0
+        self.user_agent = ""
+        self.last_restart_reason = ""
+
+    def kind(self):
+        a = self.args
+        if getattr(a, "executable_path", ""):
+            return f"指定的浏览器（{a.executable_path}）"
+        return {"chrome": "本机 Google Chrome", "msedge": "本机 Microsoft Edge"}.get(getattr(a, "channel", "") or "",
+                                                                                 getattr(a, "channel", "") or "Playwright 自带 Chromium")
+
+    def info(self):
+        return dict(kind=self.kind(), channel=getattr(self.args, "channel", "") or "", headless=bool(getattr(self.args, "headless", False)),
+                    profile=str(Path(self.args.profile).resolve()), running=self.ctx is not None, user_agent=self.user_agent,
+                    started_at=self.started_at, tabs=len(self.ctx.pages) if self.ctx else 0, restarts=self.restarts,
+                    last_restart_reason=self.last_restart_reason)
 
     async def get_page(self):
         async with self._lock:
@@ -819,6 +875,11 @@ class LazyBrowser:
                 self.prefs = self._prefs_override or prefs
                 if getattr(self.args, "throttle_ms", 0):
                     self.prefs["throttle_ms"] = self.args.throttle_ms
+                self.started_at = time.time()
+                try:
+                    self.user_agent = await self.page.evaluate("() => navigator.userAgent")
+                except Exception:  # noqa: BLE001
+                    self.user_agent = ""
         return self.page
 
     async def new_page(self):
@@ -834,10 +895,25 @@ class LazyBrowser:
         return self.searcher
 
     async def close(self):
-        if self.ctx:
-            await self.ctx.close()
-        if self.pw:
-            await self.pw.stop()
+        async with self._lock:
+            try:
+                if self.ctx:
+                    await self.ctx.close()
+            except Exception:  # noqa: BLE001  浏览器已经被手动关掉之类
+                pass
+            try:
+                if self.pw:
+                    await self.pw.stop()
+            except Exception:  # noqa: BLE001
+                pass
+            self.pw = self.ctx = self.page = self.searcher = None
+            self.started_at = None
+
+    async def restart(self, reason=""):
+        """关掉整个浏览器（同一个用户目录，登录状态保留），下次用的时候重新启动。"""
+        await self.close()
+        self.restarts += 1
+        self.last_restart_reason = f"{time.strftime('%H:%M:%S')} {reason}".strip()
 
 
 async def cmd_auto(args):

@@ -1008,6 +1008,29 @@
     <//>`;
   }
 
+  /** 服务用的浏览器：是什么、运行多久、下次定时重建；可立即重启 */
+  function BrowserCard({ st, set }) {
+    const [b, refresh] = usePoll(() => api('/api/browser'), 3000);
+    const dur = (sec) => (sec == null ? '—' : sec >= 3600 ? `${Math.floor(sec / 3600)} 小时 ${Math.floor((sec % 3600) / 60)} 分` : `${Math.floor(sec / 60)} 分 ${Math.floor(sec % 60)} 秒`);
+    const restart = async () => { try { const r = await post('/api/browser/restart'); Toast.info(r.message); refresh(); } catch (e) { Toast.error(e.message); } };
+    const ua = (b && b.user_agent) || '';
+    const ver = (ua.match(/(Chrome|Edg|HeadlessChrome)\/([\d.]+)/) || [])[0] || '';
+    return html`<${Card} title="浏览器" sub=${b ? (b.restarting ? '重建中…' : b.running ? '运行中' : '未启动') : ''} style=${{ flex: 'none' }}
+        help="服务自己开的浏览器：核对搜索、边核对边采集、批量任务都用它（各用一个标签页）。重建 = 关掉整个浏览器、下次用到时重新启动；用户目录不变，携程登录状态保留。重建前会等正在搜索 / 正在采的那个 POI 做完（最多 5 分钟）。"
+        extra=${html`<${Button} size="small" icon=${html`<${Ic.IconRefresh} />`} loading=${b && b.restarting} onClick=${restart}>立即重启<//>`}>
+      ${b && html`<div className="kv sm">
+        <span>类型</span><div>${b.kind}${b.headless ? '（无界面）' : ''}${ver ? ` · ${ver}` : ''}</div>
+        <span>用户目录</span><div className="ell" title=${b.profile}>${b.profile}</div>
+        <span>运行</span><div>${b.running ? `已运行 ${dur(b.now - b.started_at)} · ${b.tabs} 个标签页 · ${b.in_use ? `${b.in_use} 个操作在用` : '空闲'}` : '未启动（用到时自动启动）'}</div>
+        <span>定时重建</span><div>${b.restart_min > 0 ? (b.next_restart ? `下次在 ${dur(Math.max(0, b.next_restart - b.now))} 后` : '浏览器启动后开始计时') : '已关闭'} · 已重建 ${b.restarts} 次${b.last_restart_reason ? `（最近：${b.last_restart_reason}）` : ''}</div>
+      </div>`}
+      <div className="form" style=${{ gridTemplateColumns: '96px minmax(0, 1fr)', marginTop: 10 }}>
+        <${Field} label="自动重建"><span className="lbl">每</span><${InputNumber} hideButtons value=${st.browser_restart_min} onChange=${set('browser_restart_min')} min=${0} style=${{ width: 100 }} suffix="分钟" />
+          <span className="lbl">重建一次（0 = 不自动），改完点下面的「保存」</span><//>
+      </div>
+    <//>`;
+  }
+
   function SettingsPage({ refreshHealth }) {
     const [st, setSt] = useState(null);
     const [key, setKey] = useState('');
@@ -1025,7 +1048,7 @@
         const body = {};
         for (const k of [...AI_FIELDS, 'reviewer', 'throttle_ms', 'auto_search', 'auto_keep_similar', 'auto_approve', 'auto_approve_delay_ms', 'idle_skip',
           'idle_skip_sec', 'search_more', 'search_core_spots', 'max_extra', 'auto_address', 'auto_collect', 'collect_max_pages', 'collect_max_images',
-          'collect_empty_pages', 'collect_limit_streak', 'collect_cooldown_min', 'collect_daily_poi_cap']) body[k] = st[k];
+          'collect_empty_pages', 'collect_limit_streak', 'collect_cooldown_min', 'collect_daily_poi_cap', 'browser_restart_min']) body[k] = st[k];
         if (key.trim()) body.ai_api_key = key.trim();
         const r = await post('/api/settings', body);
         setSt(r); setKey('');
@@ -1079,6 +1102,7 @@
         <${AILog} />
         </div>
         <div className="page" style=${{ gap: 14 }}>
+          <${BrowserCard} st=${st} set=${set} />
           <${Card} title="核对" bodyClass="scroll" className="fill">
             <div className="form" style=${{ gridTemplateColumns: '96px minmax(0, 1fr)' }}>
               <${Field} label="核对人"><${Input} value=${st.reviewer} onChange=${set('reviewer')} placeholder="写入审核记录的 reviewer" style=${{ width: 220 }} /><//>

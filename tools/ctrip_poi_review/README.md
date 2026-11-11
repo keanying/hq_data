@@ -290,6 +290,11 @@ python service.py --channel chrome
 - 页面上的 poiId 和链接里的不一致时不采（日志里会提示「poiUri 可能指向了别的 POI」）
 - 遇到登录 / 验证会暂停并在顶栏提醒里提示，在服务打开的浏览器里处理完点「继续」
 
+**浏览器**：服务用 Playwright 启动一个带界面的浏览器（`--channel chrome` = 本机安装的 Google Chrome；不加则用 Playwright 自带的 Chromium），
+用户目录 `.pw-profile-service`（登录状态存在这里）。核对搜索、边核对边采集、批量任务各用一个标签页。
+默认**每 20 分钟重建一次浏览器**（关掉整个浏览器、下次用到时重新启动，用户目录不变、登录状态保留）；设置页「浏览器」卡片可改间隔（0 = 不自动）、
+看当前浏览器类型 / 版本 / 运行时长 / 下次重建，点「立即重启」手动重建。重建前会等正在搜索 / 正在采的那个 POI 做完（最多 5 分钟），不会打断。
+
 参数：`--port 8800`、`--host 127.0.0.1`（默认只本机可访问）、`--cities 北京市,上海市`（只看部分城市，默认全国）、`--headless`（不建议）、`--profile`（默认 `.pw-profile-service`，和 `review.py run` 分开，可以同时开）。
 接口文档：<http://127.0.0.1:8800/docs>。
 
@@ -304,6 +309,7 @@ python service.py --channel chrome
 | POST | `/api/images/delete` | 删除图片：`{"record_ids": [...]}`（图片表 + 交付表，记入删除表，不再采） |
 | GET | `/api/image_facets?city=&scenic_id=&q=` | 图片预览的下拉选项：有图片的城市、景区（带图片数），选了景区再给 POI |
 | GET | `/api/crawl_records?status=&q=&limit=&offset=` | 每个 POI 的采集记录（分页） |
+| GET / POST | `/api/browser`、`/api/browser/restart` | 浏览器状态；立即重建 |
 | GET | `/api/crawl` | 正在采集的 POI：来源、页数、新增图片、连续无新图页数 |
 | POST | `/api/crawl/skip` | 手动跳到下一个 POI：`{"source":"follow"}` / `{"source":"job"}`，不传则全部 |
 | GET | `/api/export.csv` | 导出核对结果 |
