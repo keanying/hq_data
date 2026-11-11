@@ -157,7 +157,7 @@
     if (x.collect === 'partial') return html`<${Tag} color="orange" size="small">部分 ${x.collect_n}/${x.pois.length}<//>`;
     return html`<${Tag} color="grey" size="small">未采<//>`;
   }
-  const CRAWL_ST = { done: ['green', '完成'], empty: ['grey', '无图'], limited: ['orange', '疑似限流'], partial: ['orange', '部分'], failed: ['red', '失败'], running: ['blue', '采集中'] };
+  const CRAWL_ST = { done: ['green', '完成'], empty: ['grey', '无图'], limited: ['orange', '疑似限流'], interrupted: ['blue', '中断待续'], partial: ['orange', '部分'], failed: ['red', '失败'], running: ['blue', '采集中'] };
   const crawlTag = (s) => { const [c, t] = CRAWL_ST[s] || ['grey', s || '—']; return html`<${Tag} color=${c} size="small">${t}<//>`; };
   const JOB_ST = { queued: ['grey', '排队中'], running: ['blue', '运行中'], done: ['green', '完成'], failed: ['red', '失败'], cancelled: ['grey', '已取消'], need_human: ['orange', '需要人工'] };
   const jobTag = (s) => { const [c, t] = JOB_ST[s] || ['grey', s]; return html`<${Tag} color=${c} size="small">${t}<//>`; };

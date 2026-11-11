@@ -106,6 +106,8 @@ class Service:
         return 10 if v in (None, "") else int(v)
 
     async def rpc(self, method, payload):
+        if method == "browser_state":  # 核对面板：搜索等太久时看看是不是在等浏览器重建
+            return dict(restarting=self.gate.restarting, in_use=self.gate.active)
         if method in ("search", "fetch_address", "locate_input"):  # 要用浏览器的：重建时等一等
             async with self.gate.use():
                 res = await self._rpc(method, payload)
@@ -151,16 +153,20 @@ class Service:
                         await self.follow_cool(th)
                     name = f"{t['scenic']['name']} / {t['poi'].get('poiName')}"
                     self.follow["current"] = name
-                    async with self.gate.use():  # 采一个 POI 期间不重建浏览器；重建后用新的标签页
-                        if self.follow_page is None or self.follow_page.is_closed():
-                            self.follow_page = await self.browser.new_page()
-                        c = crawler.CommentImageCrawler(self.follow_page, max_pages=mp, max_images=mi, log=self.flog,
-                                                        empty_limit=self.empty_limit())
-                        self.track("follow", c, t)
-                        try:
-                            st = await c.crawl(t)
-                        finally:
-                            self.track("follow", None, None)
+                    for _attempt in range(3):  # 被浏览器重建打断的，重建后接着采这个 POI
+                        async with self.gate.use():  # 采一个 POI 期间不重建浏览器；重建后用新的标签页
+                            if self.follow_page is None or self.follow_page.is_closed():
+                                self.follow_page = await self.browser.new_page()
+                            c = crawler.CommentImageCrawler(self.follow_page, max_pages=mp, max_images=mi, log=self.flog,
+                                                            empty_limit=self.empty_limit())
+                            self.track("follow", c, t)
+                            try:
+                                st = await c.crawl(t)
+                            finally:
+                                self.track("follow", None, None)
+                        if not st.get("interrupted"):
+                            break
+                        self.flog(f"{name}：浏览器重建打断，已采 {st['pages']} 页，重建后接着采")
                     self.follow["images"] += st["images"]
                     self.follow["limited"] += bool(st.get("limited"))
                     self.flog(f"{name}：{st['pages']} 页，新增图片 {st['images']}；{st['stop']}")
@@ -194,7 +200,14 @@ class Service:
             self.review_searcher = None
             self.follow_page = None
         self.flog(f"浏览器重建：{reason}")
-        await self.gate.exclusive(do)
+        # 正在采的 POI 在当前这一页处理完就停下（记为「中断」，重建后接着采），不让核对搜索一直等
+        n = 0
+        for a in list(self.active.values()):
+            a["crawler"].skip(interrupt=True)
+            n += 1
+        if n:
+            self.flog(f"让正在采的 {n} 个 POI 先停下")
+        await self.gate.exclusive(do, wait_s=90)
         self.flog("浏览器已关闭，下次用到时重新启动")
 
     async def browser_scheduler(self):

@@ -131,7 +131,7 @@ DDL += [
     f"""CREATE TABLE IF NOT EXISTS {CRAWL_TABLE} (
   scenic_id VARCHAR(64) NOT NULL, poi_id BIGINT NOT NULL,
   poi_name VARCHAR(255) NULL, poi_uri VARCHAR(512) NULL,
-  status VARCHAR(16) NULL COMMENT 'running / done / empty(无图) / limited(疑似限流，待重采) / partial / failed',
+  status VARCHAR(16) NULL COMMENT 'running / done / empty(无图) / limited(疑似限流，待重采) / interrupted(浏览器重建打断，待重采) / partial / failed',
   pages_done INT NOT NULL DEFAULT 0 COMMENT '已翻到第几页',
   total_count INT NULL COMMENT '点评总数', review_qty INT NOT NULL DEFAULT 0 COMMENT '已读点评数',
   image_qty INT NOT NULL DEFAULT 0 COMMENT '已入库图片数',
@@ -653,7 +653,7 @@ def crawled_set():
         cur.execute(f"SELECT scenic_id, poi_id, status, pages_done, message FROM {CRAWL_TABLE}")
         rows = cur.fetchall()
     return {(r["scenic_id"], str(r["poi_id"])) for r in rows
-            if r["status"] != "limited" and (r["status"] in ("done", "empty") or (r["pages_done"] or 0) > 0
+            if r["status"] not in ("limited", "interrupted") and (r["status"] in ("done", "empty") or (r["pages_done"] or 0) > 0
                                              or str(r["message"] or "").startswith(PERMANENT_FAIL))}  # 疑似限流的不算采过，会重采
 
 
@@ -1117,7 +1117,7 @@ def scenic_table(f, offset=0, limit=50):
             cr = crawls.get((r["id"], str(p["poiId"])))
             p["crawl"] = cr["status"] if cr else None
             p["crawl_msg"] = cr["message"] if cr else None
-            p["collected"] = bool(cr and cr["status"] != "limited" and (cr["status"] in ("done", "empty") or (cr["pages_done"] or 0) > 0
+            p["collected"] = bool(cr and cr["status"] not in ("limited", "interrupted") and (cr["status"] in ("done", "empty") or (cr["pages_done"] or 0) > 0
                                           or str(cr["message"] or "").startswith(PERMANENT_FAIL)))
             n_col += p["collected"]
         r["images"] = sum(c.values())
