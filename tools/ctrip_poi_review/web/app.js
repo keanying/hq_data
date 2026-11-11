@@ -1074,6 +1074,7 @@
     return html`<div className="page">
       <div className="row2" style=${{ gridTemplateColumns: 'minmax(0, 1.15fr) minmax(0, 1fr)', flex: 1 }}>
         <div className="page" style=${{ gap: 14 }}>
+        <div className="muted sm" style=${{ margin: '-4px 0 -6px 4px' }}>设置保存在：${st.settings_storage || '—'}${(st.settings_storage || '').startsWith('MySQL') ? '（删除浏览器目录也不会丢）' : '（连不上数据库，暂存文件）'}</div>
         <${Card} title="AI 判断" sub=${st.ai_enabled ? (st.ai_key_set ? '已启用' : '已启用，缺 API Key') : '未启用'} bodyClass="scroll" style=${{ flex: 'none', maxHeight: '62%' }}
           help="规则判不了的景区（名称不一致、同名不同区、地址对不上…），把景区名称 / 别名 / 省市区 / 地址 / 坐标 / 核心景点和携程候选的名称 / 类型 / 城市区县 / 地址 / 距离发给大模型，判断每个 POI 是否属于这个景区。有把握（置信度达到下限）就自动保留并通过，备注以「AI审核：」开头，最后在核对页筛「AI 通过（待复核）」由人复核。结果按景区缓存，不重复调用。">
           <div className="form" style=${{ gridTemplateColumns: '96px minmax(0, 1fr)' }}>

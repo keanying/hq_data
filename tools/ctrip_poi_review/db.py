@@ -47,6 +47,12 @@ IMAGE_TABLE = ident(ENV("IMAGE_TABLE", "scenic_poi_image"))
 CRAWL_TABLE = ident(ENV("CRAWL_TABLE", "scenic_poi_image_crawl"))
 AI_TABLE = ident(ENV("AI_TABLE", "scenic_ai_judge"))
 DELETED_TABLE = ident(ENV("IMAGE_DELETED_TABLE", "scenic_poi_image_deleted"))
+SETTINGS_TABLE = ident(ENV("SETTINGS_TABLE", "hq_app_settings"))
+SETTINGS_DDL = f"""CREATE TABLE IF NOT EXISTS {SETTINGS_TABLE} (
+  scope VARCHAR(32) NOT NULL COMMENT '哪套设置：service = 工作台', name VARCHAR(64) NOT NULL, value TEXT NULL COMMENT 'JSON',
+  updated_at DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  PRIMARY KEY (scope, name)
+) DEFAULT CHARSET=utf8mb4 COMMENT='工作台设置（AI 判断、核对、图片采集、浏览器）'"""
 # 交付表（你建好的分区天表）。不存在时只写工具自己的 scenic_poi_image
 ODS_TABLE = ident(ENV("ODS_IMAGE_TABLE", "ods_prd_poi_image_di"))
 ODS_COORD = ENV("ODS_COORD", "wgs84").lower()          # wgs84：客户景区坐标(GCJ02)换算成 WGS84 再写；gcj02：原样写
@@ -1188,3 +1194,26 @@ def images_delete(record_ids, by=None):
         if table_exists(cur, ODS_TABLE):
             m = cur.execute(f"DELETE FROM {ODS_TABLE} WHERE record_id IN ({ph})", ids) or 0
     return dict(deleted=n, ods_deleted=m)
+
+
+def settings_load(scope="service"):
+    """读工作台设置（{名称: 值}）；表不存在时先建。"""
+    with cursor() as cur:
+        cur.execute(SETTINGS_DDL)
+        cur.execute(f"SELECT name, value FROM {SETTINGS_TABLE} WHERE scope=%s", (scope,))
+        out = {}
+        for r in cur.fetchall():
+            try:
+                out[r["name"]] = json.loads(r["value"]) if r["value"] is not None else None
+            except ValueError:
+                out[r["name"]] = r["value"]
+    return out
+
+
+def settings_save(scope, values):
+    """整套设置写进数据库（有就更新）。"""
+    with cursor() as cur:
+        cur.execute(SETTINGS_DDL)
+        cur.executemany(f"""INSERT INTO {SETTINGS_TABLE} (scope, name, value) VALUES (%s, %s, %s)
+                            ON DUPLICATE KEY UPDATE value=VALUES(value)""",
+                        [(scope, k, json.dumps(v, ensure_ascii=False)) for k, v in values.items()])

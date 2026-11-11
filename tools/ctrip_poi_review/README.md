@@ -285,8 +285,8 @@ python service.py --channel chrome
 
 - 开关、暂停 / 继续：总览、核对页、图片采集页上都有；也可 `POST /api/follow {"enabled":false}`
 - **手动换下一个 POI**：「正在采集」里的「下一个 POI」按钮（边核对边采集和采集任务都可以）；当前 POI 记为完成，不会再自动重采
-- **连续 10 页没有新图片就换下一个 POI**（默认 10；批量采集 / 任务里可改，填 0 不按这个规则；边核对边采集用 `hq_prefs.json` 的 `collect_empty_pages`）
-- 每个 POI 最多翻几页、最多几张：默认 20 页 / 300 张，可改 `.pw-profile-service/hq_prefs.json` 的 `collect_max_pages` / `collect_max_images`，或 `POST /api/rpc/prefs {"collect_max_pages":30}`
+- **连续 10 页没有新图片就换下一个 POI**（默认 10；批量采集 / 任务里可改，填 0 不按这个规则；边核对边采集在「设置」页改）
+- 每个 POI 最多翻几页、最多几张：默认 20 页 / 300 张，可在「设置」页改，或 `POST /api/rpc/prefs {"collect_max_pages":30}`
 - 页面上的 poiId 和链接里的不一致时不采（日志里会提示「poiUri 可能指向了别的 POI」）
 - 遇到登录 / 验证会暂停并在顶栏提醒里提示，在服务打开的浏览器里处理完点「继续」
 
@@ -345,7 +345,11 @@ python service.py --channel chrome
 完整日志在 `logs/ai_calls.jsonl`（已在 .gitignore），失败的同时打印在运行 service.py 的终端里（`[AI] … 调用失败：…`）。
 
 发给模型的只有：景区名称、别名、省市区、地址、坐标、等级、核心景点，以及携程候选的名称、类型、城市区县、地址、距离和规则提示。
-同一景区、同一组候选、同一模型的结果缓存在 `scenic_ai_judge` 表，重复打开不会重复调用。API Key 存在浏览器目录（`.pw-profile-service/hq_prefs.json`，已在 .gitignore）里，不会进 git。
+同一景区、同一组候选、同一模型的结果缓存在 `scenic_ai_judge` 表，重复打开不会重复调用。API Key 和其他设置都存在 **MySQL 表 `hq_app_settings`**（`scope='service'`，一项一行，值是 JSON），不进 git，删除/重建浏览器目录也不会丢。
+
+- 第一次启动新版本时，会把原来浏览器目录里的 `.pw-profile-service/hq_prefs.json` 自动迁进这张表；之后每次保存，库里和这个文件各存一份（文件只是备份）。
+- 数据库连不上时，退回只用文件，「设置」页顶部会写明当前存在哪里。
+- 表名可用环境变量 `SETTINGS_TABLE` 改。注意表里的 API Key 是明文，数据库账号权限请自己把控。
 
 ## 10. 智能客服对话数据：大模型改写（对到我们的景区，可追溯到原始对话）
 

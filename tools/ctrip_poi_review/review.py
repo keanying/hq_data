@@ -493,6 +493,38 @@ class Prefs(dict):
         self.path.write_text(json.dumps(self, ensure_ascii=False, indent=2), encoding="utf-8")
 
 
+class DbPrefs(Prefs):
+    """工作台设置存在 MySQL（表 hq_app_settings），不怕删浏览器目录；同时写一份文件当备份。
+    第一次用时把原来浏览器目录里 hq_prefs.json 的设置迁进数据库。数据库连不上时退回只用文件。"""
+    def __init__(self, path, scope="service", readonly=False):
+        super().__init__(path)
+        self.scope, self.readonly, self.storage = scope, readonly, "文件"
+        try:
+            stored = db.settings_load(scope)
+            if stored:
+                self.update(stored)
+            elif not readonly:
+                db.settings_save(scope, dict(self))
+                print(f"已把设置（{path}）迁进数据库表 {db.SETTINGS_TABLE}", flush=True)
+            self.storage = f"MySQL 表 {db.SETTINGS_TABLE.strip('`')}"
+        except Exception as e:  # noqa: BLE001
+            print(f"读数据库里的设置失败，先用文件 {path}：{type(e).__name__}: {e}", flush=True)
+
+    def save(self):
+        if self.readonly:
+            return
+        try:
+            db.settings_save(self.scope, dict(self))
+            self.storage = f"MySQL 表 {db.SETTINGS_TABLE.strip('`')}"
+        except Exception as e:  # noqa: BLE001
+            print(f"设置写数据库失败（已写文件）：{type(e).__name__}: {e}", flush=True)
+        try:
+            self.path.parent.mkdir(parents=True, exist_ok=True)
+            super().save()  # 文件备份
+        except OSError:
+            pass
+
+
 # ---------------------------------------------------------------- 浏览器
 def check_db():
     problems = db.preflight()
@@ -921,7 +953,7 @@ async def cmd_auto(args):
     lb = LazyBrowser(args)
     try:
         prefs_file = Path(args.profile).resolve() / "hq_prefs.json"  # AI 设置和服务 / 交互核对共用浏览器目录里的设置
-        ai_cfg = ai_judge.config(Prefs(prefs_file)) if not getattr(args, "no_ai", False) else None
+        ai_cfg = ai_judge.config(DbPrefs(prefs_file, readonly=True)) if not getattr(args, "no_ai", False) else None
         await auto_review(args, lb.get_searcher, log=lambda m: print(m, flush=True), ai_cfg=ai_cfg)
     finally:
         await lb.close()

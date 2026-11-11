@@ -379,7 +379,7 @@ def main():
         ap.error("需要 --data-dir（或用 --load-jsonl 只补写 MySQL）")
 
     import review  # 只为读设置文件
-    cfg = ai_judge.config(review.Prefs(Path(args.profile) / "hq_prefs.json"))
+    cfg = ai_judge.config(review.DbPrefs(Path(args.profile) / "hq_prefs.json", readonly=True))
     if not cfg.get("ai_api_key"):
         raise SystemExit("没有 AI 的 API Key：在工作台「设置 → AI 判断」里填，或设置环境变量 ARK_API_KEY")
     print(f"模型 {cfg['ai_model']}（{cfg['ai_base_url']}，非流式，深度思考{'开' if cfg.get('ai_thinking') else '关'}）", flush=True)
