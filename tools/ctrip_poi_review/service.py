@@ -23,11 +23,12 @@ from types import SimpleNamespace
 import uvicorn
 from fastapi import Body, FastAPI, HTTPException
 from fastapi.middleware.gzip import GZipMiddleware
-from fastapi.responses import FileResponse, HTMLResponse, Response
+from fastapi.responses import FileResponse, HTMLResponse, Response, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 
 import ai_judge
 import crawler
+import cs_expand
 import cs_synth
 import db
 import review
@@ -364,8 +365,9 @@ def create_app(args):
         return follow_state()
 
     # ---------------- 智能客服对话数据（大模型改写，单独运行，不占核对 / 采集的任务队列）
-    CS_DEFAULTS = dict(data_dir="", data_type="真实", split="train", city="", intent="", scenic="", scenic_city="", limit=20, variants=1,
-                       workers=3, allow_unmapped=False, no_db=False, mysql=True, out="", seed=7)
+    # mode：rewrite = 改写真实对话（cs_synth）；expand = 按景区真实数据扩展（cs_expand：事实取自景区表，问法参考真实对话）
+    CS_DEFAULTS = dict(mode="rewrite", data_dir="", data_type="真实", split="train", city="", intent="", scenic="", scenic_city="", limit=20, variants=1,
+                       workers=3, allow_unmapped=False, no_db=False, mysql=True, out="", seed=7, topics="", grade="", only_approved=False)
 
     def cs_args(p):
         a = dict(CS_DEFAULTS)
@@ -375,7 +377,11 @@ def create_app(args):
             raise HTTPException(400, "先填原始数据目录（解压后包含 dwd.dwd_cus_service_dialogue_df.csv 的目录）")
         for k in ("limit", "variants", "workers", "seed"):
             a[k] = int(a[k] or 0)
+        a["workers"] = max(1, min(a["workers"], 128))
         return SimpleNamespace(**a)
+
+    def cs_mod(a):
+        return cs_expand if a.mode == "expand" else cs_synth
 
     def cs_current():
         return next((j for j in sorted(svc.jobs.values(), key=lambda j: -j.id) if j.type in ("cs_synth", "cs_load") and j.status in ("queued", "running")), None)
@@ -401,7 +407,7 @@ def create_app(args):
         a = cs_args(payload)
         logs = []
         try:
-            res = await asyncio.to_thread(cs_synth.preview, a, logs.append)
+            res = await asyncio.to_thread(cs_mod(a).preview, a, logs.append)
         except (FileNotFoundError, RuntimeError) as e:
             raise HTTPException(400, str(e)) from e
         except Exception as e:  # noqa: BLE001  其他错误也给页面一个看得懂的原因，不要 500
@@ -424,7 +430,7 @@ def create_app(args):
         job = Job("cs_synth", {k: v for k, v in vars(a).items()})
         job.items = collections.deque(maxlen=1000)
         job.stats = {}
-        job.write(f"开始：模型 {cfg['ai_model']}（非流式，深度思考{'开' if cfg.get('ai_thinking') else '关'}）{'，写入 MySQL' if a.mysql else ''}")
+        job.write(("按景区真实数据扩展" if a.mode == "expand" else "改写真实对话") + f" · 开始：模型 {cfg['ai_model']}（非流式，深度思考{'开' if cfg.get('ai_thinking') else '关'}）{'，写入 MySQL' if a.mysql else ''}")
 
         def on_item(it):
             it["n"] = len(job.items) + 1 if not job.items else job.items[-1]["n"] + 1
@@ -436,7 +442,7 @@ def create_app(args):
                 job.stats["review"] = job.stats.get("review", 0) + 1
 
         def fn(progress):
-            st = cs_synth.run(a, cfg, log=job.write, should_stop=lambda: job.cancel, progress=progress, on_item=on_item)
+            st = cs_mod(a).run(a, cfg, log=job.write, should_stop=lambda: job.cancel, progress=progress, on_item=on_item)
             job.stats.update(out=st.get("out"), cancelled=st.get("cancelled") or 0)
             return st
         asyncio.get_running_loop().create_task(cs_launch(job, fn))
@@ -481,7 +487,35 @@ def create_app(args):
 
     @app.get("/api/cs/batches")
     def cs_batches():
-        return dict(items=cs_synth.batches(), session_table=cs_synth.SESSION_TABLE, turn_table=cs_synth.TURN_TABLE)
+        return dict(items=cs_synth.batches(), session_table=cs_synth.SESSION_TABLE, turn_table=cs_synth.TURN_TABLE, formats=cs_synth.EXPORT_FORMATS)
+
+    def export_filters(q):
+        return {k: q.get(k) or "" for k in ("method", "scenic", "city", "review", "date_from", "date_to", "limit")}
+
+    @app.get("/api/cs/export/count")
+    def cs_export_count(method: str = "", scenic: str = "", city: str = "", review: str = "", date_from: str = "", date_to: str = ""):
+        """从 MySQL 两张表按条件数一下：多少会话、多少轮。"""
+        try:
+            return cs_synth.export_count(export_filters(locals()))
+        except Exception as e:  # noqa: BLE001
+            raise HTTPException(400, f"{type(e).__name__}: {e}") from e
+
+    @app.get("/api/cs/export")
+    def cs_export(fmt: str = "jsonl", method: str = "", scenic: str = "", city: str = "", review: str = "", date_from: str = "", date_to: str = "",
+                  limit: int = 0):
+        """从 MySQL 两张表流式导出（会话 JSONL / JSON 数组 / 会话 CSV / 轮次 CSV），百万条也不占内存。"""
+        if fmt not in cs_synth.EXPORT_FORMATS:
+            raise HTTPException(400, f"不支持的格式 {fmt}")
+        try:
+            cs_synth.mysql_check()
+        except Exception as e:  # noqa: BLE001
+            raise HTTPException(400, str(e)) from e
+        f = export_filters(locals())
+        ext = {"jsonl": "jsonl", "json": "json"}.get(fmt, "csv")
+        tag = {"llm_rewrite": "rewrite_", "llm_expand": "expand_"}.get(method, "") + {"ok": "ok_", "review": "review_"}.get(review, "")
+        name = f"cs_mysql_{tag}{fmt}_{time.strftime('%Y%m%d_%H%M%S')}.{ext}"
+        mt = "text/csv; charset=utf-8" if ext == "csv" else "application/json; charset=utf-8"
+        return StreamingResponse(cs_synth.export_iter(f, fmt), media_type=mt, headers={"Content-Disposition": f"attachment; filename={name}"})
 
     @app.get("/api/cs/download")
     def cs_download(batch: str, file: str = "dialogs.jsonl", only: str = ""):
@@ -493,17 +527,29 @@ def create_app(args):
         name = "dialogs.jsonl" if file == "dialogs.json" else file
         if name not in cs_synth.BATCH_FILES or not (d / name).exists():
             raise HTTPException(404, f"这个批次没有 {file}")
+        mt = "text/csv; charset=utf-8" if name.endswith(".csv") else "application/json; charset=utf-8"
         if name == "dialogs.jsonl" and (only or file == "dialogs.json"):
-            recs = [json.loads(x) for x in (d / name).read_text(encoding="utf-8").splitlines() if x.strip()]
-            if only:
-                recs = [r for r in recs if bool(r.get("source", {}).get("needs_review")) == (only == "review")]
-            body = (json.dumps(recs, ensure_ascii=False, indent=2) if file == "dialogs.json"
-                    else "\n".join(json.dumps(r, ensure_ascii=False) for r in recs) + "\n")
+            want = None if not only else f'"needs_review": {"true" if only == "review" else "false"}'
+
+            def gen():  # 一行一行读、一边筛一边发，大文件也不占内存
+                first = True
+                if file == "dialogs.json":
+                    yield "[\n"
+                with (d / name).open(encoding="utf-8") as fh:
+                    for line in fh:
+                        line = line.strip()
+                        if not line or (want and want not in line):
+                            continue
+                        if file == "dialogs.json":
+                            yield ("" if first else ",\n") + line
+                            first = False
+                        else:
+                            yield line + "\n"
+                if file == "dialogs.json":
+                    yield "\n]\n"
             fname = f"{batch}_{'review_' if only == 'review' else 'ok_' if only == 'ok' else ''}{file}"
-        else:
-            body, fname = (d / name).read_bytes(), f"{batch}_{name}"
-        mt = "text/csv; charset=utf-8" if fname.endswith(".csv") else "application/json; charset=utf-8"
-        return Response(body, media_type=mt, headers={"Content-Disposition": f"attachment; filename={fname}"})
+            return StreamingResponse(gen(), media_type=mt, headers={"Content-Disposition": f"attachment; filename={fname}"})
+        return FileResponse(d / name, media_type=mt, filename=f"{batch}_{name}")
 
     @app.post("/api/cs/load_mysql")
     async def cs_load_mysql(payload: dict = Body(...)):
