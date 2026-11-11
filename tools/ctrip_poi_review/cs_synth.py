@@ -46,7 +46,7 @@ from pathlib import Path
 import ai_judge
 
 HERE = Path(__file__).resolve().parent
-PROMPT_VERSION = "cs_rewrite_v2"
+PROMPT_VERSION = "cs_rewrite_v3"
 CHANNELS = ["小程序-在线客服", "APP-在线客服", "公众号-在线客服", "H5-在线客服", "PC官网-在线客服"]
 PERSONAS = ["第一次来的外地游客，说话简短", "带小孩的家长，比较细心", "带老人出行的年轻人", "学生，预算有限", "着急的游客，会催促客服",
             "说话很口语化、喜欢用表情的年轻人", "常来的本地人", "公司团建的组织者"]
@@ -130,12 +130,16 @@ def scenic_map(log=print, data_dir=None):
     out = {}
     biz2poi = biz_to_poi(data_dir, log)
     with db.cursor() as cur:
-        cur.execute(f"""SELECT s.{db.C['id']} id, s.{db.C['name']} name, s.{db.C['city']} city, s.{db.POI_INFO} info FROM {db.SCENIC_TABLE} s
+        cur.execute(f"""SELECT s.{db.C['id']} id, s.{db.C['name']} name, s.{db.C['city']} city, s.{db.C['province']} province,
+                        s.{db.C['alias']} alias, s.{db.C['core_spots']} spots, s.{db.POI_INFO} info FROM {db.SCENIC_TABLE} s
                         WHERE COALESCE(s.{db.APPROVAL}, 0) = 1 AND s.{db.POI_INFO} IS NOT NULL AND s.{db.POI_INFO} <> '[]'""")
         poi2scenic = {}
         for r in cur.fetchall():
-            for p in db._parse_info(r["info"]):
-                poi2scenic.setdefault(str(p.get("poiId")), []).append(dict(scenic_id=r["id"], scenic_name=r["name"], city=r["city"]))
+            pois = db._parse_info(r["info"])
+            own = [r["name"]] + re.split(r"[,，、;；/]", r["alias"] or "") + re.split(r"[,，、;；/]", r["spots"] or "") + [p.get("poiName") for p in pois]
+            sc = dict(scenic_id=r["id"], scenic_name=r["name"], city=r["city"], province=r["province"], own=[x.strip() for x in own if x and x.strip()])
+            for p in pois:
+                poi2scenic.setdefault(str(p.get("poiId")), []).append(sc)
     for biz, pois in biz2poi.items():
         hits = [s for p in pois for s in poi2scenic.get(p, [])]
         if hits:
@@ -167,11 +171,14 @@ def build_prompt(src, scenic_name, persona, channel):
 2. 游客的提问要口语化、贴合人设，可以拆成多条消息、追问、催促（如「在吗」「快点回」）、发表情；不要照抄原问题。
 3. 客服用官方客服口吻（「您好」「亲」等），把原始回答改写成客服回复，可以分几条说；第一条可以是机器人（robot）自动接待，之后由人工（human）回复，也可以全程机器人。
 4. 如果原文里有明确的票种 / 价格，可以用一条 msg_type 为 card 的卡片消息表达，例如「[门票卡片] 成人票 ¥60」，内容必须是原文里的。
+0. 你是「{scenic_name}」的客服，只回答和本景区有关的内容（门票、开放时间、预约、交通到本景区、园内设施和游玩、本景区周边吃住）。
+   先判断原始问答是不是在问本景区：如果主要在问别的景点 / 别的城市，或者把本景区和别的景点放在一起比较、问住在哪儿两边都方便，就输出 {{"relevant": false, "reason": "原因"}}，不要改写。
+   原文里顺带提到的其他景点信息一律删掉，不要以本景区客服的身份介绍别的景点。
 5. 4～10 条消息；景区名写「{scenic_name}」{'' if same else f"，问的具体地方仍是「{spot}」（可以说「{scenic_name}的{spot}」），不要把{spot}的信息说成整个景区的"}；不要提「携程」「网友」「我们家去过」。
 6. gap_sec 是这条消息距离上一条的秒数（游客 3～60 秒，客服 5～90 秒，第一条为 0）。
 
 只输出一个 JSON 对象，不要其他文字：
-{{"turns":[{{"role":"user或agent","agent_type":"robot或human（仅 agent 填）","msg_type":"text或card","text":"内容","gap_sec":整数}}],
+{{"relevant":true,"turns":[{{"role":"user或agent","agent_type":"robot或human（仅 agent 填）","msg_type":"text或card","text":"内容","gap_sec":整数}}],
  "end_type":"{'/'.join(END_TYPES)} 之一","satisfaction_score":null或1到5的整数,"is_resolved":true或false}}"""
 
 
@@ -181,6 +188,8 @@ def _seeded(*parts):
 
 def assemble(src, scenic, variant, js, cfg, rnd):
     """模型给的轮次 + 程序生成的会话外壳（ID、时间、订单号等）→ 目标格式。"""
+    if js.get("relevant") is False:
+        raise ValueError(f"模型判断原始问答不是在问「{scenic['scenic_name'] if scenic else src['attraction_name']}」：{js.get('reason') or ''}")
     raw_turns = [t for t in js.get("turns") or [] if isinstance(t, dict) and str(t.get("text") or "").strip()]
     if len(raw_turns) < 2 or not any(t.get("role") == "user" for t in raw_turns) or not any(t.get("role") == "agent" for t in raw_turns):
         raise ValueError("轮次太少，或缺少游客 / 客服发言")
@@ -379,6 +388,75 @@ def main():
     return 0 if stats["ok"] or not stats["total"] else 1
 
 
+SUFFIX_RE = re.compile(r"(风景名胜区|旅游景区|旅游区|风景区|景区|景点)$")
+GENERIC = {"博物馆", "纪念馆", "动物园", "植物园", "游乐园", "公园", "广场", "古镇", "步行街", "美术馆", "科技馆", "图书馆", "体育馆",
+           "海洋馆", "水族馆", "游客中心", "停车场", "售票处", "服务中心", "度假区", "森林公园", "湿地公园", "文化馆", "大剧院"}
+
+
+def _short(v):
+    return re.sub(r"(省|市|自治区|壮族|回族|维吾尔|特别行政区)+$", "", (v or "").strip())
+
+
+def _core(name, prefixes=()):
+    """景点名的「核心」：去掉括号、省市前缀、景区 / 旅游区之类后缀，用来在问题里找。"""
+    n = re.sub(r"[（(].*?[)）]", "", name or "").strip()
+    for pre in prefixes:
+        if pre and n.startswith(pre) and len(n) - len(pre) >= 3:
+            n = n[len(pre):]
+    n2 = SUFFIX_RE.sub("", n)
+    return n2 if len(n2) >= 3 else n
+
+
+def name_index(data_dir, log=print):
+    """同城景点名字典（判断原始问题是不是在问别的景区）：数据包携程主档 + 我们的客户景区表。按城市（去掉「市」）分组。"""
+    import db
+    idx = {}
+    d = Path(data_dir)
+    f = next((p for n in MASTER_CSV for p in [d / n, *d.rglob(n)] if p.exists()), None)
+    if f:
+        for r in csv.DictReader(f.open(encoding="utf-8-sig")):
+            idx.setdefault(_short(r.get("city_name")), set()).add((r.get("attraction_name") or "").strip())
+    try:
+        with db.cursor() as cur:
+            cur.execute(f"SELECT s.{db.C['name']} name, s.{db.C['city']} city FROM {db.SCENIC_TABLE} s")
+            for r in cur.fetchall():
+                idx.setdefault(_short(r["city"]), set()).add((r["name"] or "").strip())
+    except Exception as e:  # noqa: BLE001
+        log(f"读客户景区名失败（只用数据包里的景点名判断）：{e}")
+    out = {}
+    for city, names in idx.items():
+        cores = {}
+        for n in names:
+            c = _core(n, (city,))
+            if len(c) >= 3 and c not in GENERIC:
+                cores.setdefault(c, n)
+        out[city] = cores
+    return out
+
+
+def other_place(src, scenic, idx):
+    """原始问题里点名了同城别的景点（不是我们这个景区本身、别名、核心景点、保留的 POI）→ 返回那个景点名；没有返回 None。"""
+    if not scenic:
+        return None
+    q = " ".join(t["text"] for t in src["turns"] if t["role"] == "游客") or (src["row"].get("first_question_content")
+                                                                           or src["row"].get("first_question_text") or "")
+    if not q:
+        return None
+    city = _short(scenic.get("city"))
+    pre = (_short(scenic.get("province")), city)
+    own = {_core(x, pre) for x in (scenic.get("own") or []) + [src["attraction_name"] or ""] if x}
+    own = {o for o in own if len(o) >= 2}
+    mentions_own = any(o in q for o in own if len(o) >= 2)
+    for core, full in (idx.get(city) or {}).items():
+        if core in q and not any(core in o or o in core for o in own):
+            # 「从春熙路怎么去金沙」这种：别的地方只是出发点、问的是怎么到本景区 → 不算问别的景区
+            if mentions_own and re.search(re.escape(core) + r".{0,10}?(去|到|过去|过来|出发|坐车|打车|怎么走)", q) \
+                    and re.search(r"从\s*\S{0,6}" + re.escape(core), q):
+                continue
+            return full
+    return None
+
+
 def select(args, log=print):
     """按条件挑原始对话，并对到我们的景区。返回 (筛选后的原始对话, [(原始对话, 主景区, 全部景区)])。
     scenic：只要这些我们的景区（景区ID 或名称，逗号分隔）；scenic_city：我们景区所在城市（如 北京市）。"""
@@ -389,7 +467,8 @@ def select(args, log=print):
     smap = {} if args.no_db else scenic_map(log, args.data_dir)
     only = {x.strip() for x in (getattr(args, "scenic", "") or "").split(",") if x.strip()}
     scity = {x.strip() for x in (getattr(args, "scenic_city", "") or "").split(",") if x.strip()}
-    picked = []
+    picked, excluded = [], []
+    idx = name_index(args.data_dir, log) if smap and not getattr(args, "keep_other_place", False) else {}
     for s in src:
         hits = smap.get((s["attraction_id"] or "").replace("ctrip_", "")) or []
         if only or scity:
@@ -398,7 +477,16 @@ def select(args, log=print):
                 continue
         if not hits and not (args.allow_unmapped or args.no_db):
             continue
+        other = other_place(s, hits[0], idx) if idx and hits else None
+        if other:  # 问的是（或连带问了）同城别的景点：不适合当这个景区的客服对话
+            excluded.append(dict(dialogue_id=s["id"], scenic_name=hits[0]["scenic_name"], other=other,
+                                 question=(" ".join(t["text"] for t in s["turns"] if t["role"] == "游客") or s["full"] or "")[:80]))
+            continue
         picked.append((s, hits[0] if hits else None, hits))
+    if excluded:
+        log(f"原始问题点名了同城别的景点（不是在问这个景区），排除 {len(excluded)} 通，例如："
+            + "；".join(f"{x['scenic_name']} ← 问到「{x['other']}」" for x in excluded[:3]))
+    select.excluded = excluded
     return src, picked
 
 
@@ -416,7 +504,9 @@ def preview(args, log=print):
     rows = sorted(per.values(), key=lambda x: -x["n"])
     for r in rows:
         r["spots"] = sorted(r["spots"])[:8]
+    exc = getattr(select, "excluded", []) or []
     return dict(source_total=len(src), usable=len(picked), scenics=len([r for r in rows if r["scenic_id"]]), by_scenic=rows[:300],
+                excluded_other=len(exc), excluded_examples=exc[:20],
                 by_intent=sorted(intents.items(), key=lambda x: -x[1]))
 
 

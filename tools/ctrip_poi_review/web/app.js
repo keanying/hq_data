@@ -848,7 +848,11 @@
           </div>` : html`<div className="muted">还没有任务。先「预估」看看能用多少，再「开始生成」。</div>`}
           ${pv && html`<div className="cs-pv">
             <div className="hd2">预估：原始 <b>${fmt(pv.source_total)}</b> 通符合条件，其中对到我们 <b>${fmt(pv.scenics)}</b> 个景区的 <b>${fmt(pv.usable)}</b> 通可用
-              <span className="muted">（意图：${pv.by_intent.slice(0, 6).map(([k, v]) => `${k} ${v}`).join(' · ')}）</span></div>
+              <span className="muted">（意图：${pv.by_intent.slice(0, 6).map(([k, v]) => `${k} ${v}`).join(' · ')}）</span>
+              ${pv.excluded_other ? html`<div className="muted sm" style=${{ marginTop: 4 }}>已排除 <b>${fmt(pv.excluded_other)}</b> 通问到同城别的景点的（不是在问这个景区）
+                <${Popover} trigger="click" position="bottomLeft" content=${html`<div style=${{ width: 520, maxHeight: 360, overflow: 'auto', padding: '8px 12px', fontSize: 12.5, lineHeight: 1.7 }}>
+                  ${pv.excluded_examples.map((x) => html`<div key=${x.dialogue_id}><b>${x.scenic_name}</b> ← 问到「${x.other}」：<span className="muted">${x.question}</span></div>`)}</div>`}>
+                  <a style=${{ marginLeft: 6 }}>看例子</a><//></div>` : ''}</div>
             <div className="cs-sc">${pv.by_scenic.slice(0, 40).map((x) => html`<${Tooltip} key=${x.scenic_id || 'none'} content=${`原始景点：${x.spots.join('、')}`}>
               <span className="chip2" onClick=${() => x.scenic_id && go('data', { q: x.scenic_id })}>${x.scenic_name}<b>${x.n}</b></span><//>`)}</div>
           </div>`}
