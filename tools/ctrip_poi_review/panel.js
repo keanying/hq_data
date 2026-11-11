@@ -661,16 +661,25 @@
       kw = (kw || '').trim(); if (!kw) return;
       const sid = S.detail && S.detail.scenic.id;
       cancelAutoApprove(true); // 换关键词重搜时，之前的自动审核倒计时作废
-      S.keyword = kw; S.loading = true; render();
+      S.keyword = kw; S.loading = true; S.loadingNote = ''; render();
+      // 等太久时看看是不是在等浏览器重建；最多等 90 秒，超时就当这个词没搜到，接着往下走（AI 照常判断）
+      const t0 = Date.now();
+      const watch = setInterval(async () => {
+        const secs = Math.round((Date.now() - t0) / 1000);
+        let note = `已等 ${secs} 秒`;
+        try { const b = await call('browser_state'); if (b && b.restarting) note = `浏览器正在重建（等正在采的 POI 停下），已等 ${secs} 秒`; } catch (e) { /* 注入携程页面时没有这个方法 */ }
+        S.loadingNote = note; const el = $('#loading-note'); if (el) el.textContent = note;
+      }, 3000);
       try {
-        const r = await call('search', { keyword: kw, force: !!force, scenic_id: sid });
+        const r = await Promise.race([call('search', { keyword: kw, force: !!force, scenic_id: sid }),
+          new Promise((_, rej) => setTimeout(() => rej(new Error(`搜索「${kw}」超过 90 秒没返回，跳过这个词`)), 90000))]);
         if (!S.detail || S.detail.scenic.id !== sid || S.keyword !== kw) return; // 已切走
         S.res = r;
         S.searches = S.searches.filter((x) => x.kw !== kw).concat([{ kw, res: r }]);
         mergeSearches();
       } catch (e) {
         S.res = null; toast(e.message, true);
-      } finally { S.loading = false; render(); }
+      } finally { clearInterval(watch); S.loading = false; S.loadingNote = ''; render(); }
       if (!S.res || !S.detail || S.detail.scenic.id !== sid) return;
       await autoSelect();
       maybeAutoApprove();
@@ -932,7 +941,7 @@
         </div>`;
       };
       let resHtml;
-      if (S.loading) resHtml = '<div class="muted">正在携程页面输入并等待下拉结果…</div>';
+      if (S.loading) resHtml = `<div class="muted">正在携程页面输入并等待下拉结果… <span id="loading-note">${esc(S.loadingNote || '')}</span></div>`;
       else if (!(S.merged && S.merged.items.length)) resHtml = `<div class="muted">${S.keyword ? '无结果' : '点上面的关键词搜索'}</div>`;
       else {
         resHtml = list.map((r) => (r.outside ? resRow(r).replace('class="row pick', 'class="row pick outside') : resRow(r))).join('')

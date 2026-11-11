@@ -109,6 +109,7 @@ JS_EMPTY_HINTS = """() => {
 }"""
 
 SKIP_MSG = "手动跳到下一个 POI"
+INTERRUPT_MSG = "浏览器重建，中断（重建后接着采这个 POI）"
 NO_DATA_MSG = "该 POI 没有图片数据"
 LIMIT_MSG = "疑似限流"  # 页面 / 接口没给数据，但不能确定这个 POI 真的没图：记为 limited，之后重采；连续出现会暂停冷却
 LIMIT_HINT = "（之后会重采；一直这样可在服务打开的浏览器里登录携程再试）"
@@ -122,10 +123,19 @@ class CommentImageCrawler:
         self.empty_limit = empty_limit  # 连续这么多页没有新图片就换下一个 POI（0 = 不限）
         self.on_progress = on_progress or (lambda stat: None)
         self.skipped = False
+        self.interrupted = False
 
-    def skip(self):
-        """手动跳到下一个 POI：当前页处理完（或等待中）立即结束这个 POI。"""
+    def skip(self, interrupt=False):
+        """手动跳到下一个 POI：当前页处理完（或等待中）立即结束这个 POI。
+        interrupt=True：浏览器要重建，先停下这个 POI（记为「中断」，不算采过，重建后接着采）。"""
         self.skipped = True
+        self.interrupted = self.interrupted or interrupt
+
+    def _skip_stop(self, stat):
+        if self.interrupted:
+            stat["interrupted"] = True
+            return INTERRUPT_MSG
+        return SKIP_MSG
 
     async def _sleep(self, sec):
         end = time.monotonic() + sec
@@ -200,7 +210,7 @@ class CommentImageCrawler:
                 stat["stop"] = f"页面打不开（HTTP {resp.status}），换下一个 POI"
                 return stat
             if self.skipped:
-                stat["stop"] = SKIP_MSG
+                stat["stop"] = self._skip_stop(stat)
                 return stat
             # 第一页：优先读服务端渲染的 __NEXT_DATA__；没有时退回「滚到点评区等接口返回」
             ssr = None
@@ -246,7 +256,7 @@ class CommentImageCrawler:
                     finally:
                         self.timeout_s = old_t
             if self.skipped:
-                stat["stop"] = SKIP_MSG
+                stat["stop"] = self._skip_stop(stat)
                 return stat
             if not js:
                 why = None if (ssr or {}).get("commentTotal") or (ssr or {}).get("imageCount") else await self._page_says_empty()
@@ -291,7 +301,7 @@ class CommentImageCrawler:
                 db.crawl_put(sid, pid, pages_done=stat["pages"], total_count=total, review_qty=stat["reviews"], image_qty=stat["images"])
                 self.on_progress(stat)
                 if self.skipped:
-                    stat["stop"] = SKIP_MSG
+                    stat["stop"] = self._skip_stop(stat)
                     break
                 if self.empty_limit and stat["empty_run"] >= self.empty_limit:
                     stat["stop"] = f"连续 {self.empty_limit} 页没有新图片，换下一个 POI"
@@ -311,13 +321,13 @@ class CommentImageCrawler:
                     break
                 await self._sleep(random.uniform(*self.page_delay))
                 if self.skipped:
-                    stat["stop"] = SKIP_MSG
+                    stat["stop"] = self._skip_stop(stat)
                     break
                 await btn.scroll_into_view_if_needed()
                 await btn.click()
                 js = await self._wait_new(captured, seen_n)
                 if self.skipped and not js:
-                    stat["stop"] = SKIP_MSG
+                    stat["stop"] = self._skip_stop(stat)
                     break
                 if not js:
                     await self._check_blocked()
@@ -329,7 +339,9 @@ class CommentImageCrawler:
             page.remove_listener("response", on_resp)
             stop = stat["stop"] or ""
             ok = stop and not stop.startswith(("没读到", "点「下一页」后", "已取消", "页面上的 poiId", "页面打不开"))
-            if stat.get("limited"):
+            if stat.get("interrupted"):
+                st = "interrupted"  # 浏览器重建打断：不算采过，重建后接着采
+            elif stat.get("limited"):
                 st = "limited"  # 疑似限流：不算采过，之后重采（已存的图片按 record_id 去重，不会重复）
             elif stop.startswith(NO_DATA_MSG) and stat["pages"] == 0:
                 st = "empty"  # 页面明确写着图片 / 点评总数 0：正常情况，不算失败，也不再采
@@ -410,29 +422,34 @@ async def crawl_all(get_page, f, max_pages=20, max_images=300, limit=0, refresh=
                 log("已取消")
                 break
         cool = None
-        async with (guard() if guard else contextlib.nullcontext()):  # 重建浏览器时等这个 POI 采完；之后拿新的页面
-            page = await get_page()
-            crawler = CommentImageCrawler(page, max_pages=max_pages, max_images=max_images, log=log, empty_limit=empty_limit)
-            if on_crawler:
-                on_crawler(crawler, t)
-            name = f"{t['scenic']['name']} / {t['poi'].get('poiName')}（poiId {t['poi']['poiId']}）"
-            try:
-                st = await crawler.crawl(t, should_stop)
-                stats["pois"] += 1
-                stats["images"] += st["images"]
-                log(f"[{i}/{total}] {name}：{st['pages']} 页，点评 {st['reviews']}/{st['total']}，新增图片 {st['images']}"
-                    f"（主页图片总数 {st.get('image_total') if st.get('image_total') is not None else '未读到'}）；{st['stop']}")
-                stats["limited"] += bool(st.get("limited"))
-                cool = throttle.record(st)
-            except NeedHuman as e:
-                log(f"[{i}/{total}] {name}：{e}")
-                raise
-            except Exception as e:
-                stats["failed"] += 1
-                log(f"[{i}/{total}] {name}：失败 {type(e).__name__}: {e}")
-            finally:
+        for _attempt in range(3):  # 被浏览器重建打断的，重建后再采这个 POI（最多 3 次）
+            st = {}
+            async with (guard() if guard else contextlib.nullcontext()):  # 重建浏览器时等这个 POI 采完；之后拿新的页面
+                page = await get_page()
+                crawler = CommentImageCrawler(page, max_pages=max_pages, max_images=max_images, log=log, empty_limit=empty_limit)
                 if on_crawler:
-                    on_crawler(None, None)
+                    on_crawler(crawler, t)
+                name = f"{t['scenic']['name']} / {t['poi'].get('poiName')}（poiId {t['poi']['poiId']}）"
+                try:
+                    st = await crawler.crawl(t, should_stop)
+                    stats["pois"] += 0 if st.get("interrupted") else 1
+                    stats["images"] += st["images"]
+                    log(f"[{i}/{total}] {name}：{st['pages']} 页，点评 {st['reviews']}/{st['total']}，新增图片 {st['images']}"
+                        f"（主页图片总数 {st.get('image_total') if st.get('image_total') is not None else '未读到'}）；{st['stop']}")
+                    stats["limited"] += bool(st.get("limited"))
+                    cool = throttle.record(st)
+                except NeedHuman as e:
+                    log(f"[{i}/{total}] {name}：{e}")
+                    raise
+                except Exception as e:
+                    stats["failed"] += 1
+                    log(f"[{i}/{total}] {name}：失败 {type(e).__name__}: {e}")
+                finally:
+                    if on_crawler:
+                        on_crawler(None, None)
+            if not st.get("interrupted"):
+                break
+            log(f"[{i}/{total}] {name}：浏览器重建打断，重建后接着采")
         progress(i, total)
         if cool:  # 冷却在浏览器之外等，不挡浏览器重建
             log(cool)
