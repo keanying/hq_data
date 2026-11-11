@@ -4,6 +4,7 @@
 不自己调接口：翻页都是点页面上的「下一页」，请求由携程页面发出，这里只读返回。
 """
 import asyncio
+import contextlib
 import random
 import re
 import time
@@ -386,7 +387,7 @@ class Throttle:
 
 async def crawl_all(get_page, f, max_pages=20, max_images=300, limit=0, refresh=False, poi_delay=(2.0, 4.0),
                     log=print, should_stop=lambda: False, progress=lambda done, total: None,
-                    empty_limit=10, on_crawler=None, throttle=None):
+                    empty_limit=10, on_crawler=None, throttle=None, guard=None):
     """对筛选范围内已审核的景区，逐个 POI 采集点评图片。get_page 为 async 函数，返回可用的 Playwright page。"""
     st0 = {}
     targets = db.crawl_targets(f, refresh=refresh, stats=st0)
@@ -398,7 +399,6 @@ async def crawl_all(get_page, f, max_pages=20, max_images=300, limit=0, refresh=
         + (f"；{skipped} 个之前采过，跳过（要重采请勾「重采」/ --refresh）" if skipped else ""))
     stats = dict(pois=0, images=0, failed=0, limited=0)
     throttle = throttle or Throttle()
-    page = None
     for i, t in enumerate(targets, 1):
         if should_stop():
             log("已取消")
@@ -409,31 +409,34 @@ async def crawl_all(get_page, f, max_pages=20, max_images=300, limit=0, refresh=
             if should_stop():
                 log("已取消")
                 break
-        page = page or await get_page()
-        crawler = CommentImageCrawler(page, max_pages=max_pages, max_images=max_images, log=log, empty_limit=empty_limit)
-        if on_crawler:
-            on_crawler(crawler, t)
-        name = f"{t['scenic']['name']} / {t['poi'].get('poiName')}（poiId {t['poi']['poiId']}）"
-        try:
-            st = await crawler.crawl(t, should_stop)
-            stats["pois"] += 1
-            stats["images"] += st["images"]
-            log(f"[{i}/{total}] {name}：{st['pages']} 页，点评 {st['reviews']}/{st['total']}，新增图片 {st['images']}"
-                f"（主页图片总数 {st.get('image_total') if st.get('image_total') is not None else '未读到'}）；{st['stop']}")
-            stats["limited"] += bool(st.get("limited"))
-            if throttle.record(st):
-                log(throttle.reason)
-                await throttle.wait(should_stop, log)
-        except NeedHuman as e:
-            log(f"[{i}/{total}] {name}：{e}")
-            raise
-        except Exception as e:
-            stats["failed"] += 1
-            log(f"[{i}/{total}] {name}：失败 {type(e).__name__}: {e}")
-        finally:
+        cool = None
+        async with (guard() if guard else contextlib.nullcontext()):  # 重建浏览器时等这个 POI 采完；之后拿新的页面
+            page = await get_page()
+            crawler = CommentImageCrawler(page, max_pages=max_pages, max_images=max_images, log=log, empty_limit=empty_limit)
             if on_crawler:
-                on_crawler(None, None)
+                on_crawler(crawler, t)
+            name = f"{t['scenic']['name']} / {t['poi'].get('poiName')}（poiId {t['poi']['poiId']}）"
+            try:
+                st = await crawler.crawl(t, should_stop)
+                stats["pois"] += 1
+                stats["images"] += st["images"]
+                log(f"[{i}/{total}] {name}：{st['pages']} 页，点评 {st['reviews']}/{st['total']}，新增图片 {st['images']}"
+                    f"（主页图片总数 {st.get('image_total') if st.get('image_total') is not None else '未读到'}）；{st['stop']}")
+                stats["limited"] += bool(st.get("limited"))
+                cool = throttle.record(st)
+            except NeedHuman as e:
+                log(f"[{i}/{total}] {name}：{e}")
+                raise
+            except Exception as e:
+                stats["failed"] += 1
+                log(f"[{i}/{total}] {name}：失败 {type(e).__name__}: {e}")
+            finally:
+                if on_crawler:
+                    on_crawler(None, None)
         progress(i, total)
+        if cool:  # 冷却在浏览器之外等，不挡浏览器重建
+            log(cool)
+            await throttle.wait(should_stop, log)
         await asyncio.sleep(random.uniform(*poi_delay))
     log(f"完成：POI {stats['pois']} 个，新增图片 {stats['images']} 张，失败 {stats['failed']}"
         + (f"，疑似限流 {stats['limited']} 个（之后会重采）" if stats["limited"] else ""))
