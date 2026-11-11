@@ -99,6 +99,14 @@ JS_NEXT_STATE = """(el) => {
 }"""
 
 
+# 页面本身写着没内容（POI 真的没图 / 没点评），和「被限流、页面没给数据」区分开
+JS_EMPTY_HINTS = """() => {
+  const t = (document.body && document.body.innerText || '').replace(/\\s+/g, '');
+  return { noImage: /暂无图片/.test(t), noIntro: /还没有人介绍过这个景点/.test(t),
+           noComment: /暂无点评|还没有点评|快来写下第一条点评|成为第一个点评/.test(t),
+           hasLayout: /携程|目的地攻略|旅游攻略/.test(t) };
+}"""
+
 SKIP_MSG = "手动跳到下一个 POI"
 NO_DATA_MSG = "该 POI 没有图片数据"
 LIMIT_MSG = "疑似限流"  # 页面 / 接口没给数据，但不能确定这个 POI 真的没图：记为 limited，之后重采；连续出现会暂停冷却
@@ -159,6 +167,20 @@ class CommentImageCrawler:
                     return el, st["disabled"]
         return None, True
 
+    async def _page_says_empty(self):
+        """页面正常显示，但明确写着「暂无图片」或「暂无点评」→ 这个 POI 本来就没有点评图片。返回说明，判断不了返回 None。"""
+        try:
+            h = await self.page.evaluate(JS_EMPTY_HINTS)
+        except Exception:
+            return None
+        if not h.get("hasLayout"):
+            return None  # 页面框架都没有：更像被拦，交给「疑似限流」
+        if h.get("noComment"):
+            return "页面显示暂无点评"
+        if h.get("noImage"):
+            return "页面显示「暂无图片」" + ("，也没有景点介绍" if h.get("noIntro") else "")
+        return None
+
     async def crawl(self, target, should_stop=lambda: False):
         """target = {scenic: {...}, poi: {poiId, poiName, poiUri, ...}}；返回统计。"""
         scenic, poi = target["scenic"], target["poi"]
@@ -196,6 +218,11 @@ class CommentImageCrawler:
             if ssr and ssr.get("commentTotal") == 0:
                 stat["stop"] = NO_DATA_MSG + "（页面点评总数 0），换下一个 POI"
                 return stat
+            if ssr and ssr.get("items") == [] and not ssr.get("commentTotal") and not ssr.get("imageCount"):
+                why = await self._page_says_empty()
+                if why:
+                    stat["stop"] = f"{NO_DATA_MSG}（{why}），换下一个 POI"
+                    return stat
             if ssr and ssr.get("items") == []:  # 页面说有点评 / 图片（或没说），点评列表却是空的
                 stat["limited"] = True
                 stat["stop"] = f"{LIMIT_MSG}：页面点评列表为空（点评总数 {ssr.get('commentTotal')}，图片总数 {ssr.get('imageCount')}）{LIMIT_HINT}"
@@ -221,6 +248,10 @@ class CommentImageCrawler:
                 stat["stop"] = SKIP_MSG
                 return stat
             if not js:
+                why = None if (ssr or {}).get("commentTotal") or (ssr or {}).get("imageCount") else await self._page_says_empty()
+                if why:
+                    stat["stop"] = f"{NO_DATA_MSG}（{why}），换下一个 POI"
+                    return stat
                 stat["limited"] = True
                 stat["stop"] = f"{LIMIT_MSG}：页面没有返回点评数据{LIMIT_HINT}"
                 return stat
