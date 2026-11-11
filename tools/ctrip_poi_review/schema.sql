@@ -102,3 +102,12 @@ CREATE TABLE IF NOT EXISTS scenic_poi_image_deleted (
   scenic_id VARCHAR(64) NULL, poi_id BIGINT NULL, image_url VARCHAR(512) NULL,
   deleted_by VARCHAR(64) NULL, deleted_at DATETIME DEFAULT CURRENT_TIMESTAMP
 ) DEFAULT CHARSET=utf8mb4 COMMENT='人工删除的点评图片（不再采集、不进交付表）';
+
+-- 工作台设置（AI 判断、核对、图片采集、浏览器）；服务启动时也会自动建
+CREATE TABLE IF NOT EXISTS hq_app_settings (
+  scope VARCHAR(32) NOT NULL COMMENT '哪套设置：service = 工作台',
+  name VARCHAR(64) NOT NULL,
+  value TEXT NULL COMMENT 'JSON',
+  updated_at DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  PRIMARY KEY (scope, name)
+) DEFAULT CHARSET=utf8mb4 COMMENT='工作台设置';

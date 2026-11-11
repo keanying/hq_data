@@ -189,7 +189,7 @@ def _seeded(*parts):
 def assemble(src, scenic, variant, js, cfg, rnd):
     """模型给的轮次 + 程序生成的会话外壳（ID、时间、订单号等）→ 目标格式。"""
     if js.get("relevant") is False:
-        raise ValueError(f"模型判断原始问答不是在问「{scenic['scenic_name'] if scenic else src['attraction_name']}」：{js.get('reason') or ''}")
+        raise NotRelevant(f"模型判断原始问答不是在问「{scenic['scenic_name'] if scenic else src['attraction_name']}」：{js.get('reason') or ''}")
     raw_turns = [t for t in js.get("turns") or [] if isinstance(t, dict) and str(t.get("text") or "").strip()]
     if len(raw_turns) < 2 or not any(t.get("role") == "user" for t in raw_turns) or not any(t.get("role") == "agent" for t in raw_turns):
         raise ValueError("轮次太少，或缺少游客 / 客服发言")
@@ -379,7 +379,7 @@ def main():
         ap.error("需要 --data-dir（或用 --load-jsonl 只补写 MySQL）")
 
     import review  # 只为读设置文件
-    cfg = ai_judge.config(review.Prefs(Path(args.profile) / "hq_prefs.json"))
+    cfg = ai_judge.config(review.DbPrefs(Path(args.profile) / "hq_prefs.json", readonly=True))
     if not cfg.get("ai_api_key"):
         raise SystemExit("没有 AI 的 API Key：在工作台「设置 → AI 判断」里填，或设置环境变量 ARK_API_KEY")
     print(f"模型 {cfg['ai_model']}（{cfg['ai_base_url']}，非流式，深度思考{'开' if cfg.get('ai_thinking') else '关'}）", flush=True)
@@ -457,6 +457,28 @@ def other_place(src, scenic, idx):
     return None
 
 
+# 原始问题问的是机票 / 火车票这类别的业务（携程问答里常挂在景点下面）。我们只按真实问答改写，
+# 换成景区的问题就得编答案，所以调模型之前先排除，省调用。问题里同时提到本景区名的不算（如「下飞机怎么去故宫」）。
+# 词表故意收得窄（「回酒店退房」是问能否出园再进，千岛湖的「航班」是船班），拿不准的交给模型判断。
+OFF_TOPIC_RE = re.compile(r"(机票|航空公司|登机|值机|行李托运|火车票|高铁票|动车票|12306)")
+
+
+def off_topic(src, scenic):
+    """原始问题问的是机票 / 火车票等别的业务 → 返回命中的词；否则 None。"""
+    q = " ".join(t["text"] for t in src["turns"] if t["role"] == "游客") or (src["row"].get("first_question_content")
+                                                                           or src["row"].get("first_question_text") or "")
+    m = OFF_TOPIC_RE.search(q or "")
+    if not m:
+        return None
+    pre = (_short((scenic or {}).get("province")), _short((scenic or {}).get("city")))
+    own = {_core(x, pre) for x in ((scenic or {}).get("own") or []) + [src["attraction_name"] or ""] if x}
+    return None if any(len(o) >= 2 and o in q for o in own) else m.group(1)
+
+
+class NotRelevant(ValueError):
+    """模型判断原始问答不是在问这个景区：跳过，不算不合格。"""
+
+
 def select(args, log=print):
     """按条件挑原始对话，并对到我们的景区。返回 (筛选后的原始对话, [(原始对话, 主景区, 全部景区)])。
     scenic：只要这些我们的景区（景区ID 或名称，逗号分隔）；scenic_city：我们景区所在城市（如 北京市）。"""
@@ -482,10 +504,18 @@ def select(args, log=print):
             excluded.append(dict(dialogue_id=s["id"], scenic_name=hits[0]["scenic_name"], other=other,
                                  question=(" ".join(t["text"] for t in s["turns"] if t["role"] == "游客") or s["full"] or "")[:80]))
             continue
+        word = off_topic(s, hits[0] if hits else None)
+        if word:  # 问的是机票 / 火车票等别的业务
+            excluded.append(dict(dialogue_id=s["id"], scenic_name=hits[0]["scenic_name"] if hits else s["attraction_name"], other=word, kind="off_topic",
+                                 question=(" ".join(t["text"] for t in s["turns"] if t["role"] == "游客") or s["full"] or "")[:80]))
+            continue
         picked.append((s, hits[0] if hits else None, hits))
-    if excluded:
-        log(f"原始问题点名了同城别的景点（不是在问这个景区），排除 {len(excluded)} 通，例如："
-            + "；".join(f"{x['scenic_name']} ← 问到「{x['other']}」" for x in excluded[:3]))
+    n_off = sum(1 for x in excluded if x.get("kind") == "off_topic")
+    if len(excluded) > n_off:
+        log(f"原始问题点名了同城别的景点（不是在问这个景区），排除 {len(excluded) - n_off} 通，例如："
+            + "；".join(f"{x['scenic_name']} ← 问到「{x['other']}」" for x in [y for y in excluded if y.get("kind") != "off_topic"][:3]))
+    if n_off:
+        log(f"原始问题问的是机票 / 火车票等别的业务，排除 {n_off} 通")
     select.excluded = excluded
     return src, picked
 
@@ -506,7 +536,9 @@ def preview(args, log=print):
         r["spots"] = sorted(r["spots"])[:8]
     exc = getattr(select, "excluded", []) or []
     return dict(source_total=len(src), usable=len(picked), scenics=len([r for r in rows if r["scenic_id"]]), by_scenic=rows[:300],
-                excluded_other=len(exc), excluded_examples=exc[:20],
+                excluded_other=len([x for x in exc if x.get("kind") != "off_topic"]), excluded_offtopic=len([x for x in exc if x.get("kind") == "off_topic"]),
+                excluded_examples=[x for x in exc if x.get("kind") != "off_topic"][:20],
+                offtopic_examples=[x for x in exc if x.get("kind") == "off_topic"][:20],
                 by_intent=sorted(intents.items(), key=lambda x: -x[1]))
 
 
@@ -531,6 +563,14 @@ def run(args, cfg, log=print, should_stop=lambda: False, progress=lambda done, t
                 done.add((r["source"]["dialogue_id"], r["source"]["variant"]))
             except (ValueError, KeyError):
                 pass
+    if f_rej.exists():  # 模型已判断「不是在问这个景区」的不再重复调用
+        for line in f_rej.read_text(encoding="utf-8").splitlines():
+            try:
+                r = json.loads(line)
+                if r.get("kind") == "skipped":
+                    done.add((r["source_dialogue_id"], r["variant"]))
+            except (ValueError, KeyError):
+                pass
     have_src = set()
     if f_src.exists():
         for line in f_src.read_text(encoding="utf-8").splitlines():
@@ -553,7 +593,7 @@ def run(args, cfg, log=print, should_stop=lambda: False, progress=lambda done, t
 
     jobs = [(s, sc, hits, v) for s, sc, hits in picked for v in range(1, args.variants + 1) if (s["id"], v) not in done]
     log(f"待生成 {len(jobs)} 条（已生成的 {len(done)} 条跳过），输出到 {out}")
-    stats = dict(ok=0, review=0, rejected=0, failed=0, cancelled=0, total=len(jobs), out=str(out))
+    stats = dict(ok=0, review=0, skipped=0, rejected=0, failed=0, cancelled=0, total=len(jobs), out=str(out))
     progress(0, len(jobs))
 
     def one(s, sc, hits, v):
@@ -580,6 +620,8 @@ def run(args, cfg, log=print, should_stop=lambda: False, progress=lambda done, t
             if len(hits) > 1:
                 rec["source"]["other_scenic_ids"] = [h["scenic_id"] for h in hits[1:]]
             return ("ok", s, v, rec, ex_)
+        except NotRelevant as e:
+            return ("skipped", s, v, dict(error=str(e), raw=text[:2000]), ex_)
         except Exception as e:  # noqa: BLE001
             return ("rejected", s, v, dict(error=f"{type(e).__name__}: {e}", raw=text[:2000]), ex_)
 
@@ -615,16 +657,16 @@ def run(args, cfg, log=print, should_stop=lambda: False, progress=lambda done, t
                     with f_rej.open("a", encoding="utf-8") as f:
                         f.write(json.dumps(dict(source_dialogue_id=s["id"], variant=v, kind=kind, **rec), ensure_ascii=False) + "\n")
                     stats[kind] += 1
-                    log(f"  [{n}/{len(jobs)}] {s['id']} 第 {v} 版 {'调用失败' if kind == 'failed' else '不合格'}：{rec.get('error')}")
+                    log(f"  [{n}/{len(jobs)}] {s['id']} 第 {v} 版 {dict(failed='调用失败', skipped='跳过（不是在问这个景区）').get(kind, '不合格')}：{rec.get('error')}")
                 src_view = dict(dialogue_id=s["id"], data_type=s["data_type"], split=s["split"], city=s["city"], attraction_id=s["attraction_id"],
                                 attraction_name=s["attraction_name"], intent=s["intent"], scene=s["scene"], url=s["url"], turns=s["turns"], full=s["full"])
                 on_item(dict(kind=kind, variant=v, source=src_view, exchange=ex_, record=rec if kind == "ok" else None,
                              error=None if kind == "ok" else rec.get("error"), mysql=bool(sql)))
                 progress(n, len(jobs))
                 if n % 10 == 0 or n == len(jobs):
-                    log(f"  进度 {n}/{len(jobs)}：成功 {stats['ok']}（需复核 {stats['review']}），不合格 {stats['rejected']}，调用失败 {stats['failed']}")
+                    log(f"  进度 {n}/{len(jobs)}：成功 {stats['ok']}（需复核 {stats['review']}），跳过 {stats['skipped']}，不合格 {stats['rejected']}，调用失败 {stats['failed']}")
     fm.close()
-    log(f"完成：成功 {stats['ok']}（其中需复核 {stats['review']}），不合格 {stats['rejected']}，调用失败 {stats['failed']}"
+    log(f"完成：成功 {stats['ok']}（其中需复核 {stats['review']}），非本景区跳过 {stats['skipped']}，不合格 {stats['rejected']}，调用失败 {stats['failed']}"
         + (f"，停止前未处理 {stats['cancelled']}" if stats["cancelled"] else "") + "。\n"
           f"  生成：{f_dlg}\n  原始：{f_src}\n  对照：{f_map}" + (f"\n  不合格 / 失败：{f_rej}" if stats["rejected"] or stats["failed"] else ""))
     return stats

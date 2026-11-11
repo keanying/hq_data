@@ -67,7 +67,7 @@ class Service:
         self.queue: asyncio.Queue = asyncio.Queue()
         profile = Path(args.profile)
         profile.mkdir(parents=True, exist_ok=True)
-        self.prefs = review.Prefs(profile / "hq_prefs.json")
+        self.prefs = review.DbPrefs(profile / "hq_prefs.json")  # 设置存在 MySQL（hq_app_settings），浏览器目录里留一份备份
         self.browser = review.LazyBrowser(args, prefs=self.prefs)
         self.gate = review.BrowserGate()  # 浏览器使用中 / 重建中的协调
         self.current: Job | None = None
@@ -529,7 +529,8 @@ def create_app(args):
     @app.get("/api/settings")
     def get_settings():
         cfg = ai_judge.config(svc.prefs)
-        return dict(review.public_prefs(svc.prefs), ai_key_source=cfg["key_source"], ai_defaults=ai_judge.DEFAULTS)
+        return dict(review.public_prefs(svc.prefs), ai_key_source=cfg["key_source"], ai_defaults=ai_judge.DEFAULTS,
+                    settings_storage=getattr(svc.prefs, "storage", "文件"))
 
     @app.post("/api/settings")
     def set_settings(payload: dict = Body(default={})):
