@@ -779,6 +779,7 @@
     const body = () => ({ ...p, intent: (p.intent || []).join(',') });
     const job = st && st.job, stats = (job && job.stats) || {};
     const running = job && ['queued', 'running'].includes(job.status);
+    useEffect(() => { if (job && !running) refreshBt(); }, [job && job.id, job && job.status]); // 跑完立即刷新导出列表
     const doPreview = async () => {
       setPvBusy(true);
       try { setPv(await post('/api/cs/preview', body())); } catch (e) { Toast.error(e.message); }
