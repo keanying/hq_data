@@ -719,7 +719,7 @@
 
   // ------------------------------------------------------------ 客服数据（大模型改写原始客服问答 → 在线客服会话）
   const CS_INTENTS = ['门票', '门票价格', '预约', '预约购票', '开放时间', '交通', '游玩建议', '退改', '退改规则', '住宿', '餐饮', '其他'];
-  const CS_KIND = { ok: ['green', '成功'], rejected: ['orange', '不合格'], failed: ['red', '调用失败'], cancelled: ['grey', '未处理'] };
+  const CS_KIND = { ok: ['green', '成功'], skipped: ['grey', '跳过·非本景区'], rejected: ['orange', '不合格'], failed: ['red', '调用失败'], cancelled: ['grey', '未处理'] };
 
   function Bubble({ t }) {
     const user = t.role === 'user' || t.role === '游客';
@@ -757,6 +757,8 @@
               <span>订单 / 结束</span><div>${rec.related_order_id || '—'} · ${rec.end_type} · 满意度 ${rec.satisfaction_score ?? '未评'}</div></div>
             <div className="chat">${rec.turns.map((t) => html`<${Bubble} key=${t.turn} t=${t} />`)}</div>
             <details style=${{ marginTop: 8 }}><summary className="muted">完整 JSON（目标格式 + source）</summary><pre className="log" style=${{ maxHeight: 320 }}>${JSON.stringify(rec, null, 2)}</pre></details>`
+            : d.kind === 'skipped' ? html`<${Banner} type="info" closeIcon=${null}
+                description=${html`<div><b>跳过：不是在问这个景区</b></div><div style=${{ marginTop: 4 }}>${d.error}</div><div className="muted sm" style=${{ marginTop: 6 }}>我们只按真实问答改写；换成本景区的问题就得编答案，所以不生成。这条不算不合格，再次开始时也不会重复调用模型。</div>`} />`
             : html`<${Banner} type="danger" closeIcon=${null} description=${d.error || '没有生成结果'} />`}
         </div>
       </div>`}
@@ -794,11 +796,11 @@
     const speed = elapsed && job.done ? (job.done / elapsed * 60).toFixed(1) : null;
     const cols = [
       { title: '#', dataIndex: 'n', width: 56, render: (v) => html`<span className="num muted">${v}</span>` },
-      { title: '状态', dataIndex: 'kind', width: 92, render: (v, r) => { const [c, t] = CS_KIND[v] || ['grey', v]; return html`<${Tag} color=${r.needs_review ? 'amber' : c} size="small">${r.needs_review ? '需复核' : t}<//>`; } },
+      { title: '状态', dataIndex: 'kind', width: 118, render: (v, r) => { const [c, t] = CS_KIND[v] || ['grey', v]; return html`<${Tag} color=${r.needs_review ? 'amber' : c} size="small">${r.needs_review ? '需复核' : t}<//>`; } },
       { title: '我们的景区 / 原始景点', dataIndex: 'scenic_name', render: (v, r) => html`<div className="cell-2"><div className="t ell">${v || '—'}</div>
           <div className="d ell">${r.attraction_name !== v ? r.attraction_name + ' · ' : ''}${r.intent || ''} · ${r.source_id}${r.variant > 1 ? ` · 第 ${r.variant} 版` : ''}</div></div>` },
       { title: '会话', dataIndex: 'session_id', width: 190, render: (v, r) => html`<div className="cell-2"><div className="num sm">${v || '—'}</div><div className="d">${r.turns ? r.turns + ' 条消息' : ''}</div></div>` },
-      { title: '说明', dataIndex: 'flags', render: (v, r) => html`<div className="ell sm" style=${{ color: r.error ? '#c62828' : r.needs_review ? '#9a5b00' : undefined }} title=${r.error || v.join('；')}>${r.error || v.join('；') || '—'}</div>` },
+      { title: '说明', dataIndex: 'flags', render: (v, r) => html`<div className="ell sm" style=${{ color: r.kind === 'skipped' ? '#8a8f99' : r.error ? '#c62828' : r.needs_review ? '#9a5b00' : undefined }} title=${r.error || v.join('；')}>${r.error || v.join('；') || '—'}</div>` },
       { title: '用时', dataIndex: 'elapsed', width: 64, align: 'right', render: (v) => html`<span className="num sm">${v != null ? v + 's' : ''}</span>` },
     ];
     const box = useRef(null); const h = useHeight(box);
@@ -839,7 +841,7 @@
             </div>
             <div className="cs-stats">
               <span><em>成功</em><b>${fmt(stats.ok || 0)}</b></span><span className="warn"><em>需复核</em><b>${fmt(stats.review || 0)}</b></span>
-              <span className="warn"><em>不合格</em><b>${fmt(stats.rejected || 0)}</b></span><span className="bad"><em>调用失败</em><b>${fmt(stats.failed || 0)}</b></span>
+              <span><em>跳过·非本景区</em><b>${fmt(stats.skipped || 0)}</b></span><span className="warn"><em>不合格</em><b>${fmt(stats.rejected || 0)}</b></span><span className="bad"><em>调用失败</em><b>${fmt(stats.failed || 0)}</b></span>
               ${stats.cancelled ? html`<span><em>停止未处理</em><b>${fmt(stats.cancelled)}</b></span>` : ''}
               <span><em>用时</em><b>${elapsed}s</b></span>${speed && html`<span><em>速度</em><b>${speed}</b> 条/分</span>`}
             </div>
@@ -852,6 +854,10 @@
               ${pv.excluded_other ? html`<div className="muted sm" style=${{ marginTop: 4 }}>已排除 <b>${fmt(pv.excluded_other)}</b> 通问到同城别的景点的（不是在问这个景区）
                 <${Popover} trigger="click" position="bottomLeft" content=${html`<div style=${{ width: 520, maxHeight: 360, overflow: 'auto', padding: '8px 12px', fontSize: 12.5, lineHeight: 1.7 }}>
                   ${pv.excluded_examples.map((x) => html`<div key=${x.dialogue_id}><b>${x.scenic_name}</b> ← 问到「${x.other}」：<span className="muted">${x.question}</span></div>`)}</div>`}>
+                  <a style=${{ marginLeft: 6 }}>看例子</a><//></div>` : ''}
+              ${pv.excluded_offtopic ? html`<div className="muted sm" style=${{ marginTop: 4 }}>已排除 <b>${fmt(pv.excluded_offtopic)}</b> 通问机票 / 火车票等别的业务的（换成景区问题就得编答案）
+                <${Popover} trigger="click" position="bottomLeft" content=${html`<div style=${{ width: 520, maxHeight: 360, overflow: 'auto', padding: '8px 12px', fontSize: 12.5, lineHeight: 1.7 }}>
+                  ${pv.offtopic_examples.map((x) => html`<div key=${x.dialogue_id}><b>${x.scenic_name}</b> ← 问「${x.other}」：<span className="muted">${x.question}</span></div>`)}</div>`}>
                   <a style=${{ marginLeft: 6 }}>看例子</a><//></div>` : ''}</div>
             <div className="cs-sc">${pv.by_scenic.slice(0, 40).map((x) => html`<${Tooltip} key=${x.scenic_id || 'none'} content=${`原始景点：${x.spots.join('、')}`}>
               <span className="chip2" onClick=${() => x.scenic_id && go('data', { q: x.scenic_id })}>${x.scenic_name}<b>${x.n}</b></span><//>`)}</div>
