@@ -190,6 +190,22 @@ def assemble(src, scenic, variant, js, cfg, rnd):
     """模型给的轮次 + 程序生成的会话外壳（ID、时间、订单号等）→ 目标格式。"""
     if js.get("relevant") is False:
         raise NotRelevant(f"模型判断原始问答不是在问「{scenic['scenic_name'] if scenic else src['attraction_name']}」：{js.get('reason') or ''}")
+    need_order = (src["scene"] in ("预订购票", "订单售后")) or (src["action"] not in (None, "", "none"))
+    rec = build_session(js, rnd, "%s|%s" % (src["id"], variant), need_order, scenic["scenic_id"] if scenic else None,
+                        scenic["scenic_name"] if scenic else src["attraction_name"])
+    flags = quality_flags(src, rec)
+    # 输出 = 目标格式的字段 + 一个 source：指回原始对话，以及改写方式 / 质检结果
+    rec["source"] = dict(dialogue_id=src["id"], data_type=src["data_type"], dataset_split_type=src["split"], attraction_id=src["attraction_id"],
+                         attraction_name=src["attraction_name"], city=src["city"], intent_type=src["intent"], scene_type=src["scene"],
+                         source_url=src["url"], variant=variant, generate_method="llm_rewrite", model=cfg.get("ai_model"),
+                         prompt_version=PROMPT_VERSION, generated_at=datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                         is_resolved=bool(js.get("is_resolved")), needs_review=bool(flags), check_flags=flags)
+    return rec
+
+
+def build_session(js, rnd, key, need_order, scenic_id, scenic_name, id_digits=6):
+    """模型给的轮次 → 会话外壳（session_id、访客、开始时间、每轮 ts、订单号、结束方式、时长），不含 source。
+    key 决定 session_id（同一 key 重跑得到同一个 ID，写库时覆盖而不是重复）。"""
     raw_turns = [t for t in js.get("turns") or [] if isinstance(t, dict) and str(t.get("text") or "").strip()]
     if len(raw_turns) < 2 or not any(t.get("role") == "user" for t in raw_turns) or not any(t.get("role") == "agent" for t in raw_turns):
         raise ValueError("轮次太少，或缺少游客 / 客服发言")
@@ -205,25 +221,15 @@ def assemble(src, scenic, variant, js, cfg, rnd):
         if role == "agent":
             turn["agent_id"] = "ROBOT" if x.get("agent_type") == "robot" else human_id
         turns.append(turn)
-    need_order = (src["scene"] in ("预订购票", "订单售后")) or (src["action"] not in (None, "", "none"))
     order = f"DD{(day - timedelta(days=rnd.randint(1, 10))).strftime('%Y%m%d')}{rnd.randint(0, 999999):06d}" if need_order else None
     score = js.get("satisfaction_score")
     score = int(score) if isinstance(score, (int, float)) and 1 <= int(score) <= 5 else None
     end_type = js.get("end_type") if js.get("end_type") in END_TYPES else "用户主动结束"
-    key = "%s|%s" % (src["id"], variant)
-    sid = "cs_%s_%06d" % (start.strftime("%Y%m%d"), int(hashlib.sha1(key.encode()).hexdigest()[:8], 16) % 1000000)
-    rec = dict(session_id=sid, channel=None, visitor_id=f"V{rnd.randint(10000000, 99999999)}",
-               scenic_id=scenic["scenic_id"] if scenic else None, scenic_name=scenic["scenic_name"] if scenic else src["attraction_name"],
-               start_time=start.strftime("%Y-%m-%d %H:%M:%S"), related_order_id=order, turns=turns, end_type=end_type,
-               satisfaction_score=score, session_duration_sec=int((t - start).total_seconds()))
-    flags = quality_flags(src, rec)
-    # 输出 = 目标格式的字段 + 一个 source：指回原始对话，以及改写方式 / 质检结果
-    rec["source"] = dict(dialogue_id=src["id"], data_type=src["data_type"], dataset_split_type=src["split"], attraction_id=src["attraction_id"],
-                         attraction_name=src["attraction_name"], city=src["city"], intent_type=src["intent"], scene_type=src["scene"],
-                         source_url=src["url"], variant=variant, generate_method="llm_rewrite", model=cfg.get("ai_model"),
-                         prompt_version=PROMPT_VERSION, generated_at=datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-                         is_resolved=bool(js.get("is_resolved")), needs_review=bool(flags), check_flags=flags)
-    return rec
+    h = int(hashlib.sha1(key.encode()).hexdigest()[:8 if id_digits <= 6 else 15], 16) % (10 ** id_digits)  # 6 位：和旧版同一算法，重跑仍覆盖
+    sid = "cs_%s_%0*d" % (start.strftime("%Y%m%d"), id_digits, h)
+    return dict(session_id=sid, channel=None, visitor_id=f"V{rnd.randint(10000000, 99999999)}", scenic_id=scenic_id, scenic_name=scenic_name,
+                start_time=start.strftime("%Y-%m-%d %H:%M:%S"), related_order_id=order, turns=turns, end_type=end_type,
+                satisfaction_score=score, session_duration_sec=int((t - start).total_seconds()))
 
 
 def quality_flags(src, rec):
@@ -316,29 +322,58 @@ def load_jsonl(path, log=print, should_stop=lambda: False, progress=lambda done,
 
 
 OUT_ROOT = HERE / "out"
-BATCH_FILES = ["dialogs.jsonl", "mapping.csv", "source_extract.jsonl", "rejected.jsonl"]
+BATCH_PREFIXES = ("cs_synth_", "cs_expand_")
+BATCH_FILES = ["dialogs.jsonl", "mapping.csv", "source_extract.jsonl", "scenic_extract.jsonl", "rejected.jsonl"]
+_count_cache = {}
+
+
+def _count_lines(p):
+    """文件行数（按 大小 + 修改时间 缓存；大文件按字节数数换行，不解析）。"""
+    st = p.stat()
+    k = (str(p), st.st_size, st.st_mtime)
+    if k not in _count_cache:
+        n = 0
+        with p.open("rb") as f:
+            for chunk in iter(lambda: f.read(1 << 20), b""):
+                n += chunk.count(b"\n")
+        _count_cache[k] = n
+    return _count_cache[k]
+
+
+def _review_count(d):
+    """需复核条数：生成时写的 _stats.json 优先；没有时小文件现数，大文件不数（返回 None）。"""
+    sf = d / "_stats.json"
+    if sf.exists():
+        try:
+            return json.loads(sf.read_text(encoding="utf-8")).get("review")
+        except ValueError:
+            pass
+    p = d / "dialogs.jsonl"
+    if not p.exists():
+        return 0
+    if p.stat().st_size > 50 * 1024 * 1024:
+        return None
+    k = ("review", str(p), p.stat().st_size, p.stat().st_mtime)
+    if k not in _count_cache:
+        n = 0
+        for line in p.open(encoding="utf-8"):
+            n += '"needs_review": true' in line
+        _count_cache[k] = n
+    return _count_cache[k]
 
 
 def batches():
-    """out/ 下已有的生成批次（目录），带各文件条数，给页面导出用。"""
+    """out/ 下已有的生成批次（目录），带各文件条数，给页面导出用。改写 = cs_synth_*，按景区数据扩展 = cs_expand_*。"""
     res = []
-    for d in sorted(OUT_ROOT.glob("cs_synth_*"), reverse=True):
-        if not d.is_dir():
-            continue
-        info = dict(name=d.name, files={})
+    dirs = [d for pre in BATCH_PREFIXES for d in OUT_ROOT.glob(pre + "*") if d.is_dir()]
+    for d in sorted(dirs, key=lambda x: x.stat().st_mtime, reverse=True):
+        info = dict(name=d.name, mode="expand" if d.name.startswith("cs_expand_") else "rewrite", files={})
         for f in BATCH_FILES:
             p = d / f
             if p.exists():
-                n = sum(1 for x in p.open(encoding="utf-8-sig") if x.strip())
-                info["files"][f] = n - 1 if f.endswith(".csv") else n
-        review = 0
-        if (d / "dialogs.jsonl").exists():
-            for line in (d / "dialogs.jsonl").open(encoding="utf-8"):
-                try:
-                    review += bool(json.loads(line)["source"].get("needs_review"))
-                except (ValueError, KeyError):
-                    pass
-        info["review"] = review
+                n = _count_lines(p)
+                info["files"][f] = max(0, n - 1) if f.endswith(".csv") else n
+        info["review"] = _review_count(d)
         info["mtime"] = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(d.stat().st_mtime))
         res.append(info)
     return res
@@ -346,9 +381,139 @@ def batches():
 
 def batch_dir(name):
     d = (OUT_ROOT / name).resolve()
-    if d.parent != OUT_ROOT.resolve() or not d.name.startswith("cs_synth_") or not d.is_dir():
+    if d.parent != OUT_ROOT.resolve() or not d.name.startswith(BATCH_PREFIXES) or not d.is_dir():
         raise FileNotFoundError(f"没有这个批次：{name}")
     return d
+
+
+# ---------------------------------------------------------------- 从 MySQL 导出（页面「导出」→「从 MySQL」）
+EXPORT_FORMATS = {"jsonl": "会话 JSONL（目标格式 + source）", "json": "会话 JSON 数组", "csv_sessions": "会话表 CSV", "csv_turns": "轮次表 CSV"}
+
+
+def _export_sql(f):
+    """筛选条件 → (FROM ... WHERE ..., 参数)。f：method(llm_rewrite/llm_expand) scenic city review(ok/review) date_from date_to。"""
+    import db
+    st, tt = db.ident(SESSION_TABLE), db.ident(TURN_TABLE)
+    sql = f"FROM {st} s JOIN {tt} t ON t.session_id = s.session_id AND t.travel_date = s.travel_date AND t.turn_no = 1"
+    where, params = [], []
+    if f.get("city"):  # 先查这个城市的景区 ID 再过滤（不 JOIN：两张表排序规则不同时 JOIN 会报 Illegal mix of collations）
+        with db.cursor() as cur:
+            cur.execute(f"SELECT {db.C['id']} id FROM {db.SCENIC_TABLE} WHERE {db.C['city']} = %s", (f["city"],))
+            ids = [str(r["id"]) for r in cur.fetchall()]
+        where.append(f"s.scenic_id IN ({','.join(['%s'] * len(ids))})" if ids else "1 = 0")
+        params += ids
+    if f.get("method") in ("llm_rewrite", "llm_expand"):
+        where.append("t.source LIKE %s")
+        params.append(f'%"generate_method": "{f["method"]}"%')
+    if f.get("review") in ("ok", "review"):
+        where.append("t.source LIKE %s")
+        params.append(f'%"needs_review": {"true" if f["review"] == "review" else "false"}%')
+    if f.get("scenic"):
+        names = [x.strip() for x in re.split(r"[,，]", f["scenic"]) if x.strip()]
+        if names:
+            where.append("(" + " OR ".join(["s.scenic_id = %s OR s.scenic_name LIKE %s"] * len(names)) + ")")
+            for x in names:
+                params += [x, f"%{x}%"]
+    for k, op in (("date_from", ">="), ("date_to", "<=")):
+        v = re.sub(r"\D", "", str(f.get(k) or ""))[:8]
+        if len(v) == 8:
+            where.append(f"s.travel_date {op} %s")
+            params.append(int(v))
+    return sql + (" WHERE " + " AND ".join(where) if where else ""), params
+
+
+def export_count(f):
+    import db
+    sql, params = _export_sql(f)
+    with db.cursor() as cur:
+        mysql_check()
+        cur.execute(f"SELECT COUNT(*) n, SUM(s.turn_cnt) turns {sql}", params)
+        r = cur.fetchone()
+    return dict(sessions=int(r["n"] or 0), turns=int(r["turns"] or 0))
+
+
+def _fmt_dt(v):
+    return v.strftime("%Y-%m-%d %H:%M:%S") if hasattr(v, "strftime") else (str(v) if v is not None else None)
+
+
+def export_iter(f, fmt="jsonl", batch=500):
+    """按条件从两张表流式导出（不一次读进内存，百万条也行）。产出字符串片段。"""
+    import io
+    import pymysql
+    import db
+    sql, params = _export_sql(f)
+    limit = int(f.get("limit") or 0)
+    head = dict(csv_sessions=["session_id", "channel", "visitor_id", "scenic_id", "scenic_name", "start_time", "related_order_id", "end_type",
+                              "satisfaction_score", "session_duration_sec", "turn_cnt", "travel_date", "generate_method", "intent_type", "topic_name",
+                              "needs_review", "check_flags", "source"],
+                csv_turns=["session_id", "turn_no", "role", "msg_type", "msg_text", "agent_id", "msg_ts", "travel_date", "source"])
+
+    def csv_line(row):
+        buf = io.StringIO()
+        csv.writer(buf).writerow(row)
+        return buf.getvalue()
+    if fmt in head:
+        yield "\ufeff" + csv_line(head[fmt])  # 带 BOM，Excel 直接打开不乱码
+    elif fmt == "json":
+        yield "[\n"
+    first = True
+    sconn = pymysql.connect(**{**db.DB, "cursorclass": pymysql.cursors.SSDictCursor})
+    tconn = pymysql.connect(**db.DB)
+    try:
+        with sconn.cursor() as scur:
+            scur.execute(f"SELECT s.*, t.source {sql} ORDER BY s.travel_date, s.session_id" + (f" LIMIT {limit}" if limit else ""), params)
+            while True:
+                rows = scur.fetchmany(batch)
+                if not rows:
+                    break
+                if fmt == "csv_sessions":
+                    out = []
+                    for r in rows:
+                        try:
+                            g = json.loads(r["source"] or "{}")
+                        except ValueError:
+                            g = {}
+                        out.append(csv_line([r["session_id"], r["channel"], r["visitor_id"], r["scenic_id"], r["scenic_name"], _fmt_dt(r["start_time"]),
+                                             r["related_order_id"], r["end_type"], r["satisfaction_score"], r["session_duration_sec"], r["turn_cnt"],
+                                             r["travel_date"], g.get("generate_method"), g.get("intent_type"), g.get("topic_name"),
+                                             int(bool(g.get("needs_review"))), "；".join(g.get("check_flags") or []), r["source"]]))
+                    yield "".join(out)
+                    continue
+                with tconn.cursor() as tcur:
+                    tcur.execute(f"""SELECT session_id, turn_no, role, msg_type, msg_text, agent_id, msg_ts, travel_date, source FROM {db.ident(TURN_TABLE)}
+                                     WHERE session_id IN ({','.join(['%s'] * len(rows))}) ORDER BY session_id, turn_no""", [r["session_id"] for r in rows])
+                    turns = {}
+                    for t in tcur.fetchall():
+                        turns.setdefault((t["session_id"], t["travel_date"]), []).append(t)
+                out = []
+                for r in rows:
+                    ts = turns.get((r["session_id"], r["travel_date"]), [])
+                    if fmt == "csv_turns":
+                        out += [csv_line([t["session_id"], t["turn_no"], t["role"], t["msg_type"], t["msg_text"], t["agent_id"], _fmt_dt(t["msg_ts"]),
+                                          t["travel_date"], t["source"] if t["turn_no"] == 1 else ""]) for t in ts]
+                        continue
+                    try:
+                        g = json.loads(r["source"] or "{}")
+                    except ValueError:
+                        g = {"raw": r["source"]}
+                    rec = dict(session_id=r["session_id"], channel=r["channel"], visitor_id=r["visitor_id"], scenic_id=r["scenic_id"],
+                               scenic_name=r["scenic_name"], start_time=_fmt_dt(r["start_time"]), related_order_id=r["related_order_id"],
+                               turns=[{k: v for k, v in dict(turn=t["turn_no"], role=t["role"], msg_type=t["msg_type"], text=t["msg_text"],
+                                                             ts=t["msg_ts"].strftime("%H:%M:%S") if hasattr(t["msg_ts"], "strftime") else t["msg_ts"],
+                                                             agent_id=t["agent_id"]).items() if not (k == "agent_id" and v is None)} for t in ts],
+                               end_type=r["end_type"], satisfaction_score=r["satisfaction_score"], session_duration_sec=r["session_duration_sec"], source=g)
+                    line = json.dumps(rec, ensure_ascii=False)
+                    if fmt == "json":
+                        out.append(("" if first else ",\n") + line)
+                        first = False
+                    else:
+                        out.append(line + "\n")
+                yield "".join(out)
+    finally:
+        sconn.close()
+        tconn.close()
+    if fmt == "json":
+        yield "\n]\n"
 
 
 # ---------------------------------------------------------------- 主流程
