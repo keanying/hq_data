@@ -36,7 +36,8 @@
   }
 
   let prefs = {};
-  const S = { list: [], total: 0, i: -1, detail: null, decisions: {}, res: null, keyword: '', loading: false, rawOpen: {}, domOpen: false };
+  // running：自动核对（自动搜索 / 自动保留 / AI 自动判断 / 自动通过 / 无人跳过）只在点了「开始」之后才跑；每次打开页面都是暂停的
+  const S = { list: [], total: 0, i: -1, detail: null, decisions: {}, res: null, keyword: '', loading: false, rawOpen: {}, domOpen: false, running: false };
 
   async function boot() {
     const ui = mount(); // 先把按钮放出来，出错也能看到原因
@@ -294,6 +295,10 @@
   .idle-banner b { font-size: 13px; }
   .judge-note { font-size: 12px; color: #57606a; margin: 2px 0 6px; }
   .help { font-size: 11px; color: #57606a; margin-top: 6px; line-height: 1.6; }
+  header button.run-btn, :host(.embed) header button.run-btn { width: auto; padding: 0 14px; font-size: 13px; font-weight: 600; color: #fff; background: #6c4dff; border: 0; display: inline-flex; align-items: center; gap: 4px; }
+  header button.run-btn:hover, :host(.embed) header button.run-btn:hover { background: #5b3deb; }
+  header button.run-btn.on, :host(.embed) header button.run-btn.on { background: #fff4e5; color: #9a5b00; border: 1px solid #f5c26b; }
+  .paused-note { font-size: 12px; color: #6b5e00; background: #fffbe6; border: 1px dashed #e8d27a; border-radius: 8px; padding: 6px 10px; margin: 0 0 8px; }
 </style>
 <button class="fab" id="fab">POI核对</button>
 <div class="panel hidden" id="panel">
@@ -301,6 +306,7 @@
   <header>
     <b class="ttl-main">景区 ${IC('link', '↔')} 携程POI</b>
     <span class="grow" id="progress"></span>
+    <button id="run" class="run-btn"></button>
     <button id="prev" title="上一个 (←)">${IC('left', '‹')}</button>
     <button id="next" title="下一个 (→)">${IC('right', '›')}</button>
     <button id="gear" title="设置">${IC('set', '⚙')}</button>
@@ -467,7 +473,25 @@
       $('#note').value = (S.detail.status && S.detail.status.note) || '';
       render();
       // 已审核（approval=1）的景区：不再自动搜索 / 自动保留 / 自动审核，只展示已保留的；要复核手动点搜索词或「重新搜索」
-      if (prefs.auto_search && Number(d.scenic.approval) !== 1) await autoSequence();
+      if (S.running && prefs.auto_search && Number(d.scenic.approval) !== 1) await autoSequence();
+    }
+    function renderRun() {
+      const b = $('#run'); if (!b) return;
+      b.className = 'run-btn' + (S.running ? ' on' : '');
+      b.innerHTML = S.running ? `${IC('pause', '❚❚')} 暂停` : `${IC('play', '▶')} 开始`;
+      b.title = S.running ? '暂停自动核对：当前景区不再自动搜索 / 判断 / 通过 / 跳过' : '开始自动核对：自动搜索 → 自动保留 → AI 判断 → 自动通过，判不了的无人操作时跳过';
+    }
+    async function setRunning(on) {
+      S.running = !!on;
+      renderRun();
+      if (!S.running) {  // 暂停：停掉正在排队的搜索词、倒计时；正在等的 AI 结果回来后只展示，不再自动操作
+        stopSequence(); cancelAutoApprove(true); cancelIdleSkip(true);
+        toast('已暂停自动核对'); render(); return;
+      }
+      toast('已开始自动核对');
+      if (!S.detail && !S.list.length) { await start(); return; }
+      if (S.detail && Number(S.detail.scenic.approval) !== 1 && !S.seq && !S.loading && !(S.ai && S.ai.loading)) await autoSequence();
+      else if (S.detail && Number(S.detail.scenic.approval) === 1) await go(1);
     }
     function renderProgress() {
       const st = { todo: '待核对', done: '已审核', skip: '已跳过', auto: '自动通过', ai: 'AI 通过', all: '全部' }[(prefs.filters || {}).status] || '';
@@ -556,7 +580,7 @@
         await doSearch(kws[i], false);
       }
       if (S.seq === seq) { S.seq = null; render(); }
-      if (seq.stopped || !S.detail || S.detail.scenic.id !== sid) return;
+      if (seq.stopped || !S.running || !S.detail || S.detail.scenic.id !== sid) return;
       const ruleReason = (S.merged && S.merged.judge && S.merged.judge.reason) || (S.merged && S.merged.items.length ? '没有能自动通过的结果' : '没有搜到结果');
       if (aiAll()) { cancelAutoApprove(true); await runAI(true, ruleReason); return; }
       if (S.autoApprove) return;
@@ -582,18 +606,19 @@
         const msg = String(e.message || e).replace(/^AIError:\s*/, '');
         S.ai = { error: msg, secs: Math.round((Date.now() - (S.ai && S.ai.t0 || Date.now())) / 1000) }; render();
         toast('AI 判断失败：' + msg, true);
-        if (auto) startIdleSkip(ruleReason || 'AI 判断失败');
+        if (auto && S.running) startIdleSkip(ruleReason || 'AI 判断失败');
         return;
       }
       clearInterval(S.aiTick);
       if (!S.detail || S.detail.scenic.id !== sid) return;
+      if (auto && !S.running) auto = false; // 等 AI 时点了暂停：只展示结果，不自动保留 / 通过 / 跳过
       if (!r.enabled) { S.ai = null; render(); if (auto) startIdleSkip(ruleReason); return; }
       S.ai = r;
       const minc = Number(r.min_confidence) || 0.8;
       const keepKeys = Object.entries(r.decisions || {}).filter(([, v]) => v.keep && v.confidence >= minc).map(([k]) => k);
       const pool = [...shown().sights, ...S.detail.candidates.map((c) => Object.assign(candAsItem(c), { address: c.address }))];
       let n = 0;
-      if (Number(S.detail.scenic.approval) !== 1) {
+      if (auto && Number(S.detail.scenic.approval) !== 1) {
         for (const key of keepKeys) {
           if (S.decisions[key] === 'keep' || S.manualOff.has(key)) continue;
           const it = pool.find((x) => x.key === key);
@@ -641,7 +666,7 @@
       toast('已接管，这个景区不会自动跳过');
     }
     function startIdleSkip(reason) {
-      if (prefs.idle_skip === false || S.takenOver || !S.detail) return;
+      if (!S.running || prefs.idle_skip === false || S.takenOver || !S.detail) return;
       const s = S.detail.scenic, st = S.detail.status;
       // 已审核的不自动跳；之前跳过的，只有在「已跳过」筛选里（人在逐个处理）才不自动跳，「全部」里照常无人接管就跳过、继续下一个
       if (Number(s.approval) === 1 || (st && st.status === 'skip' && ((prefs.filters || {}).status === 'skip'))) return;
@@ -717,7 +742,7 @@
     const SIMILAR = 0.4;
     async function autoSelect() {
       // 「每个景区都过 AI」模式：规则不再自动保留，最终保留什么只看 AI
-      if (aiAll() || !prefs.auto_keep_similar || !S.detail || Number(S.detail.scenic.approval) === 1) return;
+      if (!S.running || aiAll() || !prefs.auto_keep_similar || !S.detail || Number(S.detail.scenic.approval) === 1) return;
       const s = S.detail.scenic, sid = s.id;
       const items = [...shown().sights, ...S.detail.candidates.map((c) => Object.assign(candAsItem(c), { address: c.address }))];
       const MJ = (S.merged && S.merged.judge) || {};
@@ -744,6 +769,7 @@
     const aiAll = () => !!(prefs.ai_enabled && prefs.ai_key_set && (prefs.ai_mode || 'all') === 'all');
     function maybeAutoApprove(override) {
       const j = override || (S.merged && S.merged.judge);
+      if (!S.running) return; // 没点「开始」：只展示判断，不自动通过
       if (!override && aiAll()) return; // 等 AI 判
       if (!(override ? prefs.ai_auto_approve !== false : prefs.auto_approve) || !j || !j.approve || !S.detail || Number(S.detail.scenic.approval) === 1) return;
       cancelAutoApprove(true);
@@ -894,7 +920,7 @@
     }
 
     function render() {
-      renderProgress();
+      renderProgress(); renderRun();
       const b = $('#body');
       if (!S.detail) {
         if (S.total !== 0) { b.innerHTML = '<div class="muted">加载中…</div>'; return; }
@@ -1000,6 +1026,7 @@
         <div class="sec side-sec"><b>搜索词</b><span class="muted">点一下在携程里搜</span></div>
         <div class="tools">${chips}</div>${spotRow}
         </aside><section class="maincol">
+        ${!S.running && Number(s.approval) !== 1 ? `<div class="paused-note">${IC('pause', '❚❚')} 自动核对已暂停：点右上角「开始」后才会自动搜索、AI 判断、自动通过和无人跳过。现在可以手动点搜索词、「AI 判断」、保留和「审核完成」。</div>` : ''}
         ${Number(s.approval) === 1 && !S.searches.length && !S.loading ? `<div class="approved-note">${IC('ok-circle', '✓')} 这个景区已审核（approval=1），不再自动搜索和审核。需要复核时点左侧的搜索词，或在下面输入关键词搜索；改了保留之后点「审核完成」保存。</div>` : ''}
         <div class="tools">
           <input type="text" id="kw" placeholder="自定义关键词（按 / 聚焦）" style="flex:1;min-width:140px">
@@ -1056,6 +1083,7 @@
         else if (t.id === 'close') { $('#panel').classList.add('hidden'); $('#fab').style.display = ''; applyLayout(); }
         else if (t.id === 'gear') $('#settings').classList.toggle('open');
         else if (t.id === 'ai-run') { cancelIdleSkip(true); await runAI(false); }
+        else if (t.id === 'run') await setRunning(!S.running);
         else if (t.id === 'prev') await go(-1);
         else if (t.id === 'next') await go(1);
         else if (t.id === 'done') await finish('done');
