@@ -809,7 +809,7 @@
   }
 
   /** 可生成总量：改写真实对话 + 按景区真实数据扩展，各自单元数 × 版数，和 MySQL 里已经生成的 */
-  function CsCapacity({ visible, onClose, dataDir }) {
+  function CsCapacity({ visible, onClose, dataDir, onApply }) {
     const [v, setV] = useState({ rewrite_variants: 10, expand_variants: 7, guide_variants: 5, workers: 32 });
     const [d, setD] = useState(null);
     const [busy, setBusy] = useState(false);
@@ -822,7 +822,8 @@
     useEffect(() => { if (visible && !d) calc(); }, [visible]);
     const set = (k) => (x) => setV((o) => ({ ...o, [k]: x }));
     const eta = (n) => dur(n / (Math.max(1, v.workers) * 5));
-    const row = (name, how, x) => html`<tr><td><b>${name}</b><div className="muted sm">${how}</div></td><td className="num">${fmt(x.scenics)}</td>
+    const row = (name, how, x, mode) => html`<tr><td><b>${name}</b><div className="muted sm">${how}</div>
+      ${onApply && mode && html`<a className="sm" onClick=${() => onApply(mode, x.variants)}>按这个设置（${x.variants} 版、全部）→</a>`}</td><td className="num">${fmt(x.scenics)}</td>
       <td className="num">${fmt(x.units)}</td><td className="num">× ${x.variants}</td><td className="num"><b>${fmt(x.total)}</b></td>
       <td className="num">${x.generated == null ? '—' : html`${fmt(x.generated)}<div className="muted sm">合格 ${fmt(x.generated_ok)}</div>`}</td></tr>`;
     return html`<${Modal} title="可生成总量（不调模型）" visible=${visible} onCancel=${onClose} footer=${null} width=${860}>
@@ -835,12 +836,12 @@
       </div>
       ${!d ? html`<${Spin} />` : html`<div>
         <table className="cap-tb"><thead><tr><th>方式</th><th>景区</th><th>单元</th><th>版数</th><th>可生成</th><th>MySQL 已生成</th></tr></thead><tbody>
-          ${row('改写真实对话', '单元 = 对到我们已审核景区的真实 · train 客服对话（随审核增加）', d.rewrite)}
-          ${row('按景区真实数据扩展', '单元 = 景区 × 有资料的主题 + 每条讲解资料', d.expand)}
+          ${row('改写真实对话', '单元 = 对到我们已审核景区的真实 · train 客服对话（随审核增加）', d.rewrite, 'rewrite')}
+          ${row('按景区真实数据扩展', '单元 = 景区 × 有资料的主题 + 每条讲解资料', d.expand, 'expand')}
           <tr className="sum"><td><b>智能客服 小计</b></td><td></td><td></td><td></td><td className="num"><b>${fmt(d.total)}</b></td>
             <td className="num">${d.rewrite.generated == null ? '—' : fmt((d.rewrite.generated || 0) + (d.expand.generated || 0))}</td></tr>
-          ${d.guide_eval && row('讲解内容评价', '单元 = 知识条目（讲解包 + RedAttractionQA + 景区表基础资料），每版不同问题组合', d.guide_eval)}
-          ${d.guide_narr && row('个性化讲解', '单元 = 知识条目，每版换一个合成游客和任务参数', d.guide_narr)}
+          ${d.guide_eval && row('讲解内容评价', '单元 = 知识条目（讲解包 + RedAttractionQA + 景区表基础资料），每版不同问题组合', d.guide_eval, 'guide_eval')}
+          ${d.guide_narr && row('个性化讲解', '单元 = 知识条目，每版换一个合成游客和任务参数', d.guide_narr, 'guide_narr')}
           ${d.guide_eval && html`<tr className="sum"><td><b>讲解 小计</b></td><td></td><td></td><td></td><td className="num"><b>${fmt(d.guide_total)}</b></td><td></td></tr>
           <tr className="sum"><td><b>全部合计</b></td><td></td><td></td><td></td><td className="num"><b>${fmt(d.total + d.guide_total)}</b></td><td></td></tr>`}
         </tbody></table>
@@ -902,6 +903,14 @@
     const [pv, setPv] = useState(null);
     const [pvBusy, setPvBusy] = useState(false);
     const [capOpen, setCapOpen] = useState(false);
+    const [expOpen, setExpOpen] = useState(false);
+    // 「可生成总量」里点「按这个设置」：切到对应生成方式，每单元版数 = 那一行的版数，本次最多 = 0（全部），范围清空 = 全部
+    const applyCap = (mode, variants) => {
+      setP((o) => ({ ...o, mode, variants, limit: 0, scenic: '', scenic_city: '', grade: [], topics: [], kb: [], only_approved: false,
+        data_type: mode === 'rewrite' ? '真实' : o.data_type, split: mode === 'rewrite' ? 'train' : o.split, intent: mode === 'rewrite' ? [] : o.intent }));
+      setCapOpen(false);
+      Toast.success(`已设置：每单元 ${variants} 版，本次最多 0（全部）。并发按方舟账号限额填，再点「开始生成」`);
+    };
     const [jobId, setJobId] = useState(0);
     const [st, refresh] = usePoll(() => api(`/api/cs/state${jobId ? `?job_id=${jobId}` : ''}`), 1500, [jobId]);
     const [bt, refreshBt] = usePoll(() => api('/api/cs/batches'), 10000);
@@ -1048,15 +1057,23 @@
       </div>
       <div className="row2 fill">
         <${Card} title="处理记录" sub=${st ? `${fmt(st.total_items)} 条 · 点一行看数据交换` : ''} bodyClass="flush"
-          extra=${st && st.history && st.history.length > 1 && html`<${Select} size="small" value=${job && job.id} style=${{ width: 220 }} onChange=${setJobId}
-            optionList=${st.history.map((x) => ({ value: x.id, label: `#${x.id} ${x.type_name} · ${(x.started || x.created || '').slice(5, 16)}` }))} />`}>
+          extra=${html`<div style=${{ display: 'flex', gap: 8, alignItems: 'center' }}>${st && st.history && st.history.length > 1 && html`<${Select} size="small" value=${job && job.id} style=${{ width: 220 }} onChange=${setJobId}
+            optionList=${st.history.map((x) => ({ value: x.id, label: `#${x.id} ${x.type_name} · ${(x.started || x.created || '').slice(5, 16)}` }))} />`}
+            <${Button} size="small" theme="solid" icon=${html`<${Ic.IconDownload} />`} onClick=${() => setExpOpen(true)}>导出数据<//></div>`}>
           <div className="fill" ref=${box}>${h > 0 && html`<${Table} size="small" columns=${cols} dataSource=${(st && st.items) || []} rowKey="n" pagination=${false}
             scroll=${{ y: h - 41 }} empty=${html`<${Empty} description="还没有处理记录" />`} onRow=${(r) => ({ onClick: () => setCur(r.n), style: { cursor: 'pointer' } })} />`}</div>
         <//>
         <div className="page" style=${{ gap: 14 }}>
-          <${Card} title="导出" bodyClass="scroll" style=${{ flex: 'none', maxHeight: '62%' }}
-            help=${`从 MySQL：按条件从 ${bt ? bt.session_table + ' / ' + bt.turn_table : '两张表'} 导出，改写和扩展的都在里面。批次文件：每次生成按日期放在 out/cs_synth_<日期>/（改写）或 out/cs_expand_<日期>/（扩展）；dialogs = 目标格式 + source；mapping = 对照表；source_extract = 用到的真实对话；scenic_extract = 用到的景区表行。`}
-            extra=${html`<${Button} size="small" icon=${html`<${Ic.IconRefresh} />`} onClick=${refreshBt} />`}>
+          <${Card} title="日志" className="fill" bodyClass="flush">
+            <div style=${{ flex: 1, minHeight: 0, padding: '0 16px 14px', display: 'flex' }}><${LogBox} lines=${job && job.log} style=${{ flex: 1 }} /></div>
+          <//>
+        </div>
+      </div>
+      <${CsItemSheet} jobId=${job && job.id} n=${cur} onClose=${() => setCur(0)} />
+      <${SideSheet} visible=${expOpen} onCancel=${() => setExpOpen(false)} closeOnEsc width=${560} title="导出数据"
+      >
+            <div className="muted sm" style=${{ marginBottom: 10, lineHeight: 1.7 }}>${'从 MySQL 导出：按条件从表里导出（智能客服两张表、讲解两张表）。批次文件：每次生成按日期放在 out/ 下；dialogs = 样本，mapping = 对照表，*_extract = 用到的原始资料。'}
+              <a style=${{ marginLeft: 8 }} onClick=${refreshBt}>刷新批次</a></div>
             <${Tabs} type="button" size="small" defaultActiveKey="db">
             <${TabPane} tab="从 MySQL 导出" itemKey="db"><div style=${{ paddingTop: 10 }}><${CsExportDb} cities=${cities} bt=${bt} /></div><//>
             <${TabPane} tab=${`批次文件${bt ? ` ${bt.items.length}` : ''}`} itemKey="files"><div style=${{ paddingTop: 6 }}>
@@ -1077,13 +1094,7 @@
             </div><//>
             <//>
           <//>
-          <${Card} title="日志" className="fill" bodyClass="flush">
-            <div style=${{ flex: 1, minHeight: 0, padding: '0 16px 14px', display: 'flex' }}><${LogBox} lines=${job && job.log} style=${{ flex: 1 }} /></div>
-          <//>
-        </div>
-      </div>
-      <${CsItemSheet} jobId=${job && job.id} n=${cur} onClose=${() => setCur(0)} />
-      ${capOpen && html`<${CsCapacity} visible=${capOpen} onClose=${() => setCapOpen(false)} dataDir=${p.data_dir} />`}
+      ${capOpen && html`<${CsCapacity} visible=${capOpen} onClose=${() => setCapOpen(false)} dataDir=${p.data_dir} onApply=${applyCap} />`}
     </div>`;
   }
 
