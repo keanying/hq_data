@@ -723,6 +723,8 @@
   const CS_TOPICS = [['ticket', '门票价格'], ['booking', '预约购票'], ['hours', '开放时间'], ['traffic', '交通停车'], ['plan', '游玩建议'],
     ['contact', '咨询投诉电话'], ['guide', '讲解服务'], ['intro', '景区介绍'], ['mixed', '综合咨询（随机 2～3 个主题）'],
     ['culture', '景点讲解 / 历史文化（讲解包、RedAttractionQA）']].map(([value, label]) => ({ value, label }));
+  const GD_KB = [['guide', '景区讲解包'], ['redqa', 'RedAttractionQA'], ['scenic', '景区表基础资料']].map(([value, label]) => ({ value, label }));
+  const GD_MODE = { guide_eval: '讲解内容评价', guide_narr: '个性化讲解' };
   const CS_GRADES = ['5A', '4A', '3A', '2A', '1A'].map((x) => ({ value: x, label: x }));
   const ymd = (d) => (d ? `${d.getFullYear()}${String(d.getMonth() + 1).padStart(2, '0')}${String(d.getDate()).padStart(2, '0')}` : '');
   const dur = (min) => (min < 90 ? `${Math.max(1, Math.round(min))} 分钟` : min < 60 * 36 ? `${(min / 60).toFixed(1)} 小时` : `${(min / 1440).toFixed(1)} 天`);
@@ -739,7 +741,7 @@
     const [d, setD] = useState(null);
     useEffect(() => { setD(null); if (n) api(`/api/cs/item/${jobId}/${n}`).then(setD).catch((e) => setD({ error: e.message })); }, [jobId, n]);
     const rec = d && d.record, src = d && d.source, ex = (d && d.exchange) || {};
-    const expand = src && src.mode === 'expand';
+    const expand = src && (src.mode === 'expand' || (src.mode || '').startsWith('guide_'));
     return html`<${SideSheet} visible=${!!n} onCancel=${onClose} closeOnEsc width=${1100}
       title=${d && src ? (expand ? `数据交换 · ${src.scenic_name} · ${src.topic_name} 第 ${d.variant} 版` : `数据交换 · ${src.dialogue_id} 第 ${d.variant} 版`) : '数据交换'}>
       ${!d ? html`<${Spin} />` : d.error && !src ? html`<${Banner} type="danger" description=${d.error} />` : html`
@@ -750,7 +752,10 @@
           ${src.knowledge && html`<div className="muted sm" style=${{ margin: '8px 0 0' }}>出处：${src.knowledge.sources.map((x, i) => html`<span key=${i}>${i ? '；' : ''}${x.url
             ? html`<a href=${x.url} target="_blank" rel="noreferrer">${x.publisher || x.title || x.url}</a>` : (x.publisher || '') + ' ' + (x.title || '')}${x.type ? `（${x.type}）` : ''}</span>`)}</div>`}
           ${src.red_q && src.red_q.length ? html`<div className="muted sm" style=${{ marginTop: 6 }}>问法参考（RedAttractionQA）：${src.red_q.join(' / ')}</div>` : ''}
-          <h4 style=${{ marginTop: 12 }}>参考的真实对话 <span className="muted">只学问法，不用里面的事实</span></h4>
+          ${src.profile && html`<h4 style=${{ marginTop: 12 }}>游客画像 <span className="muted">合成</span></h4>
+            <div className="kv sm">${Object.entries(src.profile).filter(([k]) => k !== 'visitor_id').map(([k, v]) => html`<span key=${'p' + k}>${k}</span>
+              <div key=${'q' + k}>${Array.isArray(v) ? v.join('、') : v == null ? '—' : String(v)}</div>`)}</div>`}
+          ${(src.refs || []).length ? html`<h4 style=${{ marginTop: 12 }}>参考的真实对话 <span className="muted">只学问法，不用里面的事实</span></h4>` : ''}
           ${(src.refs || []).map((r) => html`<div key=${r.dialogue_id} style=${{ marginBottom: 10 }}>
             <div className="muted sm" style=${{ margin: '0 0 4px 2px' }}>${r.dialogue_id} · ${r.attraction_name} · ${r.intent}</div>
             <div className="chat">${(r.turns || []).map((t, i) => html`<${Bubble} key=${i} t=${t} />`)}</div></div>`)}
@@ -768,8 +773,27 @@
           <pre className="log" style=${{ maxHeight: 260 }}>${ex.response || d.error || '—'}</pre>
         </div>
         <div className="col">
-          <h4>④ 生成结果 ${rec ? html`<span className="muted">${rec.session_id}${d.mysql ? ' · 已写 MySQL' : ''}</span>` : ''}</h4>
-          ${rec ? html`
+          <h4>④ 生成结果 ${rec ? html`<span className="muted">${rec.session_id || rec.eval_task_id || rec.request_id}${d.mysql ? ' · 已写 MySQL' : ''}</span>` : ''}</h4>
+          ${rec && (rec.eval_result || rec.reference_narration) ? html`
+            ${rec.source.needs_review && html`<${Banner} type="warning" closeIcon=${null} style=${{ marginBottom: 8 }} description=${'需复核：' + rec.source.check_flags.join('；')} />`}
+            ${rec.eval_result ? html`
+              <div className="muted sm" style=${{ margin: '0 0 4px 2px' }}>guide_clip_txt（讲解员口述，模型生成）</div>
+              <div className="gd-txt">${rec.guide_clip_txt}</div>
+              <div className="kv sm" style=${{ marginTop: 10 }}><span>结论</span><div><${Tag} size="small" color=${{ 合格: 'green', 需改进: 'amber', 不合格: 'red' }[rec.eval_result.verdict]}>${rec.eval_result.verdict}<//>
+                总分 <b>${rec.eval_result.scores.总分}</b> · 准确 ${rec.eval_result.scores.准确性} · 完整 ${rec.eval_result.scores.完整性} · 表达 ${rec.eval_result.scores.表达}</div>
+                ${[...rec.eval_result.errors.map((e) => [e.type, `「${e.guide_said}」→ 应为：${e.kb_value}`]), ...rec.eval_result.unsupported.map((e) => ['无依据', `「${e.guide_said}」（${e.topic || '知识库没有'}）`]),
+                   ...rec.eval_result.exaggerations.map((e) => ['夸大', `「${e.guide_said}」`])].map(([k, v], i) => html`<span key=${'e' + i} style=${{ color: '#c62828' }}>${k}</span><div key=${'f' + i}>${v}</div>`)}
+                <span>讲对</span><div>${rec.eval_result.covered_facts.join('、') || '—'}</div><span>漏讲</span><div>${rec.eval_result.missed_facts.join('、') || '—'}</div>
+                <span>口头禅</span><div>${rec.eval_result.disfluency.filler_count} 处 ${rec.eval_result.disfluency.examples.join(' ')}</div>
+                <span>建议</span><div>${rec.eval_result.suggestions.join('；') || '—'}</div></div>`
+            : html`
+              <div className="muted sm" style=${{ margin: '0 0 4px 2px' }}>reference_narration · ${rec.reference_narration.char_count} 字 / 上限 ${rec.task_params.字数上限} · ${rec.reference_narration.style || ''}</div>
+              <div className="gd-txt">${rec.reference_narration.text}</div>
+              <div className="kv sm" style=${{ marginTop: 10 }}><span>位置</span><div>${rec.task_params.当前所处位置}</div><span>用到的知识</span><div>${rec.reference_narration.used_facts.join('、') || '—'}</div>
+                <span>个性化</span><div>${rec.reference_narration.personalization.join('；') || '—'}</div><span>禁忌</span><div>${rec.sub_poi_knowledge.taboos.join('；')}</div>
+                <span>参观须知</span><div>${rec.sub_poi_knowledge.visit_rules.join('；') || '—'}</div></div>`}
+            <details style=${{ marginTop: 8 }}><summary className="muted">完整 JSON（样例结构 + 标准答案 + source）</summary><pre className="log" style=${{ maxHeight: 320 }}>${JSON.stringify(rec, null, 2)}</pre></details>`
+          : rec ? html`
             ${rec.source.needs_review && html`<${Banner} type="warning" closeIcon=${null} style=${{ marginBottom: 8 }} description=${'需复核：' + rec.source.check_flags.join('；')} />`}
             <div className="kv sm"><span>我们的景区</span><div>${rec.scenic_name} <span className="muted">${rec.scenic_id || '未对到'}</span></div>
               <span>渠道 / 访客</span><div>${rec.channel} · ${rec.visitor_id}</div><span>开始 / 时长</span><div>${rec.start_time} · ${rec.session_duration_sec} 秒</div>
@@ -786,12 +810,12 @@
 
   /** 可生成总量：改写真实对话 + 按景区真实数据扩展，各自单元数 × 版数，和 MySQL 里已经生成的 */
   function CsCapacity({ visible, onClose, dataDir }) {
-    const [v, setV] = useState({ rewrite_variants: 10, expand_variants: 7, workers: 32 });
+    const [v, setV] = useState({ rewrite_variants: 10, expand_variants: 7, guide_variants: 5, workers: 32 });
     const [d, setD] = useState(null);
     const [busy, setBusy] = useState(false);
     const calc = async () => {
       setBusy(true);
-      try { setD(await post('/api/cs/capacity', { data_dir: dataDir, rewrite_variants: v.rewrite_variants, expand_variants: v.expand_variants })); }
+      try { setD(await post('/api/cs/capacity', { data_dir: dataDir, rewrite_variants: v.rewrite_variants, expand_variants: v.expand_variants, guide_variants: v.guide_variants })); }
       catch (e) { Toast.error(e.message); }
       setBusy(false);
     };
@@ -805,6 +829,7 @@
       <div style=${{ display: 'flex', gap: 10, alignItems: 'center', flexWrap: 'wrap', marginBottom: 12 }}>
         <span className="lbl">改写：每通</span><${InputNumber} hideButtons value=${v.rewrite_variants} onChange=${set('rewrite_variants')} min=${1} max=${10} style=${{ width: 70 }} suffix="版" />
         <span className="lbl">扩展：每单元</span><${InputNumber} hideButtons value=${v.expand_variants} onChange=${set('expand_variants')} min=${1} max=${20} style=${{ width: 70 }} suffix="版" />
+        <span className="lbl">讲解：每条知识</span><${InputNumber} hideButtons value=${v.guide_variants} onChange=${set('guide_variants')} min=${1} max=${50} style=${{ width: 70 }} suffix="版" />
         <span className="lbl">按并发</span><${InputNumber} hideButtons value=${v.workers} onChange=${set('workers')} min=${1} max=${128} style=${{ width: 70 }} /><span className="lbl">估用时</span>
         <${Button} onClick=${calc} loading=${busy} icon=${html`<${Ic.IconRefresh} />`}>重新计算<//>
       </div>
@@ -812,10 +837,14 @@
         <table className="cap-tb"><thead><tr><th>方式</th><th>景区</th><th>单元</th><th>版数</th><th>可生成</th><th>MySQL 已生成</th></tr></thead><tbody>
           ${row('改写真实对话', '单元 = 对到我们已审核景区的真实 · train 客服对话（随审核增加）', d.rewrite)}
           ${row('按景区真实数据扩展', '单元 = 景区 × 有资料的主题 + 每条讲解资料', d.expand)}
-          <tr className="sum"><td><b>合计</b></td><td></td><td></td><td></td><td className="num"><b>${fmt(d.total)}</b></td>
+          <tr className="sum"><td><b>智能客服 小计</b></td><td></td><td></td><td></td><td className="num"><b>${fmt(d.total)}</b></td>
             <td className="num">${d.rewrite.generated == null ? '—' : fmt((d.rewrite.generated || 0) + (d.expand.generated || 0))}</td></tr>
+          ${d.guide_eval && row('讲解内容评价', '单元 = 知识条目（讲解包 + RedAttractionQA + 景区表基础资料），每版不同问题组合', d.guide_eval)}
+          ${d.guide_narr && row('个性化讲解', '单元 = 知识条目，每版换一个合成游客和任务参数', d.guide_narr)}
+          ${d.guide_eval && html`<tr className="sum"><td><b>讲解 小计</b></td><td></td><td></td><td></td><td className="num"><b>${fmt(d.guide_total)}</b></td><td></td></tr>
+          <tr className="sum"><td><b>全部合计</b></td><td></td><td></td><td></td><td className="num"><b>${fmt(d.total + d.guide_total)}</b></td><td></td></tr>`}
         </tbody></table>
-        <div className="muted sm" style=${{ margin: '8px 0 12px' }}>按 ${v.workers} 并发、每并发约 5 条/分估：全部生成约 <b>${eta(d.total)}</b>。
+        <div className="muted sm" style=${{ margin: '8px 0 12px' }}>按 ${v.workers} 并发、每并发约 5 条/分估：智能客服全部生成约 <b>${eta(d.total)}</b>${d.guide_total ? html`，讲解两类约 <b>${eta(d.guide_total)}</b>` : ''}。
           可生成 = 调模型的条数；实际入库还要扣掉模型返回不合格的，「需复核」的也建议抽查后再用。${d.mysql_error ? ` MySQL 统计没取到：${d.mysql_error}` : ''}</div>
         <div className="hd2" style=${{ fontWeight: 600, marginBottom: 6 }}>扩展：各主题单元数（× ${d.expand.variants} 版）</div>
         <div className="cs-sc">${d.expand.by_topic.map((x) => html`<span key=${x.topic} className="chip2">${x.name}<b>${fmt(x.scenics)}</b><span className="muted">→ ${fmt(x.scenics * d.expand.variants)}</span></span>`)}</div>
@@ -827,40 +856,48 @@
 
   /** 从 MySQL 两张表按条件导出（流式下载，百万条也行） */
   function CsExportDb({ cities, bt }) {
-    const [f, setF] = useState({ method: '', city: '', scenic: '', review: '', range: null, fmt: 'jsonl', limit: 0 });
+    const [f, setF] = useState({ ds: 'cs', method: '', city: '', scenic: '', review: '', verdict: '', range: null, fmt: 'jsonl', limit: 0 });
+    const gd = f.ds !== 'cs';
     const [cnt, setCnt] = useState(null);
     const [busy, setBusy] = useState(false);
     const set = (k) => (v) => { setF((o) => ({ ...o, [k]: v })); setCnt(null); };
     const qs = (extra = {}) => {
-      const q = { method: f.method, city: f.city, scenic: f.scenic, review: f.review, date_from: f.range ? ymd(f.range[0]) : '', date_to: f.range ? ymd(f.range[1]) : '', ...extra };
+      const q = gd ? { task: f.ds, city: f.city, scenic: f.scenic, review: f.review, verdict: f.ds === 'eval' ? f.verdict : '', ...extra }
+        : { method: f.method, city: f.city, scenic: f.scenic, review: f.review, date_from: f.range ? ymd(f.range[0]) : '', date_to: f.range ? ymd(f.range[1]) : '', ...extra };
       return Object.entries(q).filter(([, v]) => v !== '' && v != null && v !== 0).map(([k, v]) => `${k}=${encodeURIComponent(v)}`).join('&');
     };
-    const count = async () => { setBusy(true); try { setCnt(await api('/api/cs/export/count?' + qs())); } catch (e) { Toast.error(e.message); } setBusy(false); };
-    const formats = (bt && bt.formats) || { jsonl: '会话 JSONL', json: '会话 JSON 数组', csv_sessions: '会话表 CSV', csv_turns: '轮次表 CSV' };
+    const count = async () => { setBusy(true); try { setCnt(await api((gd ? '/api/gd/export/count?' : '/api/cs/export/count?') + qs())); } catch (e) { Toast.error(e.message); } setBusy(false); };
+    const formats = gd ? { jsonl: '样本 JSONL（样例结构 + 标准答案 + source）', json: '样本 JSON 数组', csv: '表 CSV（含 record_json）' }
+      : (bt && bt.formats) || { jsonl: '会话 JSONL', json: '会话 JSON 数组', csv_sessions: '会话表 CSV', csv_turns: '轮次表 CSV' };
+    const setDs = (v) => { setF((o) => ({ ...o, ds: v, fmt: 'jsonl' })); setCnt(null); };
     return html`<div className="form cs-exp">
-      <${Field} label="生成方式"><${Select} value=${f.method} onChange=${set('method')} style=${{ width: '100%' }}
-        optionList=${[{ value: '', label: '全部' }, { value: 'llm_rewrite', label: '改写真实对话' }, { value: 'llm_expand', label: '按景区数据扩展' }]} /><//>
+      <${Field} label="数据"><${Select} value=${f.ds} onChange=${setDs} style=${{ width: '100%' }}
+        optionList=${[{ value: 'cs', label: '智能客服对话' }, { value: 'eval', label: '讲解内容评价' }, { value: 'narr', label: '个性化讲解' }]} /><//>
+      ${gd ? (f.ds === 'eval' ? html`<${Field} label="结论"><${Select} value=${f.verdict} onChange=${set('verdict')} style=${{ width: '100%' }}
+        optionList=${[{ value: '', label: '全部' }, { value: '合格', label: '合格' }, { value: '需改进', label: '需改进' }, { value: '不合格', label: '不合格' }]} /><//>` : '')
+      : html`<${Field} label="生成方式"><${Select} value=${f.method} onChange=${set('method')} style=${{ width: '100%' }}
+        optionList=${[{ value: '', label: '全部' }, { value: 'llm_rewrite', label: '改写真实对话' }, { value: 'llm_expand', label: '按景区数据扩展' }]} /><//>`}
       <${Field} label="景区"><${CitySelect} value=${f.city} onChange=${set('city')} cities=${cities} style=${{ width: 120 }} />
         <${Input} value=${f.scenic} onChange=${set('scenic')} placeholder="景区ID 或名称，逗号分隔" style=${{ flex: 1, minWidth: 100 }} showClear /><//>
       <${Field} label="质检"><${Select} value=${f.review} onChange=${set('review')} style=${{ width: '100%' }}
         optionList=${[{ value: '', label: '全部' }, { value: 'ok', label: '只要合格' }, { value: 'review', label: '只要需复核' }]} /><//>
-      <${Field} label="会话日期"><${DatePicker} type="dateRange" value=${f.range} onChange=${set('range')} style=${{ width: '100%' }} density="compact" /><//>
+      ${!gd && html`<${Field} label="会话日期"><${DatePicker} type="dateRange" value=${f.range} onChange=${set('range')} style=${{ width: '100%' }} density="compact" /><//>`}
       <${Field} label="格式"><${Select} value=${f.fmt} onChange=${set('fmt')} style=${{ flex: 1 }} optionList=${Object.entries(formats).map(([value, label]) => ({ value, label }))} />
         <${InputNumber} hideButtons value=${f.limit} onChange=${set('limit')} min=${0} style=${{ width: 110 }} prefix="最多" suffix="条" /><//>
       <div style=${{ gridColumn: '1 / -1', display: 'flex', alignItems: 'center', gap: 10, marginTop: 4 }}>
         <${Button} onClick=${count} loading=${busy} icon=${html`<${Ic.IconSearch} />`}>查数量<//>
         <a className="semi-button semi-button-primary semi-button-solid" style=${{ padding: '0 14px', height: 32, display: 'inline-flex', alignItems: 'center', gap: 6, borderRadius: 6, color: '#fff', textDecoration: 'none' }}
-          href=${'/api/cs/export?' + qs({ fmt: f.fmt, limit: f.limit || '' })}><${Ic.IconDownload} />导出<//a>
-        <span className="muted sm">${cnt ? html`<b>${fmt(cnt.sessions)}</b> 个会话 · ${fmt(cnt.turns)} 轮` : ''}</span>
+          href=${(gd ? '/api/gd/export?' : '/api/cs/export?') + qs({ fmt: f.fmt, limit: f.limit || '' })}><${Ic.IconDownload} />导出<//a>
+        <span className="muted sm">${cnt ? (gd ? html`<b>${fmt(cnt.rows)}</b> 条` : html`<b>${fmt(cnt.sessions)}</b> 个会话 · ${fmt(cnt.turns)} 轮`) : ''}</span>
       </div>
-      <div className="muted sm" style=${{ gridColumn: '1 / -1' }}>来源：${bt ? `${bt.session_table} / ${bt.turn_table}` : 'MySQL'}。边查边下载，数据量大时浏览器会持续下载一会儿。</div>
+      <div className="muted sm" style=${{ gridColumn: '1 / -1' }}>来源：${gd ? (f.ds === 'eval' ? 'dwd_guide_eval_sample_di' : 'dwd_guide_narration_sample_di') : bt ? `${bt.session_table} / ${bt.turn_table}` : 'MySQL'}。边查边下载，数据量大时浏览器会持续下载一会儿。</div>
     </div>`;
   }
 
   function CsPage({ cities }) {
     const [p, setP] = useState({ mode: 'rewrite', data_dir: '', data_type: '真实', split: 'train', city: '', intent: [], scenic: '', scenic_city: '', limit: 20,
-      variants: 1, workers: 3, mysql: true, allow_unmapped: false, topics: [], grade: [], only_approved: false });
-    const expand = p.mode === 'expand';
+      variants: 1, workers: 3, mysql: true, allow_unmapped: false, topics: [], grade: [], only_approved: false, kb: [] });
+    const expand = p.mode === 'expand', guide = p.mode.startsWith('guide_'), scen = expand || guide;
     useEffect(() => { api('/api/settings').then((st) => { if (st.cs_data_dir) setP((o) => ({ ...o, data_dir: o.data_dir || st.cs_data_dir })); }).catch(() => {}); }, []);
     const [pv, setPv] = useState(null);
     const [pvBusy, setPvBusy] = useState(false);
@@ -870,7 +907,7 @@
     const [bt, refreshBt] = usePoll(() => api('/api/cs/batches'), 10000);
     const [cur, setCur] = useState(0);
     const set = (k) => (v) => setP((o) => ({ ...o, [k]: v }));
-    const body = () => ({ ...p, intent: (p.intent || []).join(','), topics: (p.topics || []).join(','), grade: (p.grade || []).join(',') });
+    const body = () => ({ ...p, intent: (p.intent || []).join(','), topics: (p.topics || []).join(','), grade: (p.grade || []).join(','), kb: (p.kb || []).join(',') });
     useEffect(() => { setPv(null); }, [p.mode]);
     const job = st && st.job, stats = (job && job.stats) || {};
     const running = job && ['queued', 'running'].includes(job.status);
@@ -895,35 +932,36 @@
       { title: '状态', dataIndex: 'kind', width: 118, render: (v, r) => { const [c, t] = CS_KIND[v] || ['grey', v]; return html`<${Tag} color=${r.needs_review ? 'amber' : c} size="small">${r.needs_review ? '需复核' : t}<//>`; } },
       { title: '我们的景区 / 原始景点', dataIndex: 'scenic_name', render: (v, r) => html`<div className="cell-2"><div className="t ell">${v || '—'}</div>
           <div className="d ell">${r.attraction_name !== v ? r.attraction_name + ' · ' : ''}${r.intent || ''} · ${r.source_id}${r.variant > 1 ? ` · 第 ${r.variant} 版` : ''}</div></div>` },
-      { title: '会话', dataIndex: 'session_id', width: 220, render: (v, r) => html`<div className="cell-2"><div className="num sm">${v || '—'}</div><div className="d">${r.turns ? r.turns + ' 条消息' : ''}</div></div>` },
+      { title: '会话', dataIndex: 'session_id', width: 220, render: (v, r) => html`<div className="cell-2"><div className="num sm">${v || '—'}</div><div className="d">${r.turns ? r.turns + ' 条消息' : (r.summary || '')}</div></div>` },
       { title: '说明', dataIndex: 'flags', render: (v, r) => html`<div className="ell sm" style=${{ color: r.kind === 'skipped' ? '#8a8f99' : r.error ? '#c62828' : r.needs_review ? '#9a5b00' : undefined }} title=${r.error || v.join('；')}>${r.error || v.join('；') || '—'}</div>` },
       { title: '用时', dataIndex: 'elapsed', width: 64, align: 'right', render: (v) => html`<span className="num sm">${v != null ? v + 's' : ''}</span>` },
     ];
     const box = useRef(null); const h = useHeight(box);
     return html`<div className="page">
       <div className="row2 even" style=${{ flex: 'none' }}>
-        <${Card} title="生成客服对话" help="两种方式，都以真实数据为依据：① 改写真实对话：把包里的原始客服问答交给大模型改写成在线客服会话，只用能对到我们已审核景区的；② 按景区数据扩展：事实全部取自景区表（票价、开放时间、地址、电话…），游客怎么问参考包里的真实对话，资料为空的主题不生成。AI 配置用设置页的（非流式、关闭深度思考）。输出字段和目标格式一致，多一个 source 可追溯。">
+        <${Card} title="生成训练数据" help="客服对话两种方式 + 讲解两类任务，都以真实数据为依据：① 改写真实对话：把包里的原始客服问答交给大模型改写成在线客服会话，只用能对到我们已审核景区的；② 按景区数据扩展：事实全部取自景区表（票价、开放时间、地址、电话…），游客怎么问参考包里的真实对话，资料为空的主题不生成。讲解内容评价：按知识库（讲解包 / RedAttractionQA / 景区表）生成讲解员口述文字并故意放入可控问题，标准答案是错误清单、覆盖、分数；个性化讲解：合成游客画像，只用子景点知识写参考讲解词。AI 配置用设置页的（非流式、关闭深度思考）。输出字段和目标格式一致，多一个 source 可追溯。">
           <div className="form">
             <${Field} label="生成方式">
               <${RadioGroup} type="button" value=${p.mode} onChange=${(e) => set('mode')(e.target.value)}>
-                <${Radio} value="rewrite">改写真实对话<//><${Radio} value="expand">按景区真实数据扩展<//>
+                <${Radio} value="rewrite">改写客服对话<//><${Radio} value="expand">扩展客服对话<//><${Radio} value="guide_eval">讲解内容评价<//><${Radio} value="guide_narr">个性化讲解<//>
               <//>
-              <span className="muted sm">${expand ? '事实取自景区表，问法参考真实对话；能出约百万条' : '一通真实问答改写成几版会话；数量受原始对话限制'}</span>
+              <span className="muted sm">${{ expand: '事实取自景区表，问法参考真实对话；约百万条', guide_eval: '讲解文字 + 标准答案（错误清单、覆盖、分数）', guide_narr: '合成游客画像 + 参考讲解词' }[p.mode] || '一通真实问答改写成几版会话；数量受原始对话限制'}</span>
             <//>
             <${Field} label=${expand ? '资料目录' : '原始数据'}><${Input} value=${p.data_dir} onChange=${set('data_dir')}
               placeholder=${expand ? '服务所在电脑上的目录：放客服对话包，以及（可选）景区讲解包、RiSAWOZ / CrossWOZ 的 train.json、RedAttractionQA_train.json，子目录也行'
                 : '服务所在电脑上的目录，如 D:\\data\\文旅包\\data（含 dwd.dwd_cus_service_dialogue_df.csv）'} style=${{ flex: 1 }} />
               ${bt && bt.data_dir_default && p.data_dir !== bt.data_dir_default && html`<${Button} theme="borderless" onClick=${() => set('data_dir')(bt.data_dir_default)}>用仓库自带数据<//>`}<//>
-            ${expand ? html`
+            ${scen ? html`
             <${Field} label="景区范围">
               <${CitySelect} value=${p.scenic_city} onChange=${set('scenic_city')} cities=${cities} style=${{ width: 130 }} />
               <${Select} value=${p.grade} onChange=${set('grade')} multiple placeholder="全部等级" style=${{ width: 150 }} optionList=${CS_GRADES} showClear />
               <${Input} value=${p.scenic} onChange=${set('scenic')} placeholder="景区ID 或名称，逗号分隔（空 = 景区表全部）" style=${{ flex: 1, minWidth: 180 }} showClear />
               <${Checkbox} checked=${p.only_approved} onChange=${(e) => set('only_approved')(e.target.checked)}>只要已审核<//>
             <//>
-            <${Field} label="主题"><${Select} value=${p.topics} onChange=${set('topics')} multiple maxTagCount=${3} placeholder="全部主题（9 类）" style=${{ flex: 1 }} optionList=${CS_TOPICS} showClear /><//>
+            ${guide ? html`<${Field} label="知识来源"><${Select} value=${p.kb} onChange=${set('kb')} multiple placeholder="全部来源（讲解包、RedAttractionQA、景区表）" style=${{ flex: 1 }} optionList=${GD_KB} showClear /><//>`
+              : html`<${Field} label="主题"><${Select} value=${p.topics} onChange=${set('topics')} multiple maxTagCount=${3} placeholder="全部主题（9 类）" style=${{ flex: 1 }} optionList=${CS_TOPICS} showClear /><//>`}
             <${Field} label="数量">
-              <span className="lbl">每个景区每个主题</span><${InputNumber} hideButtons value=${p.variants} onChange=${set('variants')} min=${1} max=${20} style=${{ width: 80 }} suffix="版" />
+              <span className="lbl">${guide ? (p.mode === 'guide_eval' ? '每条知识（不同问题组合）' : '每条知识（不同游客）') : '每个景区每个主题'}</span><${InputNumber} hideButtons value=${p.variants} onChange=${set('variants')} min=${1} max=${guide ? 50 : 20} style=${{ width: 80 }} suffix="版" />
               <span className="lbl">本次最多</span><${InputNumber} hideButtons value=${p.limit} onChange=${set('limit')} min=${0} style=${{ width: 120 }} suffix="条" />
               <span className="lbl">并发</span><${InputNumber} hideButtons value=${p.workers} onChange=${set('workers')} min=${1} max=${128} style=${{ width: 80 }} />
               <span className="muted sm">本次最多填 0 = 全部</span>
@@ -944,7 +982,7 @@
             <//>`}
             <${Field} label="选项">
               <${Checkbox} checked=${p.mysql} onChange=${(e) => set('mysql')(e.target.checked)}>同时写入 MySQL<//>
-              ${!expand && html`<${Checkbox} checked=${p.allow_unmapped} onChange=${(e) => set('allow_unmapped')(e.target.checked)}>对不到我们景区的也生成<//>`}
+              ${!scen && html`<${Checkbox} checked=${p.allow_unmapped} onChange=${(e) => set('allow_unmapped')(e.target.checked)}>对不到我们景区的也生成<//>`}
               <span style=${{ flex: 1 }}></span>
               <${Button} onClick=${() => setCapOpen(true)} icon=${html`<${Ic.IconHistogram} />`}>可生成总量<//>
               <${Button} onClick=${doPreview} loading=${pvBusy} icon=${html`<${Ic.IconSearch} />`}>预估（不调模型）<//>
@@ -968,6 +1006,16 @@
             ${job.error && html`<${Banner} type="danger" closeIcon=${null} description=${job.error} style=${{ marginTop: 8 }} />`}
             ${(stats.out || (job.result && job.result.out)) && html`<div className="muted sm" style=${{ marginTop: 6 }}>输出目录：${stats.out || job.result.out}</div>`}
           </div>` : html`<div className="muted">还没有任务。先「预估」看看能用多少，再「开始生成」。</div>`}
+          ${pv && (pv.mode || '').startsWith('guide_') && html`<div className="cs-pv">
+            <div className="hd2">预估（${pv.task_name}）：<b>${fmt(pv.scenics)}</b> 个景区、<b>${fmt(pv.units)}</b> 条知识 × ${pv.variants} 版 = 最多 <b>${fmt(pv.total)}</b> 条；
+              本次 <b>${fmt(pv.this_run)}</b> 条，${p.workers} 并发约 <b>${dur(pv.this_run / (p.workers * 5))}</b>
+              ${pv.sample && html`<${Popover} trigger="click" position="bottomLeft" content=${html`<div style=${{ width: 520, maxHeight: 380, overflow: 'auto', padding: '8px 12px', fontSize: 12.5, lineHeight: 1.7 }}>
+                <b>${pv.sample.spot}</b> <span className="muted">${pv.sample.kind}</span>${pv.sample.facts.map((x, i) => html`<div key=${i}>${x}</div>`)}</div>`}>
+                <a style=${{ marginLeft: 6 }}>看一条知识</a><//>`}</div>
+            <div className="cs-sc">${pv.by_kb.map((x) => html`<span key=${x.kb} className="chip2">${x.name}<b>${fmt(x.units)}</b></span>`)}</div>
+            <div className="muted sm" style=${{ marginTop: 6 }}>${p.mode === 'guide_eval' ? '每版随机放 0～3 处问题（年代 / 数字 / 结构材质错误、无依据说法、夸大），约 20% 不放，作为合格样本；分数和结论按固定规则算。'
+              : '每版换一个合成游客（客群、年龄、客源地、兴趣前后一致）和任务参数（字数上限、风格、位置）；禁忌按知识内容给，参观须知只用景区表里真实有的。'}</div>
+          </div>`}
           ${pv && pv.mode === 'expand' && html`<div className="cs-pv">
             <div className="hd2">预估：<b>${fmt(pv.scenics)}</b> 个景区、<b>${fmt(pv.pairs)}</b> 个（景区, 主题）有资料 × ${pv.variants} 版 = 最多 <b>${fmt(pv.total)}</b> 条；
               本次 <b>${fmt(pv.this_run)}</b> 条，${p.workers} 并发约 <b>${dur(pv.this_run / (p.workers * 5))}</b>
@@ -982,7 +1030,7 @@
               · 问法参考 RiSAWOZ / CrossWOZ 景点对话 <b>${fmt(Object.values(pv.sources.woz || {}).reduce((a, b) => a + b, 0))}</b> 条次</div>`}
             <div className="muted sm" style=${{ marginTop: 6 }}>数字 = 这个主题有资料的景区数（景点讲解为讲解资料条数）；资料为空的不生成。先每个（景区, 主题）出第 1 版，再出第 2 版……，中途停下覆盖面也最广；再次开始接着跑，不重复。</div>
           </div>`}
-          ${pv && pv.mode !== 'expand' && html`<div className="cs-pv">
+          ${pv && !pv.mode && html`<div className="cs-pv">
             <div className="hd2">预估：原始 <b>${fmt(pv.source_total)}</b> 通符合条件，其中对到我们 <b>${fmt(pv.scenics)}</b> 个景区的 <b>${fmt(pv.usable)}</b> 通可用
               <span className="muted">（意图：${pv.by_intent.slice(0, 6).map(([k, v]) => `${k} ${v}`).join(' · ')}）</span>
               ${pv.excluded_other ? html`<div className="muted sm" style=${{ marginTop: 4 }}>已排除 <b>${fmt(pv.excluded_other)}</b> 通问到同城别的景点的（不是在问这个景区）
@@ -1013,7 +1061,7 @@
             <${TabPane} tab="从 MySQL 导出" itemKey="db"><div style=${{ paddingTop: 10 }}><${CsExportDb} cities=${cities} bt=${bt} /></div><//>
             <${TabPane} tab=${`批次文件${bt ? ` ${bt.items.length}` : ''}`} itemKey="files"><div style=${{ paddingTop: 6 }}>
             ${bt && bt.items.length ? bt.items.map((b) => html`<div className="cs-batch" key=${b.name}>
-              <div className="t"><b>${b.name}</b><${Tag} size="small" color=${b.mode === 'expand' ? 'violet' : 'blue'}>${b.mode === 'expand' ? '扩展' : '改写'}<//>
+              <div className="t"><b>${b.name}</b><${Tag} size="small" color=${{ expand: 'violet', guide_eval: 'orange', guide_narr: 'green' }[b.mode] || 'blue'}>${{ expand: '扩展', guide_eval: '讲解评价', guide_narr: '个性化讲解' }[b.mode] || '改写'}<//>
                 <span className="muted">${b.mtime} · 会话 ${fmt(b.files['dialogs.jsonl'] || 0)} · 需复核 ${b.review == null ? '—' : fmt(b.review)}${b.files['rejected.jsonl'] ? ` · 不合格/失败 ${b.files['rejected.jsonl']}` : ''}</span></div>
               <div className="links">
                 <a href=${`/api/cs/download?batch=${b.name}&file=dialogs.jsonl`}>会话 JSONL</a>
@@ -1293,12 +1341,12 @@
     data: ['数据预览', '客户景区表 + ctrip_poi_info + approval，点一行看详情'],
     gallery: ['图片预览', '按城市 / 景区 / POI 筛选，点开看大图和图片信息'],
     jobs: ['任务中心', '任务按提交顺序逐个执行；遇到登录 / 验证会停在「需要人工」'],
-    cs: ['客服数据', '用大模型把原始客服问答改写成在线客服会话，对到我们的景区'],
+    cs: ['训练数据', '智能客服对话、讲解内容评价、个性化讲解：基于真实数据用大模型生成，可追溯'],
     settings: ['设置', 'AI 判断、核对、图片采集的开关和参数'],
   };
   const NAV = [
     ['overview', '总览', Ic.IconHome], ['review', '核对', Ic.IconCheckboxTick], ['images', '图片采集', Ic.IconCamera],
-    ['data', '数据预览', Ic.IconGridView], ['gallery', '图片预览', Ic.IconGallery], ['cs', '客服数据', Ic.IconComment], ['jobs', '任务中心', Ic.IconList],
+    ['data', '数据预览', Ic.IconGridView], ['gallery', '图片预览', Ic.IconGallery], ['cs', '训练数据', Ic.IconComment], ['jobs', '任务中心', Ic.IconList],
   ];
 
   /** 左侧深色图标栏：导航 + 搜索 / 提醒 / 核对人（不再单独占一行顶栏，页面用满高度） */

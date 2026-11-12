@@ -319,3 +319,4 @@ a:hover { color: var(--semi-color-link-hover); }
 .cap-tb td { padding: 10px; border-bottom: 1px solid #f2f2f5; vertical-align: top; }
 .cap-tb td.num, .cap-tb th:not(:first-child) { text-align: right; font-variant-numeric: tabular-nums; }
 .cap-tb tr.sum td { background: #f7f5ff; font-size: 14px; }
+.gd-txt { background: var(--soft); border-radius: 10px; padding: 10px 12px; font-size: 13px; line-height: 1.75; white-space: pre-wrap; }

@@ -30,12 +30,14 @@ import ai_judge
 import crawler
 import cs_expand
 import cs_synth
+import guide_synth
 import db
 import review
 
 HERE = Path(__file__).resolve().parent
 WEB = HERE / "web"
-JOB_TYPES = {"auto_review": "自动审核", "images": "采集点评图片", "cs_synth": "客服对话生成", "cs_load": "客服对话写入 MySQL"}
+JOB_TYPES = {"auto_review": "自动审核", "images": "采集点评图片", "cs_synth": "客服对话生成", "cs_load": "训练数据写入 MySQL"}
+CS_MODE_NAMES = {"rewrite": "客服对话改写", "expand": "客服对话扩展", "guide_eval": "讲解内容评价生成", "guide_narr": "个性化讲解生成"}
 
 
 class Job:
@@ -56,7 +58,8 @@ class Job:
         self.log.append(f"{time.strftime('%H:%M:%S')} {msg}")
 
     def brief(self):
-        return dict(id=self.id, type=self.type, type_name=JOB_TYPES.get(self.type, self.type), params=self.params,
+        name = CS_MODE_NAMES.get((self.params or {}).get("mode")) if self.type == "cs_synth" else None
+        return dict(id=self.id, type=self.type, type_name=name or JOB_TYPES.get(self.type, self.type), params=self.params,
                     status=self.status, done=self.done, total=self.total, created=self.created, started=self.started,
                     finished=self.finished, result=self.result, error=self.error, last=self.log[-1] if self.log else "")
 
@@ -367,7 +370,7 @@ def create_app(args):
     # ---------------- 智能客服对话数据（大模型改写，单独运行，不占核对 / 采集的任务队列）
     # mode：rewrite = 改写真实对话（cs_synth）；expand = 按景区真实数据扩展（cs_expand：事实取自景区表，问法参考真实对话）
     CS_DEFAULTS = dict(mode="rewrite", data_dir="", data_type="真实", split="train", city="", intent="", scenic="", scenic_city="", limit=20, variants=1,
-                       workers=3, allow_unmapped=False, no_db=False, mysql=True, out="", seed=7, topics="", grade="", only_approved=False)
+                       workers=3, allow_unmapped=False, no_db=False, mysql=True, out="", seed=7, topics="", grade="", only_approved=False, kb="")
 
     def cs_args(p):
         a = dict(CS_DEFAULTS)
@@ -380,8 +383,8 @@ def create_app(args):
         a["workers"] = max(1, min(a["workers"], 128))
         return SimpleNamespace(**a)
 
-    def cs_mod(a):
-        return cs_expand if a.mode == "expand" else cs_synth
+    def cs_mod(a):  # rewrite 改写客服对话 / expand 扩展客服对话 / guide_eval 讲解内容评价 / guide_narr 个性化讲解
+        return guide_synth if a.mode in ("guide_eval", "guide_narr") else cs_expand if a.mode == "expand" else cs_synth
 
     def cs_current():
         return next((j for j in sorted(svc.jobs.values(), key=lambda j: -j.id) if j.type in ("cs_synth", "cs_load") and j.status in ("queued", "running")), None)
@@ -422,6 +425,7 @@ def create_app(args):
         """可生成总量（不调模型）：改写真实对话 + 按景区真实数据扩展，各自的单元数 × 版数，以及 MySQL 里已生成的。"""
         rv = max(1, min(int(payload.get("rewrite_variants") or 10), 10))
         ev = max(1, min(int(payload.get("expand_variants") or 7), 20))
+        gv = max(1, min(int(payload.get("guide_variants") or 5), 50))
         logs = []
 
         def calc():
@@ -429,16 +433,24 @@ def create_app(args):
             rw = cs_synth.preview(ra, logs.append)
             ea = cs_args(dict(payload, mode="expand", topics="", scenic="", scenic_city="", grade="", only_approved=False, variants=ev, limit=0))
             ex = cs_expand.preview(ea, logs.append)
+            ga = cs_args(dict(payload, mode="guide_eval", scenic="", scenic_city="", grade="", only_approved=False, kb="", variants=gv, limit=0))
+            gd = guide_synth.preview(ga, logs.append)
             done = {}
+            for t in ("eval", "narr"):
+                try:
+                    done["guide_" + t] = guide_synth.export_count(t, {})["rows"]
+                    done["guide_" + t + "_ok"] = guide_synth.export_count(t, dict(review="ok"))["rows"]
+                except Exception:  # noqa: BLE001
+                    pass
             try:
                 for m in ("llm_rewrite", "llm_expand"):
                     done[m] = cs_synth.export_count(dict(method=m))["sessions"]
                     done[m + "_ok"] = cs_synth.export_count(dict(method=m, review="ok"))["sessions"]
             except Exception as e:  # noqa: BLE001  没建表也能看总量
                 done["error"] = str(e)
-            return rw, ex, done
+            return rw, ex, gd, done
         try:
-            rw, ex, done = await asyncio.to_thread(calc)
+            rw, ex, gd, done = await asyncio.to_thread(calc)
         except (FileNotFoundError, RuntimeError) as e:
             raise HTTPException(400, str(e)) from e
         except Exception as e:  # noqa: BLE001
@@ -447,7 +459,11 @@ def create_app(args):
                        generated=done.get("llm_rewrite"), generated_ok=done.get("llm_rewrite_ok"))
         expand = dict(units=ex["pairs"], scenics=ex["scenics"], variants=ev, total=ex["total"], by_topic=ex["by_topic"], sources=ex.get("sources"),
                       generated=done.get("llm_expand"), generated_ok=done.get("llm_expand_ok"))
-        return dict(rewrite=rewrite, expand=expand, total=rewrite["total"] + expand["total"], mysql_error=done.get("error"), log=logs[-20:])
+        guide = {t: dict(units=gd["units"], scenics=gd["scenics"], variants=gv, total=gd["total"], by_kb=gd["by_kb"],
+                         generated=done.get("guide_" + t), generated_ok=done.get("guide_" + t + "_ok")) for t in ("eval", "narr")}
+        return dict(rewrite=rewrite, expand=expand, guide_eval=guide["eval"], guide_narr=guide["narr"],
+                    total=rewrite["total"] + expand["total"], guide_total=guide["eval"]["total"] + guide["narr"]["total"],
+                    mysql_error=done.get("error"), log=logs[-20:])
 
     @app.post("/api/cs/start")
     async def cs_start(payload: dict = Body(default={})):
@@ -462,7 +478,7 @@ def create_app(args):
         job = Job("cs_synth", {k: v for k, v in vars(a).items()})
         job.items = collections.deque(maxlen=1000)
         job.stats = {}
-        job.write(("按景区真实数据扩展" if a.mode == "expand" else "改写真实对话") + f" · 开始：模型 {cfg['ai_model']}（非流式，深度思考{'开' if cfg.get('ai_thinking') else '关'}）{'，写入 MySQL' if a.mysql else ''}")
+        job.write({"expand": "按景区真实数据扩展", "guide_eval": "讲解内容评价", "guide_narr": "个性化讲解"}.get(a.mode, "改写真实对话") + f" · 开始：模型 {cfg['ai_model']}（非流式，深度思考{'开' if cfg.get('ai_thinking') else '关'}）{'，写入 MySQL' if a.mysql else ''}")
 
         def on_item(it):
             it["n"] = len(job.items) + 1 if not job.items else job.items[-1]["n"] + 1
@@ -491,8 +507,11 @@ def create_app(args):
 
     def cs_light(it):
         rec, src = it.get("record") or {}, it["source"]
-        return dict(n=it["n"], time=it["time"], kind=it["kind"], variant=it["variant"], error=it.get("error"), session_id=rec.get("session_id"),
-                    scenic_id=rec.get("scenic_id"), scenic_name=rec.get("scenic_name") or src.get("attraction_name"), source_id=src["dialogue_id"],
+        return dict(n=it["n"], time=it["time"], kind=it["kind"], variant=it["variant"], error=it.get("error"),
+                    session_id=rec.get("session_id") or rec.get("eval_task_id") or rec.get("request_id"),
+                    scenic_id=rec.get("scenic_id") or src.get("scenic_id"), scenic_name=rec.get("scenic_name") or src.get("scenic_name") or src.get("attraction_name"),
+                    source_id=src["dialogue_id"], summary=(f"{rec['eval_result']['verdict']} · {rec['eval_result']['scores']['总分']} 分" if rec.get("eval_result")
+                                                          else f"{rec['visitor_profile']['出游客群名称']} · {rec['reference_narration']['char_count']} 字" if rec.get("reference_narration") else None),
                     attraction_name=src.get("attraction_name"), intent=src.get("intent"), turns=len(rec.get("turns") or []),
                     needs_review=bool((rec.get("source") or {}).get("needs_review")), flags=(rec.get("source") or {}).get("check_flags") or [],
                     elapsed=(it.get("exchange") or {}).get("elapsed"))
@@ -524,6 +543,23 @@ def create_app(args):
 
     def export_filters(q):
         return {k: q.get(k) or "" for k in ("method", "scenic", "city", "review", "date_from", "date_to", "limit")}
+
+    @app.get("/api/gd/export/count")
+    def gd_export_count(task: str = "eval", scenic: str = "", city: str = "", review: str = "", verdict: str = ""):
+        try:
+            return guide_synth.export_count("narr" if task == "narr" else "eval", dict(scenic=scenic, city=city, review=review, verdict=verdict))
+        except Exception as e:  # noqa: BLE001
+            raise HTTPException(400, f"{type(e).__name__}: {e}") from e
+
+    @app.get("/api/gd/export")
+    def gd_export(task: str = "eval", fmt: str = "jsonl", scenic: str = "", city: str = "", review: str = "", verdict: str = "", limit: int = 0):
+        """讲解评价 / 个性化讲解样本：从 MySQL 流式导出（JSONL / JSON 数组 / CSV）。"""
+        t = "narr" if task == "narr" else "eval"
+        fmt = fmt if fmt in ("jsonl", "json", "csv") else "jsonl"
+        f = dict(scenic=scenic, city=city, review=review, verdict=verdict, limit=limit)
+        name = f"guide_{t}_{time.strftime('%Y%m%d_%H%M%S')}.{fmt}"
+        mt = "text/csv; charset=utf-8" if fmt == "csv" else "application/json; charset=utf-8"
+        return StreamingResponse(guide_synth.export_iter(t, f, fmt), media_type=mt, headers={"Content-Disposition": f"attachment; filename={name}"})
 
     @app.get("/api/cs/export/count")
     def cs_export_count(method: str = "", scenic: str = "", city: str = "", review: str = "", date_from: str = "", date_to: str = ""):
@@ -595,6 +631,12 @@ def create_app(args):
             raise HTTPException(404, str(e)) from e
         job = Job("cs_load", dict(batch=d.name))
         job.items, job.stats = collections.deque(maxlen=1), {}
+        if d.name.startswith(("guide_eval_", "guide_narr_")):
+            t = "eval" if d.name.startswith("guide_eval_") else "narr"
+            job.write(f"写入 MySQL：{d.name}/dialogs.jsonl → {guide_synth.EVAL_TABLE if t == 'eval' else guide_synth.NARR_TABLE}")
+            asyncio.get_running_loop().create_task(cs_launch(job, lambda progress: guide_synth.load_jsonl(
+                t, d / "dialogs.jsonl", log=job.write, should_stop=lambda: job.cancel, progress=progress)))
+            return job.brief()
         job.write(f"写入 MySQL：{d.name}/dialogs.jsonl → {cs_synth.SESSION_TABLE} / {cs_synth.TURN_TABLE}")
         asyncio.get_running_loop().create_task(cs_launch(job, lambda progress: cs_synth.load_jsonl(
             d / "dialogs.jsonl", log=job.write, should_stop=lambda: job.cancel, progress=progress)))

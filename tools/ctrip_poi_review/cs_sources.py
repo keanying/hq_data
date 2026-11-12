@@ -264,6 +264,7 @@ def load_guide(data_dir, log=print):
         sids = sorted({s for k in keep for s in k["source_ids"]})
         units.setdefault(c["scenic_id"], []).append(dict(
             unit_id=cid, kind="guide", batch=c.get("collect_batch_id"), spot=c.get("attraction_name") or c.get("scenic_name"),
+            poi_id=(c.get("poi_id") or None), version=c.get("travel_date") or None,
             relation=RELATION.get(str(c.get("attraction_relation_type")), c.get("attraction_relation_type") or ""), topic=c.get("guide_topic_name"), title=c.get("guide_title_name"),
             scope=c.get("scope_desc"), facts=keep,
             sources=[dict(source_id=s, url=src.get(s, {}).get("source_url"), title=src.get(s, {}).get("source_title_name"),

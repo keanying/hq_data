@@ -111,3 +111,19 @@ CREATE TABLE IF NOT EXISTS hq_app_settings (
   updated_at DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
   PRIMARY KEY (scope, name)
 ) DEFAULT CHARSET=utf8mb4 COMMENT='工作台设置';
+
+-- 讲解内容评价样本 / 子景点个性化讲解样本（guide_synth.py，写库时自动建）
+CREATE TABLE IF NOT EXISTS dwd_guide_eval_sample_di (
+  eval_task_id VARCHAR(64) NOT NULL, scenic_id VARCHAR(64) NULL, scenic_name VARCHAR(255) NULL, poi_name VARCHAR(255) NULL, city_name VARCHAR(64) NULL,
+  kb_id VARCHAR(128) NULL, kb_kind VARCHAR(16) NULL COMMENT 'guide 讲解包 / redqa / scenic 景区表', issue_cnt INT NULL COMMENT '放进的问题数',
+  verdict VARCHAR(16) NULL COMMENT '合格 / 需改进 / 不合格', total_score DECIMAL(5,1) NULL, needs_review TINYINT NULL,
+  record_json LONGTEXT NOT NULL COMMENT '完整样本：poi + kb_entry + guide_clip_txt + eval_result + source', travel_date INT NOT NULL,
+  created_at DATETIME DEFAULT CURRENT_TIMESTAMP, PRIMARY KEY (eval_task_id), KEY idx_scenic (scenic_id), KEY idx_date (travel_date)
+) DEFAULT CHARSET=utf8mb4 COMMENT='讲解内容评价样本（输入 + 标准答案）';
+
+CREATE TABLE IF NOT EXISTS dwd_guide_narration_sample_di (
+  request_id VARCHAR(64) NOT NULL, scenic_id VARCHAR(64) NULL, scenic_name VARCHAR(255) NULL, sub_poi_name VARCHAR(255) NULL, city_name VARCHAR(64) NULL,
+  kb_id VARCHAR(128) NULL, kb_kind VARCHAR(16) NULL, visitor_group VARCHAR(32) NULL, char_limit INT NULL, char_count INT NULL, needs_review TINYINT NULL,
+  record_json LONGTEXT NOT NULL COMMENT '完整样本：请求 + reference_narration + source', travel_date INT NOT NULL,
+  created_at DATETIME DEFAULT CURRENT_TIMESTAMP, PRIMARY KEY (request_id), KEY idx_scenic (scenic_id), KEY idx_date (travel_date)
+) DEFAULT CHARSET=utf8mb4 COMMENT='子景点个性化讲解样本（请求 + 参考讲解词）';
