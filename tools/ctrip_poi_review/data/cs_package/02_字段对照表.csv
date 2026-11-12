@@ -1,0 +1,192 @@
+﻿库表名,表注释,原中文字段,英文字段,类型,字段注释（含枚举值说明）
+dim.dim_prd_attraction_df,景区维度表（七城景区主档，天级全量快照）,序号,seq_no,INT,序号
+dim.dim_prd_attraction_df,景区维度表（七城景区主档，天级全量快照）,热度榜排名,hot_rank,STRING,携程热度榜排名，空-不在热度榜
+dim.dim_prd_attraction_df,景区维度表（七城景区主档，天级全量快照）,收录来源,collect_source_name,STRING,收录来源：热度榜-携程热度榜 筛选:xx-携程分类筛选（如 筛选:4A及以上）
+dim.dim_prd_attraction_df,景区维度表（七城景区主档，天级全量快照）,名称,attraction_name,STRING,景区名称
+dim.dim_prd_attraction_df,景区维度表（七城景区主档，天级全量快照）,英文名,attraction_en_name,STRING,景区英文名称
+dim.dim_prd_attraction_df,景区维度表（七城景区主档，天级全量快照）,城市,city_name,STRING,城市名称
+dim.dim_prd_attraction_df,景区维度表（七城景区主档，天级全量快照）,区县,district_name,STRING,区县名称
+dim.dim_prd_attraction_df,景区维度表（七城景区主档，天级全量快照）,商圈/片区,business_area_name,STRING,商圈/片区名称
+dim.dim_prd_attraction_df,景区维度表（七城景区主档，天级全量快照）,地址,attraction_address,STRING,景区地址
+dim.dim_prd_attraction_df,景区维度表（七城景区主档，天级全量快照）,POI类型,poi_type,STRING,POI类型：景点/玩乐/娱乐/购物/校园/美食街区
+dim.dim_prd_attraction_df,景区维度表（七城景区主档，天级全量快照）,景区等级,attraction_level,STRING,景区等级：5A-国家5A级 4A-国家4A级 空-无等级或未评级
+dim.dim_prd_attraction_df,景区维度表（七城景区主档，天级全量快照）,评分,rating_score,STRING,携程评分（满分5）
+dim.dim_prd_attraction_df,景区维度表（七城景区主档，天级全量快照）,点评数,review_qty,STRING,点评数
+dim.dim_prd_attraction_df,景区维度表（七城景区主档，天级全量快照）,热度值,hot_score,STRING,携程热度值（满分10）
+dim.dim_prd_attraction_df,景区维度表（七城景区主档，天级全量快照）,榜单,rank_list_name,STRING,所在榜单名称
+dim.dim_prd_attraction_df,景区维度表（七城景区主档，天级全量快照）,"门票价格(最低价,元)",ticket_min_price_amt,STRING,门票最低价（元），免费-免费开放
+dim.dim_prd_attraction_df,景区维度表（七城景区主档，天级全量快照）,价格类型,price_type,STRING,价格类型：门票-售卖起价 门市价-门市价 空-无价格
+dim.dim_prd_attraction_df,景区维度表（七城景区主档，天级全量快照）,门市价(元),ticket_rack_price_amt,STRING,门市价（元）
+dim.dim_prd_attraction_df,景区维度表（七城景区主档，天级全量快照）,门票说明,ticket_desc,STRING,门票说明
+dim.dim_prd_attraction_df,景区维度表（七城景区主档，天级全量快照）,开放时间(今日/近期),open_time_recent_desc,STRING,近期开放时间
+dim.dim_prd_attraction_df,景区维度表（七城景区主档，天级全量快照）,开放时间(详细),open_time_detail_desc,STRING,详细开放时间
+dim.dim_prd_attraction_df,景区维度表（七城景区主档，天级全量快照）,建议游玩时长,suggest_visit_duration_desc,STRING,建议游玩时长
+dim.dim_prd_attraction_df,景区维度表（七城景区主档，天级全量快照）,特色,feature_desc,STRING,景区特色
+dim.dim_prd_attraction_df,景区维度表（七城景区主档，天级全量快照）,标签,tag_names,STRING,景区标签，多值用、分隔
+dim.dim_prd_attraction_df,景区维度表（七城景区主档，天级全量快照）,景点介绍(简要),attraction_brief_desc,STRING,景区简要介绍
+dim.dim_prd_attraction_df,景区维度表（七城景区主档，天级全量快照）,电话,contact_phone,STRING,联系电话
+dim.dim_prd_attraction_df,景区维度表（七城景区主档，天级全量快照）,经度(GCJ02),gcj02_lng,STRING,经度（GCJ02）
+dim.dim_prd_attraction_df,景区维度表（七城景区主档，天级全量快照）,纬度(GCJ02),gcj02_lat,STRING,纬度（GCJ02）
+dim.dim_prd_attraction_df,景区维度表（七城景区主档，天级全量快照）,经度(BD09),bd09_lng,STRING,经度（BD09，百度坐标）
+dim.dim_prd_attraction_df,景区维度表（七城景区主档，天级全量快照）,纬度(BD09),bd09_lat,STRING,纬度（BD09，百度坐标）
+dim.dim_prd_attraction_df,景区维度表（七城景区主档，天级全量快照）,poiId,ctrip_poi_id,STRING,携程poiId
+dim.dim_prd_attraction_df,景区维度表（七城景区主档，天级全量快照）,景点ID(businessId),ctrip_business_id,STRING,携程景点businessId，对应 attraction_id 去掉 ctrip_ 前缀
+dim.dim_prd_attraction_df,景区维度表（七城景区主档，天级全量快照）,携程链接,ctrip_url,STRING,携程景区页链接
+dim.dim_prd_attraction_df,景区维度表（七城景区主档，天级全量快照）,（新增）,travel_date,STRING,分区字段：数据日期，格式YYYYMMDD
+dim.dim_prd_attraction_merge_log_df,景区主档重复条目合并记录（同一景区多条主档的去重日志）,城市,city_name,STRING,城市名称
+dim.dim_prd_attraction_merge_log_df,景区主档重复条目合并记录（同一景区多条主档的去重日志）,移除poiId,removed_poi_id,STRING,被移除条目的携程poiId
+dim.dim_prd_attraction_merge_log_df,景区主档重复条目合并记录（同一景区多条主档的去重日志）,移除景点ID,removed_business_id,STRING,被移除条目的携程businessId
+dim.dim_prd_attraction_merge_log_df,景区主档重复条目合并记录（同一景区多条主档的去重日志）,移除名称,removed_attraction_name,STRING,被移除条目的景区名称
+dim.dim_prd_attraction_merge_log_df,景区主档重复条目合并记录（同一景区多条主档的去重日志）,保留poiId,kept_poi_id,STRING,保留的主条目携程poiId
+dim.dim_prd_attraction_merge_log_df,景区主档重复条目合并记录（同一景区多条主档的去重日志）,说明,merge_reason_desc,STRING,合并原因说明
+dim.dim_prd_attraction_merge_log_df,景区主档重复条目合并记录（同一景区多条主档的去重日志）,原主档行数,before_row_qty,INT,合并前该城主档行数
+dim.dim_prd_attraction_merge_log_df,景区主档重复条目合并记录（同一景区多条主档的去重日志）,新主档行数,after_row_qty,INT,合并后该城主档行数
+dim.dim_prd_attraction_merge_log_df,景区主档重复条目合并记录（同一景区多条主档的去重日志）,（新增）,travel_date,STRING,分区字段：数据日期，格式YYYYMMDD
+dwd.dwd_prd_attraction_guide_df,景区讲解明细表（非百科来源，训练用讲解文本）,讲解ID,guide_id,STRING,讲解ID，格式 景区ID#景点ID#讲解点ID
+dwd.dwd_prd_attraction_guide_df,景区讲解明细表（非百科来源，训练用讲解文本）,城市,city_name,STRING,城市名称
+dwd.dwd_prd_attraction_guide_df,景区讲解明细表（非百科来源，训练用讲解文本）,景区ID,attraction_id,STRING,景区ID，格式 ctrip_<携程businessId>
+dwd.dwd_prd_attraction_guide_df,景区讲解明细表（非百科来源，训练用讲解文本）,景区,attraction_name,STRING,景区名称
+dwd.dwd_prd_attraction_guide_df,景区讲解明细表（非百科来源，训练用讲解文本）,景点ID,sub_attraction_id,STRING,景区内景点ID，overview-景区总览
+dwd.dwd_prd_attraction_guide_df,景区讲解明细表（非百科来源，训练用讲解文本）,景点,sub_attraction_name,STRING,景区内景点名称
+dwd.dwd_prd_attraction_guide_df,景区讲解明细表（非百科来源，训练用讲解文本）,讲解点ID,guide_point_id,STRING,讲解点ID
+dwd.dwd_prd_attraction_guide_df,景区讲解明细表（非百科来源，训练用讲解文本）,讲解点,guide_point_name,STRING,讲解点名称
+dwd.dwd_prd_attraction_guide_df,景区讲解明细表（非百科来源，训练用讲解文本）,纬度,lat,STRING,纬度（GCJ02）
+dwd.dwd_prd_attraction_guide_df,景区讲解明细表（非百科来源，训练用讲解文本）,经度,lng,STRING,经度（GCJ02）
+dwd.dwd_prd_attraction_guide_df,景区讲解明细表（非百科来源，训练用讲解文本）,游览顺序,visit_seq,STRING,建议游览顺序，空-未定义
+dwd.dwd_prd_attraction_guide_df,景区讲解明细表（非百科来源，训练用讲解文本）,讲解正文,guide_content,STRING,讲解正文
+dwd.dwd_prd_attraction_guide_df,景区讲解明细表（非百科来源，训练用讲解文本）,字数,char_qty,INT,讲解正文字数
+dwd.dwd_prd_attraction_guide_df,景区讲解明细表（非百科来源，训练用讲解文本）,预估时长秒,est_duration_sec,INT,预估讲解时长（秒）
+dwd.dwd_prd_attraction_guide_df,景区讲解明细表（非百科来源，训练用讲解文本）,适合人群,target_traveler_type,STRING,适合人群：亲子-亲子家庭 研学-研学学生 老年-老年游客，多值用|分隔，空-通用
+dwd.dwd_prd_attraction_guide_df,景区讲解明细表（非百科来源，训练用讲解文本）,风格,guide_style_type,STRING,讲解风格：讲解-标准讲解
+dwd.dwd_prd_attraction_guide_df,景区讲解明细表（非百科来源，训练用讲解文本）,版权状态,copyright_status,STRING,版权状态：unknown-第三方内容版权未确认 cc_by_sa-知识共享署名相同方式共享
+dwd.dwd_prd_attraction_guide_df,景区讲解明细表（非百科来源，训练用讲解文本）,数据集划分,dataset_split_type,STRING,数据集划分：train-训练集 dev-验证集 test-测试集（按景区8:1:1）
+dwd.dwd_prd_attraction_guide_df,景区讲解明细表（非百科来源，训练用讲解文本）,来源站点,source_site_name,STRING,来源站点：visitbeijing-北京旅游网 visitbeijing_article-北京旅游网文章 yllhj-园林绿化局 ctrip-携程 dpm-故宫博物院 gov/bjdch.gov.cn-政府网站 official-景区官网 wikipedia-维基百科
+dwd.dwd_prd_attraction_guide_df,景区讲解明细表（非百科来源，训练用讲解文本）,来源网址,source_url,STRING,来源网址
+dwd.dwd_prd_attraction_guide_df,景区讲解明细表（非百科来源，训练用讲解文本）,抓取时间,crawl_time,STRING,抓取时间（ISO8601，含时区）
+dwd.dwd_prd_attraction_guide_df,景区讲解明细表（非百科来源，训练用讲解文本）,（新增）,travel_date,STRING,分区字段：数据日期，格式YYYYMMDD
+dwd.dwd_prd_attraction_guide_wiki_df,景区讲解百科补充明细表（维基百科CC BY-SA，待法务确认，不计入主口径）,讲解ID,guide_id,STRING,讲解ID，格式 景区ID#景点ID#讲解点ID
+dwd.dwd_prd_attraction_guide_wiki_df,景区讲解百科补充明细表（维基百科CC BY-SA，待法务确认，不计入主口径）,城市,city_name,STRING,城市名称
+dwd.dwd_prd_attraction_guide_wiki_df,景区讲解百科补充明细表（维基百科CC BY-SA，待法务确认，不计入主口径）,景区ID,attraction_id,STRING,景区ID，格式 ctrip_<携程businessId>
+dwd.dwd_prd_attraction_guide_wiki_df,景区讲解百科补充明细表（维基百科CC BY-SA，待法务确认，不计入主口径）,景区,attraction_name,STRING,景区名称
+dwd.dwd_prd_attraction_guide_wiki_df,景区讲解百科补充明细表（维基百科CC BY-SA，待法务确认，不计入主口径）,景点ID,sub_attraction_id,STRING,景区内景点ID，overview-景区总览
+dwd.dwd_prd_attraction_guide_wiki_df,景区讲解百科补充明细表（维基百科CC BY-SA，待法务确认，不计入主口径）,景点,sub_attraction_name,STRING,景区内景点名称
+dwd.dwd_prd_attraction_guide_wiki_df,景区讲解百科补充明细表（维基百科CC BY-SA，待法务确认，不计入主口径）,讲解点ID,guide_point_id,STRING,讲解点ID
+dwd.dwd_prd_attraction_guide_wiki_df,景区讲解百科补充明细表（维基百科CC BY-SA，待法务确认，不计入主口径）,讲解点,guide_point_name,STRING,讲解点名称
+dwd.dwd_prd_attraction_guide_wiki_df,景区讲解百科补充明细表（维基百科CC BY-SA，待法务确认，不计入主口径）,纬度,lat,STRING,纬度（GCJ02）
+dwd.dwd_prd_attraction_guide_wiki_df,景区讲解百科补充明细表（维基百科CC BY-SA，待法务确认，不计入主口径）,经度,lng,STRING,经度（GCJ02）
+dwd.dwd_prd_attraction_guide_wiki_df,景区讲解百科补充明细表（维基百科CC BY-SA，待法务确认，不计入主口径）,游览顺序,visit_seq,STRING,建议游览顺序，空-未定义
+dwd.dwd_prd_attraction_guide_wiki_df,景区讲解百科补充明细表（维基百科CC BY-SA，待法务确认，不计入主口径）,讲解正文,guide_content,STRING,讲解正文
+dwd.dwd_prd_attraction_guide_wiki_df,景区讲解百科补充明细表（维基百科CC BY-SA，待法务确认，不计入主口径）,字数,char_qty,INT,讲解正文字数
+dwd.dwd_prd_attraction_guide_wiki_df,景区讲解百科补充明细表（维基百科CC BY-SA，待法务确认，不计入主口径）,预估时长秒,est_duration_sec,INT,预估讲解时长（秒）
+dwd.dwd_prd_attraction_guide_wiki_df,景区讲解百科补充明细表（维基百科CC BY-SA，待法务确认，不计入主口径）,适合人群,target_traveler_type,STRING,适合人群：亲子-亲子家庭 研学-研学学生 老年-老年游客，多值用|分隔，空-通用
+dwd.dwd_prd_attraction_guide_wiki_df,景区讲解百科补充明细表（维基百科CC BY-SA，待法务确认，不计入主口径）,风格,guide_style_type,STRING,讲解风格：讲解-标准讲解
+dwd.dwd_prd_attraction_guide_wiki_df,景区讲解百科补充明细表（维基百科CC BY-SA，待法务确认，不计入主口径）,版权状态,copyright_status,STRING,版权状态：unknown-第三方内容版权未确认 cc_by_sa-知识共享署名相同方式共享
+dwd.dwd_prd_attraction_guide_wiki_df,景区讲解百科补充明细表（维基百科CC BY-SA，待法务确认，不计入主口径）,数据集划分,dataset_split_type,STRING,数据集划分：train-训练集 dev-验证集 test-测试集（按景区8:1:1）
+dwd.dwd_prd_attraction_guide_wiki_df,景区讲解百科补充明细表（维基百科CC BY-SA，待法务确认，不计入主口径）,来源站点,source_site_name,STRING,来源站点：visitbeijing-北京旅游网 visitbeijing_article-北京旅游网文章 yllhj-园林绿化局 ctrip-携程 dpm-故宫博物院 gov/bjdch.gov.cn-政府网站 official-景区官网 wikipedia-维基百科
+dwd.dwd_prd_attraction_guide_wiki_df,景区讲解百科补充明细表（维基百科CC BY-SA，待法务确认，不计入主口径）,来源网址,source_url,STRING,来源网址
+dwd.dwd_prd_attraction_guide_wiki_df,景区讲解百科补充明细表（维基百科CC BY-SA，待法务确认，不计入主口径）,抓取时间,crawl_time,STRING,抓取时间（ISO8601，含时区）
+dwd.dwd_prd_attraction_guide_wiki_df,景区讲解百科补充明细表（维基百科CC BY-SA，待法务确认，不计入主口径）,（新增）,travel_date,STRING,分区字段：数据日期，格式YYYYMMDD
+dwd.dwd_cus_service_dialogue_df,文旅客服对话明细表（一行一通对话）,对话ID,dialogue_id,STRING,对话ID
+dwd.dwd_cus_service_dialogue_df,文旅客服对话明细表（一行一通对话）,数据类型,data_type,STRING,数据类型：真实-平台真实问答 合成-模板合成多轮（含工具调用） 改写-真实对话规则改写
+dwd.dwd_cus_service_dialogue_df,文旅客服对话明细表（一行一通对话）,城市,city_name,STRING,城市名称
+dwd.dwd_cus_service_dialogue_df,文旅客服对话明细表（一行一通对话）,景区ID,attraction_id,STRING,景区ID，格式 ctrip_<携程businessId>
+dwd.dwd_cus_service_dialogue_df,文旅客服对话明细表（一行一通对话）,景区,attraction_name,STRING,景区名称
+dwd.dwd_cus_service_dialogue_df,文旅客服对话明细表（一行一通对话）,数据集划分,dataset_split_type,STRING,数据集划分：train-训练集 dev-验证集 test-测试集（与讲解按景区对齐；合成与改写仅在train）
+dwd.dwd_cus_service_dialogue_df,文旅客服对话明细表（一行一通对话）,轮次数,turn_qty,INT,对话轮次数
+dwd.dwd_cus_service_dialogue_df,文旅客服对话明细表（一行一通对话）,含工具调用,is_tool_call,INT,是否含工具调用：0-否 1-是
+dwd.dwd_cus_service_dialogue_df,文旅客服对话明细表（一行一通对话）,意图,intent_type,STRING,用户意图：门票/门票价格/预约/预约购票/开放时间/交通/游玩建议/退改/退改规则/住宿/餐饮/其他
+dwd.dwd_cus_service_dialogue_df,文旅客服对话明细表（一行一通对话）,场景,scene_type,STRING,服务场景：游前咨询/预订购票/游中服务/订单售后/投诉建议
+dwd.dwd_cus_service_dialogue_df,文旅客服对话明细表（一行一通对话）,业务操作,business_action_type,STRING,业务操作：none-无操作 book_ticket-预订门票 refund_ticket-退票 reschedule-改期
+dwd.dwd_cus_service_dialogue_df,文旅客服对话明细表（一行一通对话）,是否解决,is_resolved,INT,是否解决：0-未解决 1-已解决
+dwd.dwd_cus_service_dialogue_df,文旅客服对话明细表（一行一通对话）,是否转人工,is_transfer_human,STRING,是否转人工：0-否 1-是 空-不适用（真实问答）
+dwd.dwd_cus_service_dialogue_df,文旅客服对话明细表（一行一通对话）,知识引用,knowledge_ref_codes,STRING,引用的知识条目代码，多值用|分隔
+dwd.dwd_cus_service_dialogue_df,文旅客服对话明细表（一行一通对话）,质量权重,quality_weight_level,STRING,质量权重：normal-正常 low-降权（无知识引用等） 空-合成数据不设
+dwd.dwd_cus_service_dialogue_df,文旅客服对话明细表（一行一通对话）,生成方式,generate_method_type,STRING,生成方式：template_v2_from_ctrip_master-基于携程主档模板合成 rewrite_rule_v1-规则改写 空-真实数据
+dwd.dwd_cus_service_dialogue_df,文旅客服对话明细表（一行一通对话）,来源站点,source_site_name,STRING,来源站点：ctrip-携程 空-合成
+dwd.dwd_cus_service_dialogue_df,文旅客服对话明细表（一行一通对话）,来源网址,source_url,STRING,来源网址
+dwd.dwd_cus_service_dialogue_df,文旅客服对话明细表（一行一通对话）,抓取时间,crawl_time,STRING,抓取时间（ISO8601，含时区）
+dwd.dwd_cus_service_dialogue_df,文旅客服对话明细表（一行一通对话）,首问,first_question_content,STRING,游客首问
+dwd.dwd_cus_service_dialogue_df,文旅客服对话明细表（一行一通对话）,首答,first_answer_content,STRING,客服首答
+dwd.dwd_cus_service_dialogue_df,文旅客服对话明细表（一行一通对话）,对话全文,dialogue_content,STRING,对话全文
+dwd.dwd_cus_service_dialogue_df,文旅客服对话明细表（一行一通对话）,（新增）,travel_date,STRING,分区字段：数据日期，格式YYYYMMDD
+dwd.dwd_cus_service_dialogue_turn_df,文旅客服对话逐轮明细表（一行一轮发言）,对话ID,dialogue_id,STRING,对话ID，对应 dwd.dwd_cus_service_dialogue_df.dialogue_id
+dwd.dwd_cus_service_dialogue_turn_df,文旅客服对话逐轮明细表（一行一轮发言）,轮次,turn_seq,INT,发言序号
+dwd.dwd_cus_service_dialogue_turn_df,文旅客服对话逐轮明细表（一行一轮发言）,角色,role_type,STRING,角色：游客-游客发言 客服-客服回复 工具返回-工具调用结果
+dwd.dwd_cus_service_dialogue_turn_df,文旅客服对话逐轮明细表（一行一轮发言）,内容,turn_content,STRING,发言内容
+dwd.dwd_cus_service_dialogue_turn_df,文旅客服对话逐轮明细表（一行一轮发言）,知识引用,knowledge_ref_codes,STRING,引用的知识条目代码，多值用|分隔
+dwd.dwd_cus_service_dialogue_turn_df,文旅客服对话逐轮明细表（一行一轮发言）,调用工具,tool_name,STRING,调用工具：query_availability-查余票 query_order-查订单 get_scenic_info-查景区信息 book_ticket-订票 refund_ticket-退票 reschedule_ticket-改期 transfer_to_human-转人工 空-无调用
+dwd.dwd_cus_service_dialogue_turn_df,文旅客服对话逐轮明细表（一行一轮发言）,调用参数,tool_args_content,STRING,工具调用参数
+dwd.dwd_cus_service_dialogue_turn_df,文旅客服对话逐轮明细表（一行一轮发言）,（新增）,travel_date,STRING,分区字段：数据日期，格式YYYYMMDD
+dwd.dwd_prd_attraction_image_df,景区图片链接明细表（七城，携程+同程，仅存链接）,图片ID,image_id,STRING,图片ID
+dwd.dwd_prd_attraction_image_df,景区图片链接明细表（七城，携程+同程，仅存链接）,城市,city_name,STRING,城市名称
+dwd.dwd_prd_attraction_image_df,景区图片链接明细表（七城，携程+同程，仅存链接）,携程POI,ctrip_poi_id,STRING,携程poiId
+dwd.dwd_prd_attraction_image_df,景区图片链接明细表（七城，携程+同程，仅存链接）,标签POI,label_poi_id,STRING,识别标签POI：重复景区条目统一映射到主POI，切分按此字段计算
+dwd.dwd_prd_attraction_image_df,景区图片链接明细表（七城，携程+同程，仅存链接）,景区ID,attraction_id,STRING,景区ID，格式 ctrip_<携程businessId>
+dwd.dwd_prd_attraction_image_df,景区图片链接明细表（七城，携程+同程，仅存链接）,景区名,attraction_name,STRING,景区名称
+dwd.dwd_prd_attraction_image_df,景区图片链接明细表（七城，携程+同程，仅存链接）,等级,attraction_level,STRING,景区等级：5A-国家5A级 4A-国家4A级 空-无等级或未评级
+dwd.dwd_prd_attraction_image_df,景区图片链接明细表（七城，携程+同程，仅存链接）,子景点,sub_attraction_name,STRING,图片所属景区内子景点名称
+dwd.dwd_prd_attraction_image_df,景区图片链接明细表（七城，携程+同程，仅存链接）,图片URL,image_url,STRING,图片链接（仅存链接，未下载）
+dwd.dwd_prd_attraction_image_df,景区图片链接明细表（七城，携程+同程，仅存链接）,本地路径,local_path,STRING,本地文件路径，空-未下载
+dwd.dwd_prd_attraction_image_df,景区图片链接明细表（七城，携程+同程，仅存链接）,宽,image_width,STRING,图片宽度（像素），空-未知
+dwd.dwd_prd_attraction_image_df,景区图片链接明细表（七城，携程+同程，仅存链接）,高,image_height,STRING,图片高度（像素），空-未知
+dwd.dwd_prd_attraction_image_df,景区图片链接明细表（七城，携程+同程，仅存链接）,来源站点,source_site_name,STRING,来源站点：携程/同程
+dwd.dwd_prd_attraction_image_df,景区图片链接明细表（七城，携程+同程，仅存链接）,来源页面URL,source_page_url,STRING,图片所在来源页面链接
+dwd.dwd_prd_attraction_image_df,景区图片链接明细表（七城，携程+同程，仅存链接）,图片说明,image_caption_desc,STRING,图片说明
+dwd.dwd_prd_attraction_image_df,景区图片链接明细表（七城，携程+同程，仅存链接）,用户配文,user_caption_desc,STRING,用户配文
+dwd.dwd_prd_attraction_image_df,景区图片链接明细表（七城，携程+同程，仅存链接）,作者,author_name,STRING,作者昵称
+dwd.dwd_prd_attraction_image_df,景区图片链接明细表（七城，携程+同程，仅存链接）,版权状态,copyright_status,STRING,版权状态：unknown-第三方内容版权未确认
+dwd.dwd_prd_attraction_image_df,景区图片链接明细表（七城，携程+同程，仅存链接）,携程版权标记,ctrip_copyright_flag,STRING,携程版权标记：是-携程标注有版权 否-无版权标注 空-非携程或未知
+dwd.dwd_prd_attraction_image_df,景区图片链接明细表（七城，携程+同程，仅存链接）,关联讲解ID,related_guide_ids,STRING,关联讲解ID，多值用|分隔，对应 dwd.dwd_prd_attraction_guide_df.guide_id
+dwd.dwd_prd_attraction_image_df,景区图片链接明细表（七城，携程+同程，仅存链接）,感知哈希,phash_code,STRING,感知哈希（pHash），空-下载时补
+dwd.dwd_prd_attraction_image_df,景区图片链接明细表（七城，携程+同程，仅存链接）,内容类型,content_type,STRING,内容类型：景观/建筑/展品/人像/美食/门票/其他，空-下载时补
+dwd.dwd_prd_attraction_image_df,景区图片链接明细表（七城，携程+同程，仅存链接）,图文切分,image_text_split_type,STRING,图文对切分：train-训练集 dev-验证集 test-测试集（跟随景区切分）
+dwd.dwd_prd_attraction_image_df,景区图片链接明细表（七城，携程+同程，仅存链接）,识别切分,recognition_split_type,STRING,景点识别切分：train-训练集 dev-验证集 test-测试集（图文train景区内按图8:1:1） 仅评测-图文dev/test景区，仅作未见景点评测
+dwd.dwd_prd_attraction_image_df,景区图片链接明细表（七城，携程+同程，仅存链接）,经度,lng,STRING,经度（GCJ02）
+dwd.dwd_prd_attraction_image_df,景区图片链接明细表（七城，携程+同程，仅存链接）,纬度,lat,STRING,纬度（GCJ02）
+dwd.dwd_prd_attraction_image_df,景区图片链接明细表（七城，携程+同程，仅存链接）,区县,district_name,STRING,区县名称
+dwd.dwd_prd_attraction_image_df,景区图片链接明细表（七城，携程+同程，仅存链接）,抓取时间,crawl_time,STRING,抓取时间
+dwd.dwd_prd_attraction_image_df,景区图片链接明细表（七城，携程+同程，仅存链接）,备注,remark_desc,STRING,备注
+dwd.dwd_prd_attraction_image_df,景区图片链接明细表（七城，携程+同程，仅存链接）,（新增）,travel_date,STRING,分区字段：数据日期，格式YYYYMMDD
+dwd.dwd_prd_attraction_image_pilot_df,北京景区图片试点明细表（含部分已下载原图）,图片ID,image_id,STRING,图片ID
+dwd.dwd_prd_attraction_image_pilot_df,北京景区图片试点明细表（含部分已下载原图）,携程POI,ctrip_poi_id,STRING,携程poiId
+dwd.dwd_prd_attraction_image_pilot_df,北京景区图片试点明细表（含部分已下载原图）,景区ID,attraction_id,STRING,景区ID，格式 ctrip_<携程businessId>
+dwd.dwd_prd_attraction_image_pilot_df,北京景区图片试点明细表（含部分已下载原图）,景区名,attraction_name,STRING,景区名称
+dwd.dwd_prd_attraction_image_pilot_df,北京景区图片试点明细表（含部分已下载原图）,等级,attraction_level,STRING,景区等级：5A-国家5A级 4A-国家4A级 空-无等级或未评级
+dwd.dwd_prd_attraction_image_pilot_df,北京景区图片试点明细表（含部分已下载原图）,图片URL,image_url,STRING,图片链接（仅存链接，未下载）
+dwd.dwd_prd_attraction_image_pilot_df,北京景区图片试点明细表（含部分已下载原图）,本地路径,local_path,STRING,本地文件路径，空-未下载
+dwd.dwd_prd_attraction_image_pilot_df,北京景区图片试点明细表（含部分已下载原图）,宽,image_width,STRING,图片宽度（像素），空-未知
+dwd.dwd_prd_attraction_image_pilot_df,北京景区图片试点明细表（含部分已下载原图）,高,image_height,STRING,图片高度（像素），空-未知
+dwd.dwd_prd_attraction_image_pilot_df,北京景区图片试点明细表（含部分已下载原图）,来源站点,source_site_name,STRING,来源站点：OTA-图片爬取
+dwd.dwd_prd_attraction_image_pilot_df,北京景区图片试点明细表（含部分已下载原图）,来源页面URL,source_page_url,STRING,图片所在来源页面链接
+dwd.dwd_prd_attraction_image_pilot_df,北京景区图片试点明细表（含部分已下载原图）,版权状态,copyright_status,STRING,版权状态：unknown-第三方内容版权未确认
+dwd.dwd_prd_attraction_image_pilot_df,北京景区图片试点明细表（含部分已下载原图）,携程版权标记,ctrip_copyright_flag,STRING,携程版权标记：是-携程标注有版权 否-无版权标注 空-非携程或未知
+dwd.dwd_prd_attraction_image_pilot_df,北京景区图片试点明细表（含部分已下载原图）,作者,author_name,STRING,作者昵称
+dwd.dwd_prd_attraction_image_pilot_df,北京景区图片试点明细表（含部分已下载原图）,经度,lng,STRING,经度（GCJ02）
+dwd.dwd_prd_attraction_image_pilot_df,北京景区图片试点明细表（含部分已下载原图）,纬度,lat,STRING,纬度（GCJ02）
+dwd.dwd_prd_attraction_image_pilot_df,北京景区图片试点明细表（含部分已下载原图）,区县,district_name,STRING,区县名称
+dwd.dwd_prd_attraction_image_pilot_df,北京景区图片试点明细表（含部分已下载原图）,抓取时间,crawl_time,STRING,抓取时间
+dwd.dwd_prd_attraction_image_pilot_df,北京景区图片试点明细表（含部分已下载原图）,备注,remark_desc,STRING,备注
+dwd.dwd_prd_attraction_image_pilot_df,北京景区图片试点明细表（含部分已下载原图）,（新增）,travel_date,STRING,分区字段：数据日期，格式YYYYMMDD
+ads.ads_prd_attraction_image_missing_df,无图景区清单（七城主档中无任何图片的景区及原因）,携程POI,ctrip_poi_id,STRING,携程poiId
+ads.ads_prd_attraction_image_missing_df,无图景区清单（七城主档中无任何图片的景区及原因）,城市,city_name,STRING,城市名称
+ads.ads_prd_attraction_image_missing_df,无图景区清单（七城主档中无任何图片的景区及原因）,景区ID,attraction_id,STRING,景区ID
+ads.ads_prd_attraction_image_missing_df,无图景区清单（七城主档中无任何图片的景区及原因）,景点名,attraction_name,STRING,景区名称
+ads.ads_prd_attraction_image_missing_df,无图景区清单（七城主档中无任何图片的景区及原因）,等级,attraction_level,STRING,景区等级：5A/4A/空-无等级
+ads.ads_prd_attraction_image_missing_df,无图景区清单（七城主档中无任何图片的景区及原因）,无图类别,missing_image_type,STRING,无图类别：无相册-携程接口明确零图 有相册未抓到-截止前未抓到 同景区重复条目-图片挂在主条目下
+ads.ads_prd_attraction_image_missing_df,无图景区清单（七城主档中无任何图片的景区及原因）,原因说明,missing_reason_desc,STRING,原因说明
+ads.ads_prd_attraction_image_missing_df,无图景区清单（七城主档中无任何图片的景区及原因）,（新增）,travel_date,STRING,分区字段：数据日期，格式YYYYMMDD
+ads.ads_prd_attraction_image_url_check_df,图片链接可用性抽测结果（分层抽样200条）,图片ID,image_id,STRING,图片ID
+ads.ads_prd_attraction_image_url_check_df,图片链接可用性抽测结果（分层抽样200条）,城市,city_name,STRING,城市名称
+ads.ads_prd_attraction_image_url_check_df,图片链接可用性抽测结果（分层抽样200条）,来源站点,source_site_name,STRING,来源站点：携程/同程
+ads.ads_prd_attraction_image_url_check_df,图片链接可用性抽测结果（分层抽样200条）,图片URL,image_url,STRING,图片链接
+ads.ads_prd_attraction_image_url_check_df,图片链接可用性抽测结果（分层抽样200条）,结果,check_result_type,STRING,抽测结果：可用-可打开 被限流，无法判断-请求被限流 未测（该站已限流停测）-该站限流后停测
+ads.ads_prd_attraction_image_url_check_df,图片链接可用性抽测结果（分层抽样200条）,状态码,http_status_code,STRING,HTTP状态码：200/206-正常 超时-请求超时 空-未测
+ads.ads_prd_attraction_image_url_check_df,图片链接可用性抽测结果（分层抽样200条）,（新增）,travel_date,STRING,分区字段：数据日期，格式YYYYMMDD
+ads.ads_prd_attraction_guide_uncovered_df,北京讲解未覆盖景区清单（非百科讲解不足200字的景区）,携程POI,ctrip_poi_id,STRING,携程poiId
+ads.ads_prd_attraction_guide_uncovered_df,北京讲解未覆盖景区清单（非百科讲解不足200字的景区）,景点名,attraction_name,STRING,景区名称
+ads.ads_prd_attraction_guide_uncovered_df,北京讲解未覆盖景区清单（非百科讲解不足200字的景区）,等级,attraction_level,STRING,景区等级：5A/4A/空-无等级
+ads.ads_prd_attraction_guide_uncovered_df,北京讲解未覆盖景区清单（非百科讲解不足200字的景区）,热度排名,hot_rank,STRING,携程热度排名
+ads.ads_prd_attraction_guide_uncovered_df,北京讲解未覆盖景区清单（非百科讲解不足200字的景区）,现有字数,current_char_qty,INT,现有讲解字数合计
+ads.ads_prd_attraction_guide_uncovered_df,北京讲解未覆盖景区清单（非百科讲解不足200字的景区）,已有来源,existing_source_names,STRING,已有来源站点，多值用|分隔，空-无来源
+ads.ads_prd_attraction_guide_uncovered_df,北京讲解未覆盖景区清单（非百科讲解不足200字的景区）,未覆盖原因,uncovered_reason_type,STRING,未覆盖原因：无任何来源-所有合规来源均无文本 有来源但不足200字-有文本但总字数<200
+ads.ads_prd_attraction_guide_uncovered_df,北京讲解未覆盖景区清单（非百科讲解不足200字的景区）,（新增）,travel_date,STRING,分区字段：数据日期，格式YYYYMMDD

@@ -10,6 +10,8 @@
   CrossWOZ 类 train*.json（字典，每通有 sys-usr / messages[].role / content / dialog_act）：只取「景点」领域的轮次
   RedAttractionQA_train.json   的问题：历史文化类主题的问法参考
 只用训练集（文件名含 train）；dev / test / val 不用，免得和评测数据重叠。
+RiSAWOZ / CrossWOZ 原文件很大（180 MB / 370 MB），仓库里放的是提取好的景点对话 *_attraction_refs_train.jsonl（data/woz/），效果一样；
+要从原文件重新提取：python cs_sources.py export-refs <放原文件的目录> data/woz
 """
 import ast
 import csv
@@ -54,11 +56,12 @@ def _head(p, n=4096):
 def find(data_dir):
     """在数据目录里找各类资料文件。"""
     d = Path(data_dir) if data_dir else None
-    out = dict(guide={}, risawoz=[], crosswoz=[], redqa=[])
+    out = dict(guide={}, risawoz=[], crosswoz=[], redqa=[], prebuilt=[])
     if not d or not d.exists():
         return out
     for t in ("content", "fact", "fact_source_rel", "source"):
         out["guide"][t] = sorted(d.rglob(f"dwd_prd_scenic_guide_{t}_di.csv"), key=lambda p: ("data_all" not in str(p), str(p)))
+    out["prebuilt"] = sorted(p for p in d.rglob("*_attraction_refs_*.jsonl") if "train" in p.name)
     for p in d.rglob("*.json"):
         name = p.name.lower()
         if "redattractionqa" in name:
@@ -164,7 +167,7 @@ def _load_redqa(p):
 def build_cache(data_dir, cache_dir, log=print):
     """整理问法参考和 RedAttractionQA（大文件只解析一次），返回缓存目录里的内容。"""
     f = find(data_dir)
-    files = f["risawoz"] + f["crosswoz"] + f["redqa"]
+    files = f["risawoz"] + f["crosswoz"] + f["redqa"] + f["prebuilt"]
     cache_dir = Path(cache_dir)
     cache_dir.mkdir(parents=True, exist_ok=True)
     sig = _sig(files)
@@ -177,12 +180,21 @@ def build_cache(data_dir, cache_dir, log=print):
         except ValueError:
             pass
     refs, red = [], []
+    seen = set()
+    for p in f["prebuilt"]:  # 已提取好的景点对话（仓库 data/woz/ 里的）
+        with p.open(encoding="utf-8") as fh:
+            for line in fh:
+                if line.strip():
+                    r = json.loads(line)
+                    if r["id"] not in seen:
+                        seen.add(r["id"])
+                        refs.append(r)
     for p in f["risawoz"]:
         log(f"整理问法参考 {p.name}（RiSAWOZ 类，只取景点领域）…")
-        refs += _load_risawoz(p)
+        refs += [r for r in _load_risawoz(p) if r["id"] not in seen]
     for p in f["crosswoz"]:
         log(f"整理问法参考 {p.name}（CrossWOZ 类，只取景点领域；文件大，第一次要等一会）…")
-        refs += _load_crosswoz(p)
+        refs += [r for r in _load_crosswoz(p) if r["id"] not in seen]
     for p in f["redqa"]:
         red += _load_redqa(p)
     with (cache_dir / "woz_refs.jsonl").open("w", encoding="utf-8") as fh:
@@ -315,3 +327,26 @@ def map_redqa(red, scenics, core):
                 title="", scope="", facts=[dict(seq=i + 1, attr="资料", value=p["passage"], source_ids=[p["id"]]) for i, p in enumerate(part)],
                 sources=[dict(source_id=p["id"], url=None, title=p["q"], publisher="RedAttractionQA", type="公开数据集") for p in part]))
     return units
+
+
+def export_refs(src_dir, out_dir, log=print):
+    """从 RiSAWOZ / CrossWOZ 原文件（train）提取景点对话，写成 <数据集>_attraction_refs_train.jsonl（仓库 data/woz/ 用这个，不放原文件）。"""
+    f = find(src_dir)
+    out = Path(out_dir)
+    out.mkdir(parents=True, exist_ok=True)
+    for name, files, fn in (("risawoz", f["risawoz"], _load_risawoz), ("crosswoz", f["crosswoz"], _load_crosswoz)):
+        rows = [r for p in files for r in fn(p)]
+        if not rows:
+            continue
+        with (out / f"{name}_attraction_refs_train.jsonl").open("w", encoding="utf-8", newline="\n") as fh:
+            for r in rows:
+                fh.write(json.dumps(r, ensure_ascii=False) + "\n")
+        log(f"{name}: {len(rows)} 通景点对话 → {out / f'{name}_attraction_refs_train.jsonl'}")
+
+
+if __name__ == "__main__":
+    import sys
+    if len(sys.argv) == 4 and sys.argv[1] == "export-refs":
+        export_refs(sys.argv[2], sys.argv[3])
+    else:
+        print("用法：python cs_sources.py export-refs <放 RiSAWOZ / CrossWOZ train.json 的目录> <输出目录，如 data/woz>")

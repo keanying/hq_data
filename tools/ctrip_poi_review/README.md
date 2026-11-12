@@ -415,7 +415,10 @@ python cs_synth.py --load-jsonl out/cs_synth_20261110/dialogs.jsonl             
 - **顺序与续跑**：先每个（景区, 主题）出第 1 版，再出第 2 版……，中途停下覆盖面也最广；`done_keys.txt` 记录已完成的，
   再次开始会查 `out/` 下所有 `cs_expand_*` 批次，跨天也接着跑、不重复调模型（别删这些目录里的 `done_keys.txt`）。session_id 用 10 位数字（`cs_日期_xxxxxxxxxx`），百万级不撞号。
 
-**更多真实资料（可选，放进同一个资料目录、子目录也行，自动识别）**：
+**仓库自带数据**：`data/` 里已经放好了下面全部资料（见 `data/README.md`），资料目录留空或点「用仓库自带数据」即可，命令行默认也用它。
+自己的资料目录照样可用：放进去、子目录也行，自动识别。
+
+**资料清单**：
 | 资料 | 怎么用 | 说明 |
 |---|---|---|
 | 景区讲解包（`dwd_prd_scenic_guide_{content,fact,fact_source_rel,source}_di.csv`，如「景区讲解内容_合并_3165条」） | **事实**：新主题「景点讲解 / 历史文化」，每条讲解一个单元 | 215 个景区、3,153 条可用；只有 OTA / 旅游社区出处（source_type 6、7）的事实不用；原文摘录不进生成内容 |
@@ -429,7 +432,7 @@ python cs_synth.py --load-jsonl out/cs_synth_20261110/dialogs.jsonl             
 游客或客服提到参考对话里的景点（含 RiSAWOZ / CrossWOZ 里的景点名）。
 加上讲解后，全部主题每个 7 版约 **101 万条**（144,870 个单元 × 7）。
 **许可**：讲解包标注「未确认完整内容转载授权」（正文是自行整理的事实，不是原文）；RiSAWOZ、CrossWOZ、RedAttractionQA 是公开研究数据集，
-用于商用训练数据前请确认各自的许可。这些文件放在本地资料目录（`tools/data/` 已加进 .gitignore），不要提交到仓库。
+用于商用训练数据前请确认各自的许可。按负责人决定，`data/` 随仓库提交（仓库是公开的）；你自己的本地资料目录 `tools/data/` 仍在 .gitignore 里。
 
 **在工作台**：「客服数据」页 → 生成方式选「按景区真实数据扩展」→ 填真实对话目录（同改写模式）、景区范围（城市 / 等级 / 景区 / 只要已审核）、
 主题、每个景区每个主题几版、本次最多几条（0 = 全部）、并发 →「预估」看总量和大概用时 →「开始生成」。
@@ -468,6 +471,8 @@ python cs_synth.py --load-jsonl out/cs_synth_20261110/dialogs.jsonl             
 | `match.py` | 名称/地址比对与自动审核判定、坐标换算 |
 | `cs_synth.py` | 智能客服对话：用大模型改写原始客服问答，输出目标格式 + source，写 MySQL 两张表；工作台「客服数据」页 |
 | `cs_expand.py` | 智能客服对话：按景区表真实字段扩展（问法参考真实对话），百万级；工作台「客服数据」页「按景区真实数据扩展」 |
+| `import_scenic.py` | 把 `data/scenic/` 里的客户景区表 CSV 导进 MySQL（新环境用；只插入没有的，不覆盖核对结果） |
+| `data/` | 客服数据生成用的数据（随仓库提交，见 `data/README.md`）：客服对话包、景区表、讲解包、RedAttractionQA、RiSAWOZ / CrossWOZ 景点对话提取 |
 | `cs_sources.py` | 扩展用的外部资料：景区讲解包、RedAttractionQA（事实），RiSAWOZ / CrossWOZ（问法参考）；自动识别 + 缓存 |
 | `ai_judge.py` | AI 辅助核对（火山方舟 Responses API，提示词、解析、缓存） |
 | `crawler.py` | 点评图片采集（翻页、解析、入库） |
