@@ -218,3 +218,6 @@ __marimo__/
 
 # Streamlit
 .streamlit/secrets.toml
+
+# 本地数据目录（客服对话包、讲解包、对话数据集等）：仓库是公开的，不要提交
+tools/data/

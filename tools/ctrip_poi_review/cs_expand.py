@@ -7,11 +7,14 @@
 
 规模 = 景区数 × 每个景区有资料的主题数 × 每个主题几版（--variants）。主题见 TOPICS：
     门票价格 / 预约购票 / 开放时间 / 交通停车 / 游玩建议 / 咨询投诉电话 / 讲解服务 / 景区介绍 / 综合咨询（随机 2～3 个主题）
+    景点讲解（culture）：每条讲解资料一个单元，事实来自数据目录里的景区讲解包、RedAttractionQA（见 cs_sources.py）
 景区表里某个主题的字段都是空的，这个景区就不生成这个主题（不编）。
+问法参考：包里的真实客服对话 + 数据目录里的 RiSAWOZ / CrossWOZ 景点对话（只用 train；有就每条各取 1 通）。
 
 输出（out/cs_expand_<日期>/，可断点续跑：out/ 下所有 cs_expand_* 批次的 done_keys.txt 里有的「景区 + 主题 + 第几版」都跳过，跨天也不重复）：
     dialogs.jsonl          生成的会话：目标格式 + source（generate_method=llm_expand、景区表名 / 行 ID / 用到的字段和值、参考的真实对话 ID、质检）
     scenic_extract.jsonl   用到的景区表行（整行，每个景区写一次）
+    knowledge_extract.jsonl 用到的讲解资料（事实 + 出处网址，每条写一次）
     source_extract.jsonl   用到的参考对话（原表整行 + 逐轮发言，每通写一次）
     mapping.csv            session_id ↔ 景区 ↔ 主题 ↔ 参考对话 ↔ 质检
     rejected.jsonl         模型返回不合格 / 调用失败的
@@ -28,10 +31,11 @@ from datetime import datetime
 from pathlib import Path
 
 import ai_judge
+import cs_sources
 import cs_synth
 from cs_synth import CHANNELS, END_TYPES, MONEY_RE, PERSONAS, TIME_RE, _seeded
 
-PROMPT_VERSION = "cs_expand_v1"
+PROMPT_VERSION = "cs_expand_v2"
 OUT_ROOT = cs_synth.OUT_ROOT
 
 # 主题：用到景区表哪些字段、至少要有哪个字段才生成、参考真实对话的哪些意图、游客情境（让同一景区同一主题的几版不重样）
@@ -75,7 +79,12 @@ TOPICS = {
                   situations=["还没决定去不去，先了解一下景区", "问景区是几A级", "问景区大不大", "问景区有什么特色 / 来历"]),
 }
 MIXED = dict(name="综合咨询", intent="其他", scene="售前咨询", situations=["出发前一次把想问的都问了", "边问边做攻略", "帮家里人问的，问得比较细"])
-ALL_TOPICS = list(TOPICS) + ["mixed"]
+# 景点讲解 / 历史文化：事实来自景区讲解包（每条讲解一个单元）或 RedAttractionQA（能唯一对到景区的，每 5 条一个单元）
+CULTURE = dict(name="景点讲解", intent="游玩建议", scene="售前咨询", refs=["游玩建议", "其他"],
+               situations=["参观前想先了解一下这个地方", "带孩子来研学，想让孩子听懂", "听说很有名，想知道为什么", "到了现场，想知道有什么看点",
+                           "对历史感兴趣，问得比较细", "带老人来，老人想多了解些过去的事", "想拍照打卡，顺便了解来历"])
+ALL_TOPICS = list(TOPICS) + ["mixed", "culture"]
+REF_CACHE = cs_synth.OUT_ROOT / "cs_refs_cache"
 
 LABELS = dict(is_free_flag="是否免费", ticket_adult_weekday_amt="成人票（平日）", ticket_adult_peak_amt="成人票（旺季）", ticket_adult_low_amt="成人票（淡季）",
               ticket_preferential_amt="优惠票", ticket_transit_amt="景区交通票", ticket_combo_amt="联票 / 套票", has_online_ticket_flag="能否线上购票",
@@ -149,12 +158,39 @@ def topic_facts(row, topic):
     return out or None
 
 
-def available(row, topics):
-    """这个景区能生成哪些主题（综合咨询要有至少 2 个主题有资料）。"""
-    have = [t for t in topics if t != "mixed" and topic_facts(row, t)]
+def available(row, topics, ctx=None):
+    """这个景区能生成哪些主题（综合咨询要有至少 2 个主题有资料；景点讲解每条讲解资料一个，记作 culture@<单元ID>）。"""
+    have = [t for t in topics if t in TOPICS and topic_facts(row, t)]
     if "mixed" in topics and len([t for t in TOPICS if topic_facts(row, t)]) >= 2:
         have.append("mixed")
+    if "culture" in topics and ctx:
+        have += [f"culture@{u['unit_id']}" for u in ctx["units"].get(row["_id"], [])]
     return have
+
+
+def load_context(args, rows, log=print):
+    """真实问法（包里客服对话 + RiSAWOZ / CrossWOZ 景点轮次）和讲解资料（景区讲解包 + RedAttractionQA）。"""
+    pool = ref_pool(args.data_dir, log)
+    cs_sources.build_cache(args.data_dir, REF_CACHE, log)
+    woz = {}
+    for r in cs_sources.load_woz_refs(REF_CACHE):
+        r.update(attraction_name="", intent=r["dataset"], city="")
+        for t in r["topics"] or ["plan"]:
+            woz.setdefault(t, []).append(r)
+    red = cs_sources.load_redqa(REF_CACHE)
+    units = {}
+    if "culture" in _topics(args):
+        units = cs_sources.load_guide(args.data_dir, log)
+        n_guide = sum(len(v) for v in units.values())
+        for sid, us in cs_sources.map_redqa(red, rows, cs_synth._core).items():
+            units.setdefault(sid, []).extend(us)
+        n_red = sum(len(v) for v in units.values()) - n_guide
+        if n_red:
+            log(f"RedAttractionQA：能唯一对到景区的资料整理成 {n_red} 个讲解单元")
+    by_id = {u["unit_id"]: u for us in units.values() for u in us}
+    return dict(pool=pool, woz=woz, red_q=[x["q"] for x in red if x["q"] and not re.match(r"^(该|此|这|其)", x["q"])], units=units, by_id=by_id,
+                stats=dict(woz={k: len(v) for k, v in woz.items()}, red=len(red), guide_units=sum(1 for u in by_id.values() if u["kind"] == "guide"),
+                           red_units=sum(1 for u in by_id.values() if u["kind"] == "redqa"), culture_scenics=len(units)))
 
 
 def load_scenics(args, log=print):
@@ -192,13 +228,18 @@ def ref_pool(data_dir, log=print):
     for s in src:
         if s["data_type"] != "真实" or s["split"] != "train" or not s["turns"] or cs_synth.off_topic(s, None):
             continue
+        s["dataset"] = "客服对话包"
         pool.setdefault(s["intent"] or "其他", []).append(s)
     log("参考对话（真实 · train）按意图：" + "、".join(f"{k} {len(v)}" for k, v in sorted(pool.items(), key=lambda x: -len(x[1]))))
     return pool
 
 
-def pick_refs(pool, intents, rnd, n=2):
+def pick_refs(pool, intents, rnd, n=2, woz=None, topics=()):
+    """参考对话：有 RiSAWOZ / CrossWOZ 时 1 通包里的真实客服对话 + 1 通对应主题的景点对话，没有就 2 通包里的。"""
     cands = [s for i in intents for s in pool.get(i, [])] or [s for v in pool.values() for s in v]
+    wc = [r for t in topics for r in (woz or {}).get(t, [])]
+    if wc and cands and n >= 2:
+        return rnd.sample(cands, 1) + rnd.sample(wc, 1)
     return rnd.sample(cands, min(n, len(cands))) if cands else []
 
 
@@ -212,9 +253,21 @@ def _ref_text(s, max_turns=6, max_len=120):
 
 
 # ---------------------------------------------------------------- 提示词 / 质检
-def plan_job(row, topic, variant, pool, seed):
+def plan_job(row, topic, variant, ctx, seed):
     """确定这一条用哪些资料、哪个人设 / 渠道 / 情境、参考哪几通真实对话（同一 key 每次都一样，可复现）。"""
     rnd = _seeded(seed, "expand", row["_id"], topic, variant)
+    pool, woz = ctx["pool"], ctx.get("woz")
+    if topic.startswith("culture@"):
+        u = ctx["by_id"][topic.split("@", 1)[1]]
+        facts, seen = {}, {}
+        for f in u["facts"]:
+            k = f["attr"] or "资料"
+            seen[k] = seen.get(k, 0) + 1
+            facts[k if seen[k] == 1 else f"{k}（{seen[k]}）"] = f["value"]
+        meta = dict(CULTURE, name=f"景点讲解（{u['spot']}）")
+        qs = rnd.sample(ctx["red_q"], min(3, len(ctx["red_q"]))) if ctx.get("red_q") else []
+        return dict(rnd=rnd, topic=topic, parts=["culture"], meta=meta, facts=facts, unit=u, persona=rnd.choice(PERSONAS), channel=rnd.choice(CHANNELS),
+                    situation=rnd.choice(CULTURE["situations"]), refs=pick_refs(pool, CULTURE["refs"], rnd, 2), red_q=qs)  # 讲解类不用 RiSAWOZ / CrossWOZ（那些是推荐 / 查询类对话）
     if topic == "mixed":
         have = [t for t in TOPICS if topic_facts(row, t)]
         parts = rnd.sample(have, min(len(have), rnd.choice([2, 2, 3])))
@@ -228,7 +281,7 @@ def plan_job(row, topic, variant, pool, seed):
         facts = topic_facts(row, topic)
         refs_intents = meta["refs"]
     return dict(rnd=rnd, topic=topic, parts=parts, meta=meta, facts=facts, persona=rnd.choice(PERSONAS), channel=rnd.choice(CHANNELS),
-                situation=rnd.choice(meta["situations"]), refs=pick_refs(pool, refs_intents, rnd, 2))
+                situation=rnd.choice(meta["situations"]), refs=pick_refs(pool, refs_intents, rnd, 2, woz, parts))
 
 
 def build_prompt(row, plan):
@@ -239,34 +292,45 @@ def build_prompt(row, plan):
             place.append(str(x))
     place = "".join(place)
     facts = "\n".join(f"- {LABELS.get(k, k)}：{v}" for k, v in plan["facts"].items())
-    refs = "\n\n".join(f"参考 {i}（{s['intent'] or '其他'}）：\n{_ref_text(s)}" for i, s in enumerate(plan["refs"], 1)) or "（无）"
+    refs = "\n\n".join(f"参考 {i}（{s.get('dataset') or ''} · {s['intent'] or '其他'}）：\n{_ref_text(s)}" for i, s in enumerate(plan["refs"], 1)) or "（无）"
+    u = plan.get("unit")
+    if u:
+        head = f"本次主题：讲解「{u['spot']}」" + (f"（{u['relation']}）" if u.get("relation") else "") + (f"——{u['title'] or u['topic']}" if (u.get("title") or u.get("topic")) else "")
+        facts_hd = "【讲解资料】（整理自官网、博物馆、政府等公开资料，客服回答只能用这里的信息）"
+        extra = (f"\n范围说明：{u['scope']}" if u.get("scope") else "") + (
+            "\n\n【游客可能这样问】（其他景点的真实提问，只学问法）\n" + "\n".join(f"- {q}" for q in plan.get("red_q") or []) if plan.get("red_q") else "")
+        rule8 = ("\n8. 这是讲解类咨询：客服用自己的话把资料讲清楚、讲生动，可以分几条说；不要说「据某某文章 / 官网 / 报道」这类出处话术；"
+                 "资料里的口径（「约」「五百多」「相传」）原样保留，不要改成确数，不要补充资料外的年代、尺寸、人物。")
+    else:
+        head, facts_hd, extra, rule8 = f"本次主题：{plan['meta']['name']}", "【景区资料】（来自景区基础数据表，客服回答只能用这里的信息）", "", ""
     return f"""你在做「景区在线客服对话」训练数据。请为「{name}」（{place}）生成一通在线客服会话。
 
 渠道：{plan['channel']}
-本次主题：{plan['meta']['name']}
+{head}
 游客人设：{plan['persona']}
 游客情境：{plan['situation']}
 
-【景区资料】（来自景区基础数据表，客服回答只能用这里的信息）
-{facts}
+{facts_hd}
+{facts}{extra}
 
 【参考对话】（其他景区的真实客服对话，只学游客怎么问、怎么追问，客服怎么接话；里面的景区名、价格、时间、政策一律不能用）
 {refs}
 
 要求：
-1. 客服说的每个事实（价格、时间、电话、地址、政策、设施、景点名…）都必须来自【景区资料】，数字原样使用；资料里没有的，客服说「这个以景区官方公告为准」或「帮您转人工确认」，不要编。
+1. 客服说的每个事实（价格、时间、电话、地址、政策、设施、景点名、年代、尺寸…）都必须来自上面的资料，数字原样使用；资料里没有的，客服说「这个以景区官方公告为准」或「帮您转人工确认」，不要编。
 2. 游客的问题围绕本次主题，主要问资料能回答的；最多有 1 个追问是资料里没有的。不要问别的景区。
 3. 游客口语化、贴合人设和情境，可以拆成多条消息、追问、催促（如「在吗」）、发表情；不要照抄参考对话的原句。
 4. 客服用官方客服口吻（「您好」「亲」等），可以分几条说；第一条可以是机器人（robot）自动接待，之后由人工（human）回复，也可以全程机器人。
 5. 资料里有票价时可以用一条 msg_type 为 card 的卡片消息，如「[门票卡片] 成人票 ¥60」，内容必须是资料里的。
 6. 4～10 条消息；景区名写「{name}」；不要提「携程」「网友」「资料」「数据表」。
-7. gap_sec 是这条消息距离上一条的秒数（游客 3～60 秒，客服 5～90 秒，第一条为 0）。
+7. gap_sec 是这条消息距离上一条的秒数（游客 3～60 秒，客服 5～90 秒，第一条为 0）。{rule8}
 
 只输出一个 JSON 对象，不要其他文字：
 {{"turns":[{{"role":"user或agent","agent_type":"robot或human（仅 agent 填）","msg_type":"text或card","text":"内容","gap_sec":整数}}],
  "end_type":"{'/'.join(END_TYPES)} 之一","satisfaction_score":null或1到5的整数,"is_resolved":true或false}}"""
 
 
+NUM_UNIT_RE = re.compile(r"\d+(?:\.\d+)?\s*(?:年|米|平方米|平方公里|亩|公里|千米|件|座|尊|层|窟|间|万|余|多)")
 PHONE_RE = re.compile(r"\d{3,4}-?\d{7,8}|1\d{10}|400-?\d{3}-?\d{4}")
 
 
@@ -277,9 +341,15 @@ def quality_flags(row, plan, rec):
     nums = set(re.findall(r"\d+(?:\.\d+)?", facts_text))
     times = {m.replace("：", ":") for m in TIME_RE.findall(facts_text)}
     flags = []
+    own = (row["_name"] or "") + " " + " ".join(str(v) for v in plan["facts"].values())
     others = {(s["attraction_name"], cs_synth._short(s.get("city"))) for s in plan["refs"]
-              if s["attraction_name"] and s["attraction_name"] not in (row["_name"] or "")}
+              if s["attraction_name"] and s["attraction_name"] not in own}
+    others |= {(n, "") for s in plan["refs"] for n in s.get("names") or [] if n and n not in own}
     for t in rec["turns"]:
+        for o, city in others:  # 游客、客服都不该提别的景区
+            for core in {cs_synth._core(o), cs_synth._core(o, (city,))}:  # 「上海欢乐谷」也查「欢乐谷」
+                if len(core) >= 3 and core in t["text"] and core not in own:
+                    flags.append(f"提到了参考对话里的「{o}」")
         if t["role"] != "agent":
             continue
         for m in MONEY_RE.findall(t["text"]):
@@ -292,10 +362,11 @@ def quality_flags(row, plan, rec):
         for m in PHONE_RE.findall(t["text"]):
             if m.replace("-", "") not in facts_text.replace("-", ""):
                 flags.append(f"电话「{m}」资料里没有")
-        for o, city in others:
-            for core in {cs_synth._core(o), cs_synth._core(o, (city,))}:  # 「上海欢乐谷」也查「欢乐谷」
-                if len(core) >= 3 and core in t["text"] and core not in (row["_name"] or ""):
-                    flags.append(f"提到了参考对话里的「{o}」")
+        if plan.get("unit"):  # 讲解类：年代、尺寸、数量这些数字也要在资料里
+            for m in NUM_UNIT_RE.findall(t["text"]):
+                num = re.match(r"\d+(?:\.\d+)?", m).group(0)
+                if num not in nums:
+                    flags.append(f"数字「{m}」资料里没有")
     return sorted(set(flags))
 
 
@@ -308,10 +379,18 @@ def assemble(row, plan, variant, js, cfg, table):
                          scenic_update_time=str(row.get("update_time") or "") or None, topic=plan["topic"], topic_name=meta["name"],
                          intent_type=meta["intent"], scene_type=meta["scene"], fact_fields=list(plan["facts"]),
                          facts={LABELS.get(k, k): v for k, v in plan["facts"].items()},
-                         style_refs=[dict(dialogue_id=s["id"], attraction_name=s["attraction_name"], intent_type=s["intent"]) for s in plan["refs"]],
+                         style_refs=[dict(dialogue_id=s["id"], dataset=s.get("dataset"), attraction_name=s["attraction_name"] or None,
+                                          intent_type=s["intent"]) for s in plan["refs"]],
                          situation=plan["situation"], variant=variant, model=cfg.get("ai_model"), prompt_version=PROMPT_VERSION,
                          generated_at=datetime.now().strftime("%Y-%m-%d %H:%M:%S"), is_resolved=bool(js.get("is_resolved")),
                          needs_review=bool(flags), check_flags=flags)
+    u = plan.get("unit")
+    if u:  # 讲解类：用的是哪条讲解资料、哪几条事实、出处网址
+        rec["source"].update(topic="culture", fact_fields=[f["seq"] for f in u["facts"]],
+                             knowledge=dict(kind={"guide": "景区讲解包", "redqa": "RedAttractionQA"}[u["kind"]], unit_id=u["unit_id"], batch=u.get("batch"),
+                                            spot=u["spot"], relation=u.get("relation"), title=u.get("title"), guide_topic=u.get("topic"),
+                                            sources=u["sources"]),
+                             example_questions=plan.get("red_q") or [])
     return rec
 
 
@@ -322,26 +401,28 @@ def _topics(args):
 
 
 def preview(args, log=print):
-    """不调模型：多少景区、每个主题多少景区有资料、按每主题几版一共能生成多少。"""
+    """不调模型：多少景区、每个主题多少景区有资料（景点讲解为讲解资料条数）、按每主题几版一共能生成多少。"""
     rows = load_scenics(args, log)
     topics = _topics(args)
+    ctx = load_context(args, rows, log)
     per = {t: 0 for t in topics}
     for r in rows:
-        for t in available(r, topics):
-            per[t] += 1
+        for t in available(r, topics, ctx):
+            per[t.split("@")[0]] += 1
     pairs = sum(per.values())
     v = max(1, int(getattr(args, "variants", 1) or 1))
     total = pairs * v
     sample = None
     for r in rows:
-        have = available(r, topics)
+        have = [t for t in available(r, topics, ctx) if not t.startswith("culture@")]
         if len(have) >= 3:
             sample = dict(scenic_id=r["_id"], scenic_name=r["_name"], city=r["_city"],
                           topics={TOPICS[t]["name"]: {LABELS.get(k, k): x for k, x in topic_facts(r, t).items()} for t in have if t != "mixed"})
             break
     lim = int(getattr(args, "limit", 0) or 0)
-    return dict(mode="expand", scenics=len(rows), by_topic=[dict(topic=t, name=TOPICS[t]["name"] if t in TOPICS else MIXED["name"], scenics=per[t]) for t in topics],
-                pairs=pairs, variants=v, total=total, this_run=min(total, lim) if lim else total, sample=sample)
+    names = dict({k: x["name"] for k, x in TOPICS.items()}, mixed=MIXED["name"], culture="景点讲解（讲解资料条数）")
+    return dict(mode="expand", scenics=len(rows), by_topic=[dict(topic=t, name=names[t], scenics=per[t]) for t in topics],
+                pairs=pairs, variants=v, total=total, this_run=min(total, lim) if lim else total, sample=sample, sources=ctx["stats"])
 
 
 def _done_keys(out):
@@ -366,7 +447,7 @@ def run(args, cfg, log=print, should_stop=lambda: False, progress=lambda done, t
     table = db.SCENIC_TABLE.strip("`")
     rows = load_scenics(args, log)
     topics = _topics(args)
-    pool = ref_pool(args.data_dir, log)
+    ctx = load_context(args, rows, log)
     variants = max(1, int(args.variants or 1))
     out = Path(args.out) if args.out else OUT_ROOT / f"cs_expand_{time.strftime('%Y%m%d')}"
     out.mkdir(parents=True, exist_ok=True)
@@ -374,7 +455,7 @@ def run(args, cfg, log=print, should_stop=lambda: False, progress=lambda done, t
     rnd0 = _seeded(args.seed, "order")
     rows = rows[:]
     rnd0.shuffle(rows)  # 限量时也能分散到各个景区
-    avail = [(r, available(r, topics)) for r in rows]
+    avail = [(r, available(r, topics, ctx)) for r in rows]
     # 先每个（景区, 主题）各出第 1 版，再出第 2 版……：随时停下，覆盖面都是最广的
     plan_keys = [(r, t, v) for v in range(1, variants + 1) for r, have in avail for t in have]
     todo = [(r, t, v) for r, t, v in plan_keys if f"{r['_id']}|{t}|{v}" not in done]
@@ -386,6 +467,8 @@ def run(args, cfg, log=print, should_stop=lambda: False, progress=lambda done, t
 
     f_dlg, f_map, f_rej = out / "dialogs.jsonl", out / "mapping.csv", out / "rejected.jsonl"
     f_sc, f_src, f_done = out / "scenic_extract.jsonl", out / "source_extract.jsonl", out / "done_keys.txt"
+    f_kn = out / "knowledge_extract.jsonl"
+    have_kn = {json.loads(x)["unit_id"] for x in f_kn.read_text(encoding="utf-8").splitlines() if x.strip()} if f_kn.exists() else set()
     have_sc = {json.loads(x)["scenic_id"] for x in f_sc.read_text(encoding="utf-8").splitlines() if x.strip()} if f_sc.exists() else set()
     have_src = {json.loads(x)["dialogue_id"] for x in f_src.read_text(encoding="utf-8").splitlines() if x.strip()} if f_src.exists() else set()
     new_map = not f_map.exists()
@@ -419,7 +502,7 @@ def run(args, cfg, log=print, should_stop=lambda: False, progress=lambda done, t
     def one(row, topic, v):
         if should_stop():
             return ("cancelled", row, topic, v, None, dict(error="已停止"), None)
-        plan = plan_job(row, topic, v, pool, args.seed)
+        plan = plan_job(row, topic, v, ctx, args.seed)
         prompt = build_prompt(row, plan)
         ex_ = dict(prompt=prompt, persona=plan["persona"], channel=plan["channel"], situation=plan["situation"], started=time.strftime("%H:%M:%S"))
         t0 = time.time()
@@ -453,8 +536,13 @@ def run(args, cfg, log=print, should_stop=lambda: False, progress=lambda done, t
             for s in plan["refs"]:  # 参考的真实对话，每通写一次
                 if s["id"] not in have_src:
                     with f_src.open("a", encoding="utf-8") as f:
-                        f.write(json.dumps(dict(dialogue_id=s["id"], row=s["row"], turns=s["turns"]), ensure_ascii=False) + "\n")
+                        f.write(json.dumps(dict(dialogue_id=s["id"], dataset=s.get("dataset"), row=s.get("row"), turns=s["turns"]), ensure_ascii=False) + "\n")
                     have_src.add(s["id"])
+            u = plan.get("unit")
+            if u and u["unit_id"] not in have_kn:  # 用到的讲解资料（事实 + 出处），每条写一次
+                with f_kn.open("a", encoding="utf-8") as f:
+                    f.write(json.dumps(dict(u, scenic_id=row["_id"]), ensure_ascii=False) + "\n")
+                have_kn.add(u["unit_id"])
             with f_dlg.open("a", encoding="utf-8") as f:
                 f.write(json.dumps(rec, ensure_ascii=False) + "\n")
             g = rec["source"]
@@ -476,7 +564,11 @@ def run(args, cfg, log=print, should_stop=lambda: False, progress=lambda done, t
             log(f"  [{n}/{len(todo)}] {row['_name']} {topic} 第 {v} 版 {'调用失败' if kind == 'failed' else '不合格'}：{rec.get('error')}")
         src_view = dict(mode="expand", scenic_id=row["_id"], scenic_name=row["_name"], city=row["_city"], topic=topic,
                         topic_name=plan["meta"]["name"] if plan else topic, facts={LABELS.get(k, k): x for k, x in (plan["facts"] if plan else {}).items()},
-                        refs=[dict(dialogue_id=s["id"], attraction_name=s["attraction_name"], intent=s["intent"], turns=s["turns"][:8]) for s in (plan["refs"] if plan else [])],
+                        refs=[dict(dialogue_id=s["id"], attraction_name=s["attraction_name"] or s.get("dataset"), intent=s["intent"], turns=s["turns"][:8])
+                              for s in (plan["refs"] if plan else [])],
+                        knowledge=(dict(spot=plan["unit"]["spot"], title=plan["unit"].get("title"), sources=plan["unit"]["sources"])
+                                   if plan and plan.get("unit") else None),
+                        red_q=(plan.get("red_q") if plan else None),
                         dialogue_id=row["_id"], attraction_name=row["_name"], intent=plan["meta"]["name"] if plan else topic)
         on_item(dict(kind=kind, variant=v, source=src_view, exchange=ex_, record=rec if kind == "ok" else None,
                      error=None if kind == "ok" else rec.get("error"), mysql=bool(args.mysql)))
