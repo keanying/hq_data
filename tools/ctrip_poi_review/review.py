@@ -885,6 +885,10 @@ class LazyBrowser:
         self.restarts = 0
         self.user_agent = ""
         self.last_restart_reason = ""
+        self._dead = False  # 浏览器被手动关掉 / 崩溃：下次用时重新启动
+
+    def _on_close(self, *_):
+        self._dead = True
 
     def kind(self):
         a = self.args
@@ -894,16 +898,38 @@ class LazyBrowser:
                                                                                  getattr(a, "channel", "") or "Playwright 自带 Chromium")
 
     def info(self):
+        up = self.ctx is not None and not self._dead
         return dict(kind=self.kind(), channel=getattr(self.args, "channel", "") or "", headless=bool(getattr(self.args, "headless", False)),
-                    profile=str(Path(self.args.profile).resolve()), running=self.ctx is not None, user_agent=self.user_agent,
-                    started_at=self.started_at, tabs=len(self.ctx.pages) if self.ctx else 0, restarts=self.restarts,
+                    profile=str(Path(self.args.profile).resolve()), running=up, user_agent=self.user_agent,
+                    started_at=self.started_at if up else None, tabs=len(self.ctx.pages) if up else 0, restarts=self.restarts,
                     last_restart_reason=self.last_restart_reason)
+
+    async def _drop(self):
+        """丢掉已经失效的浏览器对象（不报错）。"""
+        try:
+            if self.pw:
+                await self.pw.stop()
+        except Exception:  # noqa: BLE001
+            pass
+        self.pw = self.ctx = self.page = self.searcher = None
+        self.started_at = None
 
     async def get_page(self):
         async with self._lock:
+            if self.page is not None and (self._dead or self.page.is_closed()):
+                alive = [p for p in (self.ctx.pages if self.ctx and not self._dead else []) if not p.is_closed()]
+                if alive:  # 只是主标签页被关了：换一个还开着的标签页
+                    self.page, self.searcher = alive[0], None
+                else:  # 整个浏览器被关掉或崩溃：重新启动（同一个用户目录，登录状态保留）
+                    print("浏览器已被关闭或崩溃，重新启动…", flush=True)
+                    await self._drop()
+                    self.restarts += 1
+                    self.last_restart_reason = f"{time.strftime('%H:%M:%S')} 浏览器被关闭 / 崩溃，自动重新启动"
             if self.page is None:
+                self._dead = False
                 self.pw = await async_playwright().start()
                 self.ctx, self.page, prefs = await launch(self.pw, self.args)
+                self.ctx.on("close", self._on_close)
                 self.prefs = self._prefs_override or prefs
                 if getattr(self.args, "throttle_ms", 0):
                     self.prefs["throttle_ms"] = self.args.throttle_ms
@@ -916,11 +942,18 @@ class LazyBrowser:
 
     async def new_page(self):
         await self.get_page()
-        return await self.ctx.new_page()
+        try:
+            return await self.ctx.new_page()
+        except Exception as e:  # noqa: BLE001  TargetClosedError：浏览器在这期间被关掉了，重启后再开一次
+            if "closed" not in str(e).lower():
+                raise
+            self._dead = True
+            await self.get_page()
+            return await self.ctx.new_page()
 
     async def get_searcher(self):
-        if self.searcher is None:
-            page = await self.get_page()
+        page = await self.get_page()  # 浏览器被关掉过的话这里会重新启动，旧的搜索器作废
+        if self.searcher is None or self.searcher.page is not page:
             self.searcher = CtripSearcher(page, self.prefs, self.args.start_url, self.args.pattern)
             await page.goto(self.args.start_url, wait_until="domcontentloaded")
             await page.wait_for_timeout(2000)
@@ -940,6 +973,7 @@ class LazyBrowser:
                 pass
             self.pw = self.ctx = self.page = self.searcher = None
             self.started_at = None
+            self._dead = False
 
     async def restart(self, reason=""):
         """关掉整个浏览器（同一个用户目录，登录状态保留），下次用的时候重新启动。"""
