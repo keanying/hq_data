@@ -417,6 +417,38 @@ def create_app(args):
             svc.prefs.save()
         return dict(res, log=logs)
 
+    @app.post("/api/cs/capacity")
+    async def cs_capacity(payload: dict = Body(default={})):
+        """可生成总量（不调模型）：改写真实对话 + 按景区真实数据扩展，各自的单元数 × 版数，以及 MySQL 里已生成的。"""
+        rv = max(1, min(int(payload.get("rewrite_variants") or 10), 10))
+        ev = max(1, min(int(payload.get("expand_variants") or 7), 20))
+        logs = []
+
+        def calc():
+            ra = cs_args(dict(payload, mode="rewrite", data_type="真实", split="train", city="", intent="", scenic="", scenic_city="", variants=rv))
+            rw = cs_synth.preview(ra, logs.append)
+            ea = cs_args(dict(payload, mode="expand", topics="", scenic="", scenic_city="", grade="", only_approved=False, variants=ev, limit=0))
+            ex = cs_expand.preview(ea, logs.append)
+            done = {}
+            try:
+                for m in ("llm_rewrite", "llm_expand"):
+                    done[m] = cs_synth.export_count(dict(method=m))["sessions"]
+                    done[m + "_ok"] = cs_synth.export_count(dict(method=m, review="ok"))["sessions"]
+            except Exception as e:  # noqa: BLE001  没建表也能看总量
+                done["error"] = str(e)
+            return rw, ex, done
+        try:
+            rw, ex, done = await asyncio.to_thread(calc)
+        except (FileNotFoundError, RuntimeError) as e:
+            raise HTTPException(400, str(e)) from e
+        except Exception as e:  # noqa: BLE001
+            raise HTTPException(400, f"{type(e).__name__}: {e}") from e
+        rewrite = dict(units=rw["usable"], scenics=rw["scenics"], variants=rv, total=rw["usable"] * rv, source_total=rw["source_total"],
+                       generated=done.get("llm_rewrite"), generated_ok=done.get("llm_rewrite_ok"))
+        expand = dict(units=ex["pairs"], scenics=ex["scenics"], variants=ev, total=ex["total"], by_topic=ex["by_topic"], sources=ex.get("sources"),
+                      generated=done.get("llm_expand"), generated_ok=done.get("llm_expand_ok"))
+        return dict(rewrite=rewrite, expand=expand, total=rewrite["total"] + expand["total"], mysql_error=done.get("error"), log=logs[-20:])
+
     @app.post("/api/cs/start")
     async def cs_start(payload: dict = Body(default={})):
         if cs_current():

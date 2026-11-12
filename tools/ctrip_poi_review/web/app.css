@@ -313,3 +313,9 @@ a:hover { color: var(--semi-color-link-hover); }
 .bubble.u .txt { background: #fff; border: 1px solid var(--line); }
 .bubble.a .txt { background: #6c4dff; color: #fff; }
 .bubble .txt.card { background: #fff7e6; color: #9a5b00; border: 1px dashed #f0c070; }
+
+.cap-tb { width: 100%; border-collapse: collapse; font-size: 13px; }
+.cap-tb th { text-align: left; font-weight: 500; color: var(--ink-3); padding: 8px 10px; border-bottom: 1px solid var(--line); }
+.cap-tb td { padding: 10px; border-bottom: 1px solid #f2f2f5; vertical-align: top; }
+.cap-tb td.num, .cap-tb th:not(:first-child) { text-align: right; font-variant-numeric: tabular-nums; }
+.cap-tb tr.sum td { background: #f7f5ff; font-size: 14px; }

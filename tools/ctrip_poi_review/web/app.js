@@ -784,6 +784,47 @@
     <//>`;
   }
 
+  /** 可生成总量：改写真实对话 + 按景区真实数据扩展，各自单元数 × 版数，和 MySQL 里已经生成的 */
+  function CsCapacity({ visible, onClose, dataDir }) {
+    const [v, setV] = useState({ rewrite_variants: 10, expand_variants: 7, workers: 32 });
+    const [d, setD] = useState(null);
+    const [busy, setBusy] = useState(false);
+    const calc = async () => {
+      setBusy(true);
+      try { setD(await post('/api/cs/capacity', { data_dir: dataDir, rewrite_variants: v.rewrite_variants, expand_variants: v.expand_variants })); }
+      catch (e) { Toast.error(e.message); }
+      setBusy(false);
+    };
+    useEffect(() => { if (visible && !d) calc(); }, [visible]);
+    const set = (k) => (x) => setV((o) => ({ ...o, [k]: x }));
+    const eta = (n) => dur(n / (Math.max(1, v.workers) * 5));
+    const row = (name, how, x) => html`<tr><td><b>${name}</b><div className="muted sm">${how}</div></td><td className="num">${fmt(x.scenics)}</td>
+      <td className="num">${fmt(x.units)}</td><td className="num">× ${x.variants}</td><td className="num"><b>${fmt(x.total)}</b></td>
+      <td className="num">${x.generated == null ? '—' : html`${fmt(x.generated)}<div className="muted sm">合格 ${fmt(x.generated_ok)}</div>`}</td></tr>`;
+    return html`<${Modal} title="可生成总量（不调模型）" visible=${visible} onCancel=${onClose} footer=${null} width=${860}>
+      <div style=${{ display: 'flex', gap: 10, alignItems: 'center', flexWrap: 'wrap', marginBottom: 12 }}>
+        <span className="lbl">改写：每通</span><${InputNumber} hideButtons value=${v.rewrite_variants} onChange=${set('rewrite_variants')} min=${1} max=${10} style=${{ width: 70 }} suffix="版" />
+        <span className="lbl">扩展：每单元</span><${InputNumber} hideButtons value=${v.expand_variants} onChange=${set('expand_variants')} min=${1} max=${20} style=${{ width: 70 }} suffix="版" />
+        <span className="lbl">按并发</span><${InputNumber} hideButtons value=${v.workers} onChange=${set('workers')} min=${1} max=${128} style=${{ width: 70 }} /><span className="lbl">估用时</span>
+        <${Button} onClick=${calc} loading=${busy} icon=${html`<${Ic.IconRefresh} />`}>重新计算<//>
+      </div>
+      ${!d ? html`<${Spin} />` : html`<div>
+        <table className="cap-tb"><thead><tr><th>方式</th><th>景区</th><th>单元</th><th>版数</th><th>可生成</th><th>MySQL 已生成</th></tr></thead><tbody>
+          ${row('改写真实对话', '单元 = 对到我们已审核景区的真实 · train 客服对话（随审核增加）', d.rewrite)}
+          ${row('按景区真实数据扩展', '单元 = 景区 × 有资料的主题 + 每条讲解资料', d.expand)}
+          <tr className="sum"><td><b>合计</b></td><td></td><td></td><td></td><td className="num"><b>${fmt(d.total)}</b></td>
+            <td className="num">${d.rewrite.generated == null ? '—' : fmt((d.rewrite.generated || 0) + (d.expand.generated || 0))}</td></tr>
+        </tbody></table>
+        <div className="muted sm" style=${{ margin: '8px 0 12px' }}>按 ${v.workers} 并发、每并发约 5 条/分估：全部生成约 <b>${eta(d.total)}</b>。
+          可生成 = 调模型的条数；实际入库还要扣掉模型返回不合格的，「需复核」的也建议抽查后再用。${d.mysql_error ? ` MySQL 统计没取到：${d.mysql_error}` : ''}</div>
+        <div className="hd2" style=${{ fontWeight: 600, marginBottom: 6 }}>扩展：各主题单元数（× ${d.expand.variants} 版）</div>
+        <div className="cs-sc">${d.expand.by_topic.map((x) => html`<span key=${x.topic} className="chip2">${x.name}<b>${fmt(x.scenics)}</b><span className="muted">→ ${fmt(x.scenics * d.expand.variants)}</span></span>`)}</div>
+        ${d.expand.sources && html`<div className="muted sm" style=${{ marginTop: 8 }}>资料：景区讲解包 ${fmt(d.expand.sources.guide_units)} 条讲解 · RedAttractionQA 对到 ${fmt(d.expand.sources.red_units)} 组 ·
+          问法参考 RiSAWOZ / CrossWOZ ${fmt(Object.values(d.expand.sources.woz || {}).reduce((a, b) => a + b, 0))} 条次</div>`}
+      </div>`}
+    <//>`;
+  }
+
   /** 从 MySQL 两张表按条件导出（流式下载，百万条也行） */
   function CsExportDb({ cities, bt }) {
     const [f, setF] = useState({ method: '', city: '', scenic: '', review: '', range: null, fmt: 'jsonl', limit: 0 });
@@ -823,6 +864,7 @@
     useEffect(() => { api('/api/settings').then((st) => { if (st.cs_data_dir) setP((o) => ({ ...o, data_dir: o.data_dir || st.cs_data_dir })); }).catch(() => {}); }, []);
     const [pv, setPv] = useState(null);
     const [pvBusy, setPvBusy] = useState(false);
+    const [capOpen, setCapOpen] = useState(false);
     const [jobId, setJobId] = useState(0);
     const [st, refresh] = usePoll(() => api(`/api/cs/state${jobId ? `?job_id=${jobId}` : ''}`), 1500, [jobId]);
     const [bt, refreshBt] = usePoll(() => api('/api/cs/batches'), 10000);
@@ -903,6 +945,7 @@
               <${Checkbox} checked=${p.mysql} onChange=${(e) => set('mysql')(e.target.checked)}>同时写入 MySQL<//>
               ${!expand && html`<${Checkbox} checked=${p.allow_unmapped} onChange=${(e) => set('allow_unmapped')(e.target.checked)}>对不到我们景区的也生成<//>`}
               <span style=${{ flex: 1 }}></span>
+              <${Button} onClick=${() => setCapOpen(true)} icon=${html`<${Ic.IconHistogram} />`}>可生成总量<//>
               <${Button} onClick=${doPreview} loading=${pvBusy} icon=${html`<${Ic.IconSearch} />`}>预估（不调模型）<//>
               ${running ? html`<${Button} type="danger" theme="solid" icon=${html`<${Ic.IconStop} />`} onClick=${stop} disabled=${job.cancel}>停止<//>`
                 : html`<${Button} theme="solid" icon=${html`<${Ic.IconPlay} />`} onClick=${start}>开始生成<//>`}
@@ -991,6 +1034,7 @@
         </div>
       </div>
       <${CsItemSheet} jobId=${job && job.id} n=${cur} onClose=${() => setCur(0)} />
+      ${capOpen && html`<${CsCapacity} visible=${capOpen} onClose=${() => setCapOpen(false)} dataDir=${p.data_dir} />`}
     </div>`;
   }
 
