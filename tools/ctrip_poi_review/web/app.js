@@ -721,7 +721,8 @@
   // ------------------------------------------------------------ 客服数据（大模型改写原始客服问答 → 在线客服会话）
   const CS_INTENTS = ['门票', '门票价格', '预约', '预约购票', '开放时间', '交通', '游玩建议', '退改', '退改规则', '住宿', '餐饮', '其他'];
   const CS_TOPICS = [['ticket', '门票价格'], ['booking', '预约购票'], ['hours', '开放时间'], ['traffic', '交通停车'], ['plan', '游玩建议'],
-    ['contact', '咨询投诉电话'], ['guide', '讲解服务'], ['intro', '景区介绍'], ['mixed', '综合咨询（随机 2～3 个主题）']].map(([value, label]) => ({ value, label }));
+    ['contact', '咨询投诉电话'], ['guide', '讲解服务'], ['intro', '景区介绍'], ['mixed', '综合咨询（随机 2～3 个主题）'],
+    ['culture', '景点讲解 / 历史文化（讲解包、RedAttractionQA）']].map(([value, label]) => ({ value, label }));
   const CS_GRADES = ['5A', '4A', '3A', '2A', '1A'].map((x) => ({ value: x, label: x }));
   const ymd = (d) => (d ? `${d.getFullYear()}${String(d.getMonth() + 1).padStart(2, '0')}${String(d.getDate()).padStart(2, '0')}` : '');
   const dur = (min) => (min < 90 ? `${Math.max(1, Math.round(min))} 分钟` : min < 60 * 36 ? `${(min / 60).toFixed(1)} 小时` : `${(min / 1440).toFixed(1)} 天`);
@@ -744,8 +745,11 @@
       ${!d ? html`<${Spin} />` : d.error && !src ? html`<${Banner} type="danger" description=${d.error} />` : html`
       <div className="xchg">
         ${expand ? html`<div className="col">
-          <h4>① 景区资料 <span className="muted">${src.scenic_id} · ${src.city || ''} · 景区表</span></h4>
+          <h4>① ${src.knowledge ? '讲解资料' : '景区资料'} <span className="muted">${src.scenic_id} · ${src.city || ''} · ${src.knowledge ? src.knowledge.spot : '景区表'}</span></h4>
           <div className="kv sm">${Object.entries(src.facts || {}).map(([k, v]) => html`<span key=${'k' + k}>${k}</span><div key=${'v' + k}>${v}</div>`)}</div>
+          ${src.knowledge && html`<div className="muted sm" style=${{ margin: '8px 0 0' }}>出处：${src.knowledge.sources.map((x, i) => html`<span key=${i}>${i ? '；' : ''}${x.url
+            ? html`<a href=${x.url} target="_blank" rel="noreferrer">${x.publisher || x.title || x.url}</a>` : (x.publisher || '') + ' ' + (x.title || '')}${x.type ? `（${x.type}）` : ''}</span>`)}</div>`}
+          ${src.red_q && src.red_q.length ? html`<div className="muted sm" style=${{ marginTop: 6 }}>问法参考（RedAttractionQA）：${src.red_q.join(' / ')}</div>` : ''}
           <h4 style=${{ marginTop: 12 }}>参考的真实对话 <span className="muted">只学问法，不用里面的事实</span></h4>
           ${(src.refs || []).map((r) => html`<div key=${r.dialogue_id} style=${{ marginBottom: 10 }}>
             <div className="muted sm" style=${{ margin: '0 0 4px 2px' }}>${r.dialogue_id} · ${r.attraction_name} · ${r.intent}</div>
@@ -864,7 +868,9 @@
               <//>
               <span className="muted sm">${expand ? '事实取自景区表，问法参考真实对话；能出约百万条' : '一通真实问答改写成几版会话；数量受原始对话限制'}</span>
             <//>
-            <${Field} label=${expand ? '真实对话' : '原始数据'}><${Input} value=${p.data_dir} onChange=${set('data_dir')} placeholder="服务所在电脑上的目录，如 D:\\data\\文旅包\\data（含 dwd.dwd_cus_service_dialogue_df.csv）" style=${{ flex: 1 }} /><//>
+            <${Field} label=${expand ? '资料目录' : '原始数据'}><${Input} value=${p.data_dir} onChange=${set('data_dir')}
+              placeholder=${expand ? '服务所在电脑上的目录：放客服对话包，以及（可选）景区讲解包、RiSAWOZ / CrossWOZ 的 train.json、RedAttractionQA_train.json，子目录也行'
+                : '服务所在电脑上的目录，如 D:\\data\\文旅包\\data（含 dwd.dwd_cus_service_dialogue_df.csv）'} style=${{ flex: 1 }} /><//>
             ${expand ? html`
             <${Field} label="景区范围">
               <${CitySelect} value=${p.scenic_city} onChange=${set('scenic_city')} cities=${cities} style=${{ width: 130 }} />
@@ -927,7 +933,10 @@
                 ${Object.entries(pv.sample.topics).map(([t, f]) => html`<div key=${t} style=${{ marginTop: 6 }}><b>${t}</b>：${Object.entries(f).map(([k, v]) => `${k} ${v}`).join('；')}</div>`)}</div>`}>
                 <a style=${{ marginLeft: 6 }}>看一个景区的资料</a><//>`}</div>
             <div className="cs-sc">${pv.by_topic.map((x) => html`<span key=${x.topic} className="chip2">${x.name}<b>${fmt(x.scenics)}</b></span>`)}</div>
-            <div className="muted sm" style=${{ marginTop: 6 }}>数字 = 这个主题有资料的景区数；资料为空的不生成。先每个（景区, 主题）出第 1 版，再出第 2 版……，中途停下覆盖面也最广；再次开始接着跑，不重复。</div>
+            ${pv.sources && html`<div className="muted sm" style=${{ marginTop: 6 }}>
+              资料目录里找到：景区讲解包 <b>${fmt(pv.sources.guide_units)}</b> 条讲解 · RedAttractionQA 对到景区 <b>${fmt(pv.sources.red_units)}</b> 组（共 ${fmt(pv.sources.red)} 条问答）
+              · 问法参考 RiSAWOZ / CrossWOZ 景点对话 <b>${fmt(Object.values(pv.sources.woz || {}).reduce((a, b) => a + b, 0))}</b> 条次</div>`}
+            <div className="muted sm" style=${{ marginTop: 6 }}>数字 = 这个主题有资料的景区数（景点讲解为讲解资料条数）；资料为空的不生成。先每个（景区, 主题）出第 1 版，再出第 2 版……，中途停下覆盖面也最广；再次开始接着跑，不重复。</div>
           </div>`}
           ${pv && pv.mode !== 'expand' && html`<div className="cs-pv">
             <div className="hd2">预估：原始 <b>${fmt(pv.source_total)}</b> 通符合条件，其中对到我们 <b>${fmt(pv.scenics)}</b> 个景区的 <b>${fmt(pv.usable)}</b> 通可用

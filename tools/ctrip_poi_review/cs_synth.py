@@ -323,7 +323,7 @@ def load_jsonl(path, log=print, should_stop=lambda: False, progress=lambda done,
 
 OUT_ROOT = HERE / "out"
 BATCH_PREFIXES = ("cs_synth_", "cs_expand_")
-BATCH_FILES = ["dialogs.jsonl", "mapping.csv", "source_extract.jsonl", "scenic_extract.jsonl", "rejected.jsonl"]
+BATCH_FILES = ["dialogs.jsonl", "mapping.csv", "source_extract.jsonl", "scenic_extract.jsonl", "knowledge_extract.jsonl", "rejected.jsonl"]
 _count_cache = {}
 
 

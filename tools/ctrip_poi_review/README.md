@@ -415,6 +415,22 @@ python cs_synth.py --load-jsonl out/cs_synth_20261110/dialogs.jsonl             
 - **顺序与续跑**：先每个（景区, 主题）出第 1 版，再出第 2 版……，中途停下覆盖面也最广；`done_keys.txt` 记录已完成的，
   再次开始会查 `out/` 下所有 `cs_expand_*` 批次，跨天也接着跑、不重复调模型（别删这些目录里的 `done_keys.txt`）。session_id 用 10 位数字（`cs_日期_xxxxxxxxxx`），百万级不撞号。
 
+**更多真实资料（可选，放进同一个资料目录、子目录也行，自动识别）**：
+| 资料 | 怎么用 | 说明 |
+|---|---|---|
+| 景区讲解包（`dwd_prd_scenic_guide_{content,fact,fact_source_rel,source}_di.csv`，如「景区讲解内容_合并_3165条」） | **事实**：新主题「景点讲解 / 历史文化」，每条讲解一个单元 | 215 个景区、3,153 条可用；只有 OTA / 旅游社区出处（source_type 6、7）的事实不用；原文摘录不进生成内容 |
+| `RedAttractionQA_train.json` | **事实**：passage 里点名的景点能唯一对到景区表的（短名要求出现本市 / 区县，通用名如「烈士陵园」不用），每 5 条一个讲解单元；问题本身作讲解类问法参考 | 约 195 个单元 / 176 个景区；validation / test 不用 |
+| RiSAWOZ 类 `train.json`（`dialogue_id` + `dialogue[].user_utterance`） | **问法参考**：只取「旅游景点」领域轮次，按游客问的内容归到主题 | 约 2,000 通；里面的景点、价格、电话不用 |
+| CrossWOZ 类 `train.json`（`sys-usr` + `messages`） | **问法参考**：只取「景点」领域轮次 | 约 4,150 通；文件大（解析时约占 1.8 GB 内存），第一次整理后缓存到 `out/cs_refs_cache/` |
+
+有 RiSAWOZ / CrossWOZ 时，每条会话的两通参考对话为「包里真实客服对话 1 通 + 对应主题的景点对话 1 通」；讲解类只用包里的对话和 RedAttractionQA 的问法。
+只用 train，dev / test / val 不用（避免和评测数据重叠）。`source.style_refs` 里有每通参考的 `dataset`，讲解类的 `source.knowledge` 里有讲解单元 ID、景点、
+出处网址 / 发布单位 / 来源类型；用到的讲解资料写进批次的 `knowledge_extract.jsonl`。质检另外检查：讲解类客服说的年代 / 尺寸 / 数量资料里没有的、
+游客或客服提到参考对话里的景点（含 RiSAWOZ / CrossWOZ 里的景点名）。
+加上讲解后，全部主题每个 7 版约 **101 万条**（144,870 个单元 × 7）。
+**许可**：讲解包标注「未确认完整内容转载授权」（正文是自行整理的事实，不是原文）；RiSAWOZ、CrossWOZ、RedAttractionQA 是公开研究数据集，
+用于商用训练数据前请确认各自的许可。这些文件放在本地资料目录（`tools/data/` 已加进 .gitignore），不要提交到仓库。
+
 **在工作台**：「客服数据」页 → 生成方式选「按景区真实数据扩展」→ 填真实对话目录（同改写模式）、景区范围（城市 / 等级 / 景区 / 只要已审核）、
 主题、每个景区每个主题几版、本次最多几条（0 = 全部）、并发 →「预估」看总量和大概用时 →「开始生成」。
 
@@ -452,6 +468,7 @@ python cs_synth.py --load-jsonl out/cs_synth_20261110/dialogs.jsonl             
 | `match.py` | 名称/地址比对与自动审核判定、坐标换算 |
 | `cs_synth.py` | 智能客服对话：用大模型改写原始客服问答，输出目标格式 + source，写 MySQL 两张表；工作台「客服数据」页 |
 | `cs_expand.py` | 智能客服对话：按景区表真实字段扩展（问法参考真实对话），百万级；工作台「客服数据」页「按景区真实数据扩展」 |
+| `cs_sources.py` | 扩展用的外部资料：景区讲解包、RedAttractionQA（事实），RiSAWOZ / CrossWOZ（问法参考）；自动识别 + 缓存 |
 | `ai_judge.py` | AI 辅助核对（火山方舟 Responses API，提示词、解析、缓存） |
 | `crawler.py` | 点评图片采集（翻页、解析、入库） |
 | `service.py` | 常驻服务（FastAPI）：核对接口、任务队列、边核对边采集 |
