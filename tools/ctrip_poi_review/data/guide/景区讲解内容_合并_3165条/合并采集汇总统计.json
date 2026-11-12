@@ -1,0 +1,163 @@
+{
+  "snapshot_time_utc": "2026-11-12T11:52:00+00:00",
+  "total_content_qty": 3165,
+  "batch_content_qty": {
+    "scenic_web_20261112_first20": 80,
+    "scenic_expand_20261112_001": 2959,
+    "scenic_p1_20261112_001": 126
+  },
+  "covered_scenics_all": 215,
+  "museum_or_memorial_covered_all": 180,
+  "distinct_scenic_attraction_name_pairs": 3116,
+  "table_row_qty": {
+    "dwd_prd_scenic_guide_source_di": 3135,
+    "dwd_prd_scenic_guide_content_di": 3165,
+    "dwd_prd_scenic_guide_fact_di": 19712,
+    "dwd_prd_scenic_guide_content_source_rel_di": 5920,
+    "dwd_prd_scenic_guide_fact_source_rel_di": 21646,
+    "dwd_prd_scenic_guide_collect_task_di": 235
+  },
+  "unique_source_url_qty": 3123,
+  "source_domain_qty": 764,
+  "guide_content_type_distribution": {
+    "1": 3165
+  },
+  "original_content_type_distribution": {
+    "1": 3122,
+    "2": 42,
+    "3": 1
+  },
+  "guide_char_qty": {
+    "min": 157,
+    "max": 558,
+    "sum": 1253677,
+    "mean": 396.1
+  },
+  "province_scenic_qty": {
+    "四川省": 19,
+    "安徽省": 10,
+    "广东省": 9,
+    "河北省": 6,
+    "河南省": 13,
+    "湖北省": 9,
+    "湖南省": 4,
+    "福建省": 2,
+    "辽宁省": 10,
+    "陕西省": 12,
+    "北京市": 11,
+    "甘肃省": 10,
+    "重庆市": 9,
+    "山西省": 4,
+    "西藏自治区": 2,
+    "江西省": 7,
+    "江苏省": 12,
+    "上海市": 6,
+    "云南省": 1,
+    "内蒙古自治区": 4,
+    "吉林省": 6,
+    "天津市": 5,
+    "宁夏回族自治区": 1,
+    "山东省": 20,
+    "广西壮族自治区": 4,
+    "浙江省": 10,
+    "海南省": 2,
+    "贵州省": 4,
+    "青海省": 2,
+    "黑龙江省": 1
+  },
+  "platforms": [
+    {
+      "source_type": "1",
+      "source_type_name": "景区运营方官网",
+      "source_record_qty": 309,
+      "unique_url_qty": 306,
+      "scenic_qty": 43,
+      "linked_content_qty": 422,
+      "sample_domains_json": "[\"www.summerpalace.net.cn\", \"www.tiantanpark.cn\", \"www.badaling.cn\", \"m.hqc.cn\", \"www.lmsk.cn\", \"www.ems517.com\"]",
+      "sample_urls_json": "[\"https://www.summerpalace.net.cn/gallery_detail/369.html\", \"https://www.summerpalace.net.cn/longevity/detailqianshan/382.html\", \"https://www.summerpalace.net.cn/laka_spot/detail/362.html\"]"
+    },
+    {
+      "source_type": "2",
+      "source_type_name": "政府网站",
+      "source_record_qty": 252,
+      "unique_url_qty": 252,
+      "scenic_qty": 133,
+      "linked_content_qty": 542,
+      "sample_domains_json": "[\"zyk.bjhd.gov.cn\", \"yllhj.beijing.gov.cn\", \"s.visitbeijing.com.cn\", \"www.bjwmb.gov.cn\", \"wwj.shaanxi.gov.cn\", \"www.leshan.gov.cn\"]",
+      "sample_urls_json": "[\"https://zyk.bjhd.gov.cn/kjhd/lyhd/201810/t20181023_4530788.shtml\", \"http://yllhj.beijing.gov.cn/ggfw/bjsggml/lsmy/lsmy2/202206/t20220620_2746558.shtml\", \"https://s.visitbeijing.com.cn/attraction/101406\"]"
+    },
+    {
+      "source_type": "3",
+      "source_type_name": "博物馆或文物机构",
+      "source_record_qty": 1617,
+      "unique_url_qty": 1612,
+      "scenic_qty": 169,
+      "linked_content_qty": 1937,
+      "sample_domains_json": "[\"www.dpm.org.cn\", \"www.bmy.com.cn\", \"www.sxwby.com\", \"www.dha.ac.cn\", \"www.dzskyjy.cn\", \"www.sckg.com\"]",
+      "sample_urls_json": "[\"https://www.dpm.org.cn/explore/building/236465.html\", \"https://www.dpm.org.cn/explore/building/236434.html\", \"https://www.dpm.org.cn/explore/building/236472.html\"]"
+    },
+    {
+      "source_type": "4",
+      "source_type_name": "UNESCO官网",
+      "source_record_qty": 18,
+      "unique_url_qty": 16,
+      "scenic_qty": 18,
+      "linked_content_qty": 30,
+      "sample_domains_json": "[\"whc.unesco.org\", \"ich.unesco.org\"]",
+      "sample_urls_json": "[\"https://whc.unesco.org/en/list/881/\", \"https://whc.unesco.org/en/list/1003/\", \"https://whc.unesco.org/en/list/1039/\"]"
+    },
+    {
+      "source_type": "5",
+      "source_type_name": "其他机构、媒体或学术资料",
+      "source_record_qty": 869,
+      "unique_url_qty": 867,
+      "scenic_qty": 203,
+      "linked_content_qty": 1499,
+      "sample_domains_json": "[\"yangbo.cctv.com\", \"www.whitr-ap.org\", \"news.cctv.com\", \"www.news.cn\", \"www.xinhuanet.com\", \"m.haiwainet.cn\"]",
+      "sample_urls_json": "[\"https://yangbo.cctv.com/2026/10/27/ARTI3IwvzIqlIpJu7dUkXCM8261027.shtml\", \"https://www.whitr-ap.org/index.php?classid=1545&id=21&t=show\", \"https://news.cctv.com/2024/12/16/ARTIi9yk1iLcRCZjHnnMldRD241216.shtml\"]"
+    },
+    {
+      "source_type": "6",
+      "source_type_name": "OTA平台",
+      "source_record_qty": 47,
+      "unique_url_qty": 47,
+      "scenic_qty": 45,
+      "linked_content_qty": 82,
+      "sample_domains_json": "[\"you.ctrip.com\", \"cn.tripadvisor.com\", \"gs.ctrip.com\", \"m.ly.com\"]",
+      "sample_urls_json": "[\"https://you.ctrip.com/sight/shanghai2/110703.html\", \"https://you.ctrip.com/sight/heze708/5703425.html\", \"https://you.ctrip.com/sight/yangzhou12/1675673.html\"]"
+    },
+    {
+      "source_type": "7",
+      "source_type_name": "旅游内容社区",
+      "source_record_qty": 17,
+      "unique_url_qty": 17,
+      "scenic_qty": 9,
+      "linked_content_qty": 26,
+      "sample_domains_json": "[\"www.sohu.com\", \"zhuanlan.zhihu.com\", \"www.meet99.com\", \"m.zh.meet99.com\", \"you.ctrip.com\"]",
+      "sample_urls_json": "[\"https://www.sohu.com/a/629132219_121106832\", \"https://www.sohu.com/a/622223932_121106832\", \"https://www.sohu.com/a/514991820_121106875\"]"
+    },
+    {
+      "source_type": "8",
+      "source_type_name": "公开公众号文章",
+      "source_record_qty": 1,
+      "unique_url_qty": 1,
+      "scenic_qty": 1,
+      "linked_content_qty": 5,
+      "sample_domains_json": "[\"app.xinhuanet.com\"]",
+      "sample_urls_json": "[\"https://app.xinhuanet.com/news/article.html?articleId=945c989ff3b0c6ffbd9f73b7b02319a9\"]"
+    },
+    {
+      "source_type": "9",
+      "source_type_name": "公开音视频相关讲解文字",
+      "source_record_qty": 5,
+      "unique_url_qty": 5,
+      "scenic_qty": 4,
+      "linked_content_qty": 9,
+      "sample_domains_json": "[\"www.hi.chinanews.com.cn\", \"hn.rednet.cn\", \"www.chinanews.com.cn\", \"www.chinanews.com\", \"www.facebook.com\"]",
+      "sample_urls_json": "[\"https://www.hi.chinanews.com.cn/hnnew/2022-05-18/4_154478.html\", \"https://hn.rednet.cn/content/2020/12/07/8686694.html\", \"https://www.chinanews.com.cn/m/cul/shipin/2015/12-29/news620007.shtml\"]"
+    }
+  ],
+  "remaining_not_collected": 301,
+  "database_executed": false,
+  "important_note": "三个批次合并：scenic_web_20261112_first20(80)+scenic_expand_20261112_001(2959)+scenic_p1_20261112_001(126)。全部guide_content_type=1，为依据公开资料自行整理；未确认完整转载授权；未连接数据库。"
+}

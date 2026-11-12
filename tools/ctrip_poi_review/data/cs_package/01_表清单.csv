@@ -1,0 +1,12 @@
+﻿库表名,库,表名,表注释,原中文文件,行数
+dim.dim_prd_attraction_df,dim,dim_prd_attraction_df,景区维度表（七城景区主档，天级全量快照）,景区主档_上海.csv|景区主档_北京.csv|景区主档_广州.csv|景区主档_成都.csv|景区主档_杭州.csv|景区主档_深圳.csv|景区主档_西安.csv,7888
+dim.dim_prd_attraction_merge_log_df,dim,dim_prd_attraction_merge_log_df,景区主档重复条目合并记录（同一景区多条主档的去重日志）,景区主档_重复合并记录.csv,2
+dwd.dwd_prd_attraction_guide_df,dwd,dwd_prd_attraction_guide_df,景区讲解明细表（非百科来源，训练用讲解文本）,讲解.csv,8392
+dwd.dwd_prd_attraction_guide_wiki_df,dwd,dwd_prd_attraction_guide_wiki_df,景区讲解百科补充明细表（维基百科CC BY-SA，待法务确认，不计入主口径）,讲解_百科cc_by_sa.csv,224
+dwd.dwd_cus_service_dialogue_df,dwd,dwd_cus_service_dialogue_df,文旅客服对话明细表（一行一通对话）,客服对话.csv,11468
+dwd.dwd_cus_service_dialogue_turn_df,dwd,dwd_cus_service_dialogue_turn_df,文旅客服对话逐轮明细表（一行一轮发言）,客服逐轮.csv,47618
+dwd.dwd_prd_attraction_image_df,dwd,dwd_prd_attraction_image_df,景区图片链接明细表（七城，携程+同程，仅存链接）,图片_七城.csv,314684
+dwd.dwd_prd_attraction_image_pilot_df,dwd,dwd_prd_attraction_image_pilot_df,北京景区图片试点明细表（含部分已下载原图）,图片_北京试点.csv,416
+ads.ads_prd_attraction_image_missing_df,ads,ads_prd_attraction_image_missing_df,无图景区清单（七城主档中无任何图片的景区及原因）,图片_无图景点.csv,1570
+ads.ads_prd_attraction_image_url_check_df,ads,ads_prd_attraction_image_url_check_df,图片链接可用性抽测结果（分层抽样200条）,图片_链接抽测.csv,200
+ads.ads_prd_attraction_guide_uncovered_df,ads,ads_prd_attraction_guide_uncovered_df,北京讲解未覆盖景区清单（非百科讲解不足200字的景区）,讲解_未覆盖景点_北京.csv,587

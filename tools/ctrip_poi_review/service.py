@@ -372,7 +372,7 @@ def create_app(args):
     def cs_args(p):
         a = dict(CS_DEFAULTS)
         a.update({k: v for k, v in (p or {}).items() if k in CS_DEFAULTS and v is not None})
-        a["data_dir"] = a["data_dir"] or svc.prefs.get("cs_data_dir") or ""
+        a["data_dir"] = a["data_dir"] or svc.prefs.get("cs_data_dir") or (str(cs_synth.DATA_DIR) if cs_synth.DATA_DIR.exists() else "")
         if not a["data_dir"]:
             raise HTTPException(400, "先填原始数据目录（解压后包含 dwd.dwd_cus_service_dialogue_df.csv 的目录）")
         for k in ("limit", "variants", "workers", "seed"):
@@ -519,7 +519,8 @@ def create_app(args):
 
     @app.get("/api/cs/batches")
     def cs_batches():
-        return dict(items=cs_synth.batches(), session_table=cs_synth.SESSION_TABLE, turn_table=cs_synth.TURN_TABLE, formats=cs_synth.EXPORT_FORMATS)
+        return dict(items=cs_synth.batches(), session_table=cs_synth.SESSION_TABLE, turn_table=cs_synth.TURN_TABLE, formats=cs_synth.EXPORT_FORMATS,
+                    data_dir_default=str(cs_synth.DATA_DIR) if cs_synth.DATA_DIR.exists() else "")
 
     def export_filters(q):
         return {k: q.get(k) or "" for k in ("method", "scenic", "city", "review", "date_from", "date_to", "limit")}

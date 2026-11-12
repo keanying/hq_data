@@ -610,7 +610,7 @@ def run(args, cfg, log=print, should_stop=lambda: False, progress=lambda done, t
 
 def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("--data-dir", required=True, help="解压后的数据目录（含 dwd.dwd_cus_service_dialogue_df.csv，用作真实问法参考）")
+    ap.add_argument("--data-dir", default=str(cs_synth.DATA_DIR), help="资料目录（客服对话包、讲解包、RedAttractionQA、对话数据集提取），默认仓库里的 data/")
     ap.add_argument("--out", default="", help="输出目录，默认 out/cs_expand_<今天>（断点续跑要用同一个目录）")
     ap.add_argument("--topics", default="", help="主题，逗号分隔：" + ",".join(ALL_TOPICS) + "；默认全部")
     ap.add_argument("--scenic", default="", help="只要这些景区（景区ID 或名称，逗号分隔）")

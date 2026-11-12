@@ -912,7 +912,8 @@
             <//>
             <${Field} label=${expand ? '资料目录' : '原始数据'}><${Input} value=${p.data_dir} onChange=${set('data_dir')}
               placeholder=${expand ? '服务所在电脑上的目录：放客服对话包，以及（可选）景区讲解包、RiSAWOZ / CrossWOZ 的 train.json、RedAttractionQA_train.json，子目录也行'
-                : '服务所在电脑上的目录，如 D:\\data\\文旅包\\data（含 dwd.dwd_cus_service_dialogue_df.csv）'} style=${{ flex: 1 }} /><//>
+                : '服务所在电脑上的目录，如 D:\\data\\文旅包\\data（含 dwd.dwd_cus_service_dialogue_df.csv）'} style=${{ flex: 1 }} />
+              ${bt && bt.data_dir_default && p.data_dir !== bt.data_dir_default && html`<${Button} theme="borderless" onClick=${() => set('data_dir')(bt.data_dir_default)}>用仓库自带数据<//>`}<//>
             ${expand ? html`
             <${Field} label="景区范围">
               <${CitySelect} value=${p.scenic_city} onChange=${set('scenic_city')} cities=${cities} style=${{ width: 130 }} />

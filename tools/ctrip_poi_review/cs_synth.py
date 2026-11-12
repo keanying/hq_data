@@ -46,6 +46,7 @@ from pathlib import Path
 import ai_judge
 
 HERE = Path(__file__).resolve().parent
+DATA_DIR = HERE / "data"  # 仓库里带的数据（客服对话包、景区表、讲解包、RedAttractionQA、对话数据集提取）；不填资料目录时用它
 PROMPT_VERSION = "cs_rewrite_v3"
 CHANNELS = ["小程序-在线客服", "APP-在线客服", "公众号-在线客服", "H5-在线客服", "PC官网-在线客服"]
 PERSONAS = ["第一次来的外地游客，说话简短", "带小孩的家长，比较细心", "带老人出行的年轻人", "学生，预算有限", "着急的游客，会催促客服",
@@ -519,7 +520,7 @@ def export_iter(f, fmt="jsonl", batch=500):
 # ---------------------------------------------------------------- 主流程
 def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("--data-dir", default="", help="解压后的数据目录（含 dwd.dwd_cus_service_dialogue_df.csv 等）")
+    ap.add_argument("--data-dir", default=str(DATA_DIR), help="数据目录（含 dwd.dwd_cus_service_dialogue_df.csv 等），默认仓库里的 data/")
     ap.add_argument("--load-jsonl", default="", help="不生成，只把已有的 dialogs.jsonl 写进 MySQL 两张表")
     ap.add_argument("--out", default="", help="输出目录，默认 out/cs_synth_<今天>")
     ap.add_argument("--data-type", default="真实", help="用哪类原始对话，逗号分隔：真实 / 合成 / 改写；默认 真实")
