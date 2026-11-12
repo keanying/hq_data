@@ -323,7 +323,7 @@ def load_jsonl(path, log=print, should_stop=lambda: False, progress=lambda done,
 
 
 OUT_ROOT = HERE / "out"
-BATCH_PREFIXES = ("cs_synth_", "cs_expand_")
+BATCH_PREFIXES = ("cs_synth_", "cs_expand_", "guide_eval_", "guide_narr_")
 BATCH_FILES = ["dialogs.jsonl", "mapping.csv", "source_extract.jsonl", "scenic_extract.jsonl", "knowledge_extract.jsonl", "rejected.jsonl"]
 _count_cache = {}
 
@@ -368,7 +368,8 @@ def batches():
     res = []
     dirs = [d for pre in BATCH_PREFIXES for d in OUT_ROOT.glob(pre + "*") if d.is_dir()]
     for d in sorted(dirs, key=lambda x: x.stat().st_mtime, reverse=True):
-        info = dict(name=d.name, mode="expand" if d.name.startswith("cs_expand_") else "rewrite", files={})
+        info = dict(name=d.name, mode=next((m for p, m in (("cs_expand_", "expand"), ("guide_eval_", "guide_eval"), ("guide_narr_", "guide_narr"))
+                                            if d.name.startswith(p)), "rewrite"), files={})
         for f in BATCH_FILES:
             p = d / f
             if p.exists():

@@ -449,6 +449,33 @@ python cs_synth.py --load-jsonl out/cs_synth_20261110/dialogs.jsonl             
   边查边下载，百万条也不占服务内存。
 - **批次文件**：`out/cs_synth_<日期>/`（改写）和 `out/cs_expand_<日期>/`（扩展）里的文件，扩展批次多一个 `scenic_extract.jsonl`（用到的景区表行）。
 
+## 12. 讲解类训练数据：讲解内容评价 + 子景点个性化讲解
+
+「训练数据」页（原「客服数据」页）生成方式选「讲解内容评价」或「个性化讲解」；命令行 `python guide_synth.py --task eval|narr`。
+输出结构和需求样例一致，**另加标准答案和 source**；写 MySQL 两张新表（自动建）：`dwd_guide_eval_sample_di`、`dwd_guide_narration_sample_di`
+（一行一条，`record_json` 是完整样本，另有景区、结论、分数、是否需复核等筛选字段；DDL 见 schema.sql）。
+
+**知识来源**（可多选，默认全部）：景区讲解包（3,153 条，带出处）、RedAttractionQA（能唯一对到景区的，194 组）、客户景区表基础资料（简介、等级、称号、文保、
+主要景点、面积、山水、游玩时长、季节，每个景区一条，约 1.7 万）。合计约 2.04 万条知识，每条知识可出多版。
+
+**① 讲解内容评价**（`eval_task_id` / `poi` / `kb_entry` / `guide_clip_txt` / `eval_result` / `source`）
+- `kb_entry`：知识条目（kb_id = 讲解包 content_id 等，kb_version = 采集 / 更新日期），`coverage` 按事实内容归类，`gaps` 由模型写两个知识库没覆盖的话题。
+- `guide_clip_txt`：讲解员口述**文字**（模型生成，不是录音，也没有伪造 media_url / ASR 置信度），口语程度三档。
+- 程序事先定好每版放几处问题（0 处约 20%，作合格样本；1～3 处：年代错误 / 数字错误 / 结构材质错误 / 无依据说法 / 夸大绝对化，指定到具体条目），模型逐字标出原话。
+- `eval_result`（标准答案）：错误清单（原话、知识库正确说法、严重度）、无依据、夸大、讲对 / 漏讲的条目、口头禅统计、修改建议；
+  分数和结论程序按固定规则算（规则写在 `scoring_rule`）：准确性 = 100 − 25×事实错误 − 15×无依据 − 10×夸大，完整性 = 讲对条目占比，表达 = 100 − 3×口头禅，
+  总分 = 0.5 / 0.3 / 0.2 加权；有高严重度错误或准确性 < 70 为不合格，无问题且总分 ≥ 75 为合格。
+- 质检（需复核）：标注的原话在文字里找不到、标出的问题数和计划不符、文字里有知识库没有又没标出来的数字。
+
+**② 个性化讲解**（`request_id` / `scene` / `request_time` / `poi`（含 sub_poi）/ `sub_poi_knowledge` / `visitor_profile` / `task_params` / `reference_narration` / `source`）
+- `visitor_profile` 为**合成**画像，字段和样例一致，按客群（亲子、情侣、朋友、银发、独自、商务、研学、三代同堂）保证年龄、同行人数、儿童年龄、收入、购票渠道等前后一致。
+- `taboos` 按知识内容给（传说要标明、红色历史不戏说、宗教不评论等），`visit_rules` 只用景区表里真实有的（最晚入园、特殊开放规则），没有就空。
+- `task_params`：字数上限 120～300、风格（可为空）、当前位置；`reference_narration`（标准答案）= 讲解词、字数、用到的知识条目、个性化做了什么。
+- 质检：超字数、出现知识没有的数字、绝对化表述、疑似推销、讲了知识里没有的传说。
+
+**规模**：两类各「2.04 万条知识 × 每条几版」，每条 5 版约 10.2 万条，两类合计约 20.4 万；「可生成总量」里能看到并调整版数。
+**导出**：「导出 → 从 MySQL 导出」选数据「讲解内容评价 / 个性化讲解」，可按景区、质检、结论筛选，JSONL / JSON / CSV。
+
 ## 其他参数
 
 | 参数 | 说明 |
@@ -473,6 +500,7 @@ python cs_synth.py --load-jsonl out/cs_synth_20261110/dialogs.jsonl             
 | `cs_expand.py` | 智能客服对话：按景区表真实字段扩展（问法参考真实对话），百万级；工作台「客服数据」页「按景区真实数据扩展」 |
 | `import_scenic.py` | 把 `data/scenic/` 里的客户景区表 CSV 导进 MySQL（新环境用；只插入没有的，不覆盖核对结果） |
 | `data/` | 客服数据生成用的数据（随仓库提交，见 `data/README.md`）：客服对话包、景区表、讲解包、RedAttractionQA、RiSAWOZ / CrossWOZ 景点对话提取 |
+| `guide_synth.py` | 讲解类训练数据：讲解内容评价（讲解文字 + 错误清单 / 分数）、子景点个性化讲解（合成画像 + 参考讲解词）；写 MySQL 两张表 |
 | `cs_sources.py` | 扩展用的外部资料：景区讲解包、RedAttractionQA（事实），RiSAWOZ / CrossWOZ（问法参考）；自动识别 + 缓存 |
 | `ai_judge.py` | AI 辅助核对（火山方舟 Responses API，提示词、解析、缓存） |
 | `crawler.py` | 点评图片采集（翻页、解析、入库） |
