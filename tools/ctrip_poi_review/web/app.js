@@ -843,49 +843,57 @@
     <//>`;
   }
 
-  /** 可生成总量：改写真实对话 + 按景区真实数据扩展，各自单元数 × 版数，和 MySQL 里已经生成的 */
+  /** 可生成总量：每个数据集一张卡片（可生成 / 已生成 / 预计用时），版数一行设置，计算明细默认收起 */
   function CsCapacity({ visible, onClose, dataDir, onApply }) {
-    const [v, setV] = useState({ rewrite_variants: 10, expand_variants: 7, guide_variants: 5, workers: 32 });
+    const [v, setV] = useState({ rewrite_variants: 10, expand_variants: 7, eval_variants: 5, narr_variants: 5, workers: 32 });
     const [d, setD] = useState(null);
     const [busy, setBusy] = useState(false);
-    const calc = async () => {
+    const [more, setMore] = useState(false);
+    const calc = async (vv = v) => {
       setBusy(true);
-      try { setD(await post('/api/cs/capacity', { data_dir: dataDir, rewrite_variants: v.rewrite_variants, expand_variants: v.expand_variants, guide_variants: v.guide_variants })); }
-      catch (e) { Toast.error(e.message); }
+      try { setD(await post('/api/cs/capacity', { data_dir: dataDir, ...vv })); } catch (e) { Toast.error(e.message); }
       setBusy(false);
     };
     useEffect(() => { if (visible && !d) calc(); }, [visible]);
     const set = (k) => (x) => setV((o) => ({ ...o, [k]: x }));
     const eta = (n) => dur(n / (Math.max(1, v.workers) * 5));
-    const row = (name, how, x, mode) => html`<tr><td><b>${name}</b><div className="muted sm">${how}</div>
-      ${onApply && mode && html`<a className="sm" onClick=${() => onApply(mode, x.variants)}>按这个设置（${x.variants} 版、全部）→</a>`}</td><td className="num">${fmt(x.scenics)}</td>
-      <td className="num">${fmt(x.units)}</td><td className="num">× ${x.variants}</td><td className="num"><b>${fmt(x.total)}</b></td>
-      <td className="num">${x.generated == null ? '—' : html`${fmt(x.generated)}<div className="muted sm">合格 ${fmt(x.generated_ok)}</div>`}</td></tr>`;
-    return html`<${Modal} title="可生成总量（不调模型）" visible=${visible} onCancel=${onClose} footer=${null} width=${860}>
-      <div style=${{ display: 'flex', gap: 10, alignItems: 'center', flexWrap: 'wrap', marginBottom: 12 }}>
-        <span className="lbl">改写：每通</span><${InputNumber} hideButtons value=${v.rewrite_variants} onChange=${set('rewrite_variants')} min=${1} max=${10} style=${{ width: 70 }} suffix="版" />
-        <span className="lbl">扩展：每单元</span><${InputNumber} hideButtons value=${v.expand_variants} onChange=${set('expand_variants')} min=${1} max=${20} style=${{ width: 70 }} suffix="版" />
-        <span className="lbl">讲解：每条知识</span><${InputNumber} hideButtons value=${v.guide_variants} onChange=${set('guide_variants')} min=${1} max=${50} style=${{ width: 70 }} suffix="版" />
-        <span className="lbl">按并发</span><${InputNumber} hideButtons value=${v.workers} onChange=${set('workers')} min=${1} max=${128} style=${{ width: 70 }} /><span className="lbl">估用时</span>
-        <${Button} onClick=${calc} loading=${busy} icon=${html`<${Ic.IconRefresh} />`}>重新计算<//>
+    const num = (k, label, max) => html`<span className="cap-in"><em>${label}</em><${InputNumber} hideButtons size="small" value=${v[k]} onChange=${set(k)} min=${1} max=${max} style=${{ width: 78 }} suffix="版" /></span>`;
+    const card = (title, total, lines, gen, apply) => html`<div className="cap-card">
+      <div className="t">${title}</div>
+      <div className="n">${fmt(total)}<small> 条</small></div>
+      ${lines.map((x, i) => html`<div key=${i} className="l">${x}</div>`)}
+      <div className="l">约 ${eta(total)}（${v.workers} 并发）</div>
+      <div className="l">已生成 ${gen == null ? '—' : fmt(gen)}</div>
+      ${apply && html`<div className="a">${apply}</div>`}
+    </div>`;
+    const go = (mode, n) => html`<a onClick=${() => onApply(mode, n)}>按此设置生成 →</a>`;
+    const gen = (...xs) => (xs.every((x) => x == null) ? null : xs.reduce((a, x) => a + (x || 0), 0));
+    return html`<${Modal} title="可生成总量" visible=${visible} onCancel=${onClose} footer=${null} width=${920}>
+      <div className="cap-bar">
+        ${num('rewrite_variants', '客服改写', 10)}${num('expand_variants', '客服扩展', 20)}${num('eval_variants', '讲解评价', 50)}${num('narr_variants', '个性化讲解', 50)}
+        <span className="cap-in"><em>并发</em><${InputNumber} hideButtons size="small" value=${v.workers} onChange=${set('workers')} min=${1} max=${128} style=${{ width: 64 }} /></span>
+        <${Button} size="small" theme="solid" onClick=${() => calc()} loading=${busy} icon=${html`<${Ic.IconRefresh} />`}>计算<//>
       </div>
-      ${!d ? html`<${Spin} />` : html`<div>
-        <table className="cap-tb"><thead><tr><th>方式</th><th>景区</th><th>单元</th><th>版数</th><th>可生成</th><th>MySQL 已生成</th></tr></thead><tbody>
-          ${row('改写真实对话', '单元 = 对到我们已审核景区的真实 · train 客服对话（随审核增加）', d.rewrite, 'rewrite')}
-          ${row('按景区真实数据扩展', '单元 = 景区 × 有资料的主题 + 每条讲解资料', d.expand, 'expand')}
-          <tr className="sum"><td><b>智能客服 小计</b></td><td></td><td></td><td></td><td className="num"><b>${fmt(d.total)}</b></td>
-            <td className="num">${d.rewrite.generated == null ? '—' : fmt((d.rewrite.generated || 0) + (d.expand.generated || 0))}</td></tr>
-          ${d.guide_eval && row('讲解内容评价', '单元 = 知识条目（讲解包 + RedAttractionQA + 景区表基础资料），每版不同问题组合', d.guide_eval, 'guide_eval')}
-          ${d.guide_narr && row('个性化讲解', '单元 = 知识条目，每版换一个合成游客和任务参数', d.guide_narr, 'guide_narr')}
-          ${d.guide_eval && html`<tr className="sum"><td><b>讲解 小计</b></td><td></td><td></td><td></td><td className="num"><b>${fmt(d.guide_total)}</b></td><td></td></tr>
-          <tr className="sum"><td><b>全部合计</b></td><td></td><td></td><td></td><td className="num"><b>${fmt(d.total + d.guide_total)}</b></td><td></td></tr>`}
-        </tbody></table>
-        <div className="muted sm" style=${{ margin: '8px 0 12px' }}>按 ${v.workers} 并发、每并发约 5 条/分估：智能客服全部生成约 <b>${eta(d.total)}</b>${d.guide_total ? html`，讲解两类约 <b>${eta(d.guide_total)}</b>` : ''}。
-          可生成 = 调模型的条数；实际入库还要扣掉模型返回不合格的，「需复核」的也建议抽查后再用。${d.mysql_error ? ` MySQL 统计没取到：${d.mysql_error}` : ''}</div>
-        <div className="hd2" style=${{ fontWeight: 600, marginBottom: 6 }}>扩展：各主题单元数（× ${d.expand.variants} 版）</div>
-        <div className="cs-sc">${d.expand.by_topic.map((x) => html`<span key=${x.topic} className="chip2">${x.name}<b>${fmt(x.scenics)}</b><span className="muted">→ ${fmt(x.scenics * d.expand.variants)}</span></span>`)}</div>
-        ${d.expand.sources && html`<div className="muted sm" style=${{ marginTop: 8 }}>资料：景区讲解包 ${fmt(d.expand.sources.guide_units)} 条讲解 · RedAttractionQA 对到 ${fmt(d.expand.sources.red_units)} 组 ·
-          问法参考 RiSAWOZ / CrossWOZ ${fmt(Object.values(d.expand.sources.woz || {}).reduce((a, b) => a + b, 0))} 条次</div>`}
+      ${!d ? html`<div style=${{ padding: 40, textAlign: 'center' }}><${Spin} /></div>` : html`<div>
+        <div className="cap-cards">
+          ${card('智能客服对话', d.rewrite.total + d.expand.total,
+            [`改写 ${fmt(d.rewrite.total)}（${fmt(d.rewrite.units)} 通 × ${d.rewrite.variants} 版）`, `扩展 ${fmt(d.expand.total)}（${fmt(d.expand.units)} 单元 × ${d.expand.variants} 版）`],
+            gen(d.rewrite.generated, d.expand.generated),
+            onApply && html`<span><a onClick=${() => onApply('rewrite', d.rewrite.variants)}>改写：按此设置生成 →</a><br /><a onClick=${() => onApply('expand', d.expand.variants)}>扩展：按此设置生成 →</a></span>`)}
+          ${d.guide_eval && card('讲解内容评价', d.guide_eval.total, [`${fmt(d.guide_eval.units)} 条知识 × ${d.guide_eval.variants} 版`],
+            d.guide_eval.generated, onApply && go('guide_eval', d.guide_eval.variants))}
+          ${d.guide_narr && card('个性化讲解', d.guide_narr.total, [`${fmt(d.guide_narr.units)} 条知识 × ${d.guide_narr.variants} 版`],
+            d.guide_narr.generated, onApply && go('guide_narr', d.guide_narr.variants))}
+          ${card('合计', d.total + (d.guide_total || 0), ['三个数据集加起来'], gen(d.rewrite.generated, d.expand.generated,
+            d.guide_eval && d.guide_eval.generated, d.guide_narr && d.guide_narr.generated))}
+        </div>
+        <div className="muted sm" style=${{ marginTop: 10 }}>可生成 = 调模型的条数，实际入库要扣掉不合格的。改上面的版数后点「计算」。<a style=${{ marginLeft: 8 }} onClick=${() => setMore(!more)}>${more ? '收起明细' : '看计算明细'}</a></div>
+        ${more && html`<div className="cap-more">
+          <div>客服改写：能对到已审核景区的真实客服对话 ${fmt(d.rewrite.units)} 通 × ${d.rewrite.variants} 版（随审核增加）</div>
+          <div>客服扩展：${fmt(d.expand.scenics)} 个景区 × 有资料的主题 + 讲解资料 = ${fmt(d.expand.units)} 单元 × ${d.expand.variants} 版</div>
+          <div className="cs-sc" style=${{ margin: '4px 0 8px' }}>${d.expand.by_topic.map((x) => html`<span key=${x.topic} className="chip2">${x.name}<b>${fmt(x.scenics)}</b></span>`)}</div>
+          ${d.guide_eval && html`<div>讲解两类：知识 ${fmt(d.guide_eval.units)} 条（${d.guide_eval.by_kb.map((x) => `${x.name} ${fmt(x.units)}`).join('、')}）× 各自版数</div>`}
+        </div>`}
       </div>`}
     <//>`;
   }
@@ -931,27 +939,111 @@
     </div>`;
   }
 
+  /** 「数量」三个参数是干什么的、什么时候放大（随生成方式变） */
+  const VARIANT_WHAT = {
+    rewrite: '同一通真实问答改写成几版不同的会话（换人设、渠道、条数、结束方式）',
+    expand: '同一个景区的同一个主题生成几版（换人设、情境、渠道、参考问法、会话设定）',
+    guide_eval: '同一条知识生成几版讲解（换讲解来源、问题类别、放进的问题、置信度）',
+    guide_narr: '同一条知识生成几版讲解词（换合成游客画像、字数上限、风格、位置）',
+  };
+  function ParamHelp({ mode }) {
+    return html`<div style=${{ width: 520, padding: '10px 14px', fontSize: 12.5, lineHeight: 1.75 }}>
+      <div><b>版数</b>：${VARIANT_WHAT[mode] || VARIANT_WHAT.expand}。总量 = 单元数 × 版数。版数越大总量越大，但同一份资料的样本越相像（讲的事实是同一组）。</div>
+      <div style=${{ marginTop: 6 }}><b>本次最多</b>：这一次最多生成几条，<b>0 = 全部</b>。只限这一次，不影响总量；用来试跑（如 200）或分批跑。停止后再点「开始生成」接着跑，生成过的不会重复。</div>
+      <div style=${{ marginTop: 6 }}><b>并发</b>：同时向模型发几个请求，<b>只影响速度，不影响数量和质量</b>。每个并发约 5 条 / 分（32 并发约 150 条 / 分）。上限看方舟账号的限额：「调用失败」里出现限流（429 / 请求过多）就调小。</div>
+      <div style=${{ marginTop: 10 }}><b>什么时候放大</b></div>
+      <div>① 先用小版数（3～5）、本次最多 200 试跑，点几条看数据交换，再看「需复核」「不合格」的比例。</div>
+      <div>② 需复核低于约 10%、不合格低于约 5%，就把本次最多改成 <b>0</b> 跑全量；并发按账号限额调到最大。</div>
+      <div>③ 全量跑完还要更多数据，再<b>加版数</b>：版数是增量的，比如从 5 改到 10，只会补第 6～10 版，前 5 版不重跑。</div>
+      <div>④ 需复核偏高时先别放大：点开看原因（超字数、数字资料里没有、复读……），调资料或参数后再跑。</div>
+    </div>`;
+  }
+
+  /** 一键清理训练数据：选数据集 + 范围（全部 / 只清需复核），先数再删；删掉的同时清进度，下次会重新生成 */
+  const CLEAN_SETS = [['cs_rewrite', '客服对话（改写）'], ['cs_expand', '客服对话（扩展）'], ['eval', '讲解内容评价'], ['narr', '个性化讲解']];
+  function DataClean({ onClose, initial, onDone }) {
+    const [sel, setSel] = useState(initial ? [initial] : []);
+    const [scope, setScope] = useState('all');
+    const [cnt, setCnt] = useState(null);
+    const [busy, setBusy] = useState(false);
+    useEffect(() => {
+      setCnt(null);
+      if (!sel.length) return;
+      api(`/api/data/clear/count?datasets=${sel.join(',')}&scope=${scope}`).then((r) => setCnt(r.counts)).catch((e) => Toast.error(e.message));
+    }, [sel.join(','), scope]);
+    const total = cnt ? Object.values(cnt).reduce((a, x) => a + (typeof x === 'number' ? x : 0), 0) : 0;
+    const go = () => Modal.confirm({
+      title: `确定删除 ${fmt(total)} 条？`, content: scope === 'all' ? '会删除 MySQL 里这些数据集生成的全部样本，并清空生成进度（下次从头生成）。删除后不能恢复。'
+        : '会删除这些数据集里「需复核」的样本，并从进度里去掉，下次开始生成时会重新生成它们。删除后不能恢复。',
+      okText: '删除', cancelText: '取消', okButtonProps: { type: 'danger', theme: 'solid' },
+      onOk: async () => {
+        setBusy(true);
+        try { const r = await post('/api/data/clear', { datasets: sel, scope }); Toast.success('已清理：' + Object.entries(r.deleted).map(([k, v]) => `${(CLEAN_SETS.find((x) => x[0] === k) || [k, k])[1]} ${fmt(v)} 条`).join('，')); onDone && onDone(); onClose(); }
+        catch (e) { Toast.error(e.message); }
+        setBusy(false);
+      } });
+    return html`<${Modal} title="清理数据" visible onCancel=${onClose} footer=${null} width=${560}>
+      <div className="form" style=${{ gridTemplateColumns: '72px minmax(0, 1fr)' }}>
+        <${Field} label="数据集"><div style=${{ display: 'flex', flexWrap: 'wrap', gap: '6px 16px' }}>${CLEAN_SETS.map(([k, n]) => html`<${Checkbox} key=${k} checked=${sel.includes(k)}
+          onChange=${(e) => setSel((o) => (e.target.checked ? [...o, k] : o.filter((x) => x !== k)))}>${n}${cnt && cnt[k] != null ? html`<b style=${{ marginLeft: 6 }}>${typeof cnt[k] === 'number' ? fmt(cnt[k]) + ' 条' : '?'}</b>` : ''}<//>`)}</div><//>
+        <${Field} label="范围"><${RadioGroup} type="button" value=${scope} onChange=${(e) => setScope(e.target.value)}>
+          <${Radio} value="all">全部<//><${Radio} value="review">只清「需复核」的（会重新生成）<//><//><//>
+      </div>
+      <div className="muted sm" style=${{ margin: '12px 0 0', lineHeight: 1.7 }}>只删本工具生成的样本（MySQL 表里的），不碰景区表、图片和其他数据。有任务在跑的数据集要先停止。</div>
+      <div style=${{ display: 'flex', justifyContent: 'flex-end', gap: 10, marginTop: 16 }}>
+        <${Button} onClick=${onClose}>取消<//>
+        <${Button} type="danger" theme="solid" icon=${html`<${Ic.IconDelete} />`} disabled=${!sel.length || !cnt || !total} loading=${busy} onClick=${go}>删除 ${cnt ? fmt(total) : '…'} 条<//>
+      </div>
+    <//>`;
+  }
+
+  const CS_MODE_NAME = { rewrite: '改写客服对话', expand: '扩展客服对话', guide_eval: '讲解内容评价', guide_narr: '个性化讲解' };
+  const CS_DEF = { data_type: '真实', split: 'train', city: '', intent: [], scenic: '', scenic_city: '', limit: 20, variants: 1, workers: 3, allow_unmapped: false,
+    topics: [], grade: [], only_approved: false, kb: [], ai_model: '', ai_web_search: false };
+  const CS_DS = { rewrite: 'cs_rewrite', expand: 'cs_expand', guide_eval: 'eval', guide_narr: 'narr' };
+
   function CsPage({ cities }) {
-    const [p, setP] = useState({ mode: 'rewrite', data_dir: '', data_type: '真实', split: 'train', city: '', intent: [], scenic: '', scenic_city: '', limit: 20,
-      variants: 1, workers: 3, mysql: true, allow_unmapped: false, topics: [], grade: [], only_approved: false, kb: [] });
+    // 每种生成方式各是各的任务、各存各的参数（服务端记住，下次打开按方式恢复）；资料目录共用
+    const [mode, setMode] = useState('rewrite');
+    const [pm, setPm] = useState(() => Object.fromEntries(Object.keys(CS_MODE_NAME).map((m) => [m, { ...CS_DEF }])));
+    const [dataDir, setDataDir] = useState('');
+    const p = { ...pm[mode], mode, data_dir: dataDir };
+    const setP = (fn) => setPm((o) => ({ ...o, [mode]: (() => { const n = fn({ ...o[mode], mode, data_dir: dataDir }); delete n.mode; delete n.data_dir; return n; })() }));
+    const [aiDef, setAiDef] = useState(null);
     const expand = p.mode === 'expand', guide = p.mode.startsWith('guide_'), scen = expand || guide;
-    useEffect(() => { api('/api/settings').then((st) => { if (st.cs_data_dir) setP((o) => ({ ...o, data_dir: o.data_dir || st.cs_data_dir })); }).catch(() => {}); }, []);
+    const [cleanOpen, setCleanOpen] = useState(false);
+    useEffect(() => {
+      Promise.all([api('/api/settings').catch(() => ({})), api('/api/cs/params').catch(() => ({}))]).then(([st, cp]) => {
+        setAiDef({ model: st.ai_model, web: !!st.ai_web_search });
+        setDataDir(cp.data_dir || st.cs_data_dir || '');
+        const saved = cp.params || {};
+        setPm((o) => Object.fromEntries(Object.keys(o).map((m) => {
+          const x = { ...o[m], ...(saved[m] || {}) };
+          for (const k of ['intent', 'topics', 'grade', 'kb']) if (typeof x[k] === 'string') x[k] = x[k].split(',').filter(Boolean);
+          if (x.ai_web_search == null) x.ai_web_search = false;
+          return [m, x];
+        })));
+      });
+    }, []);
+    const [runs] = usePoll(() => api('/api/cs/params').then((r) => r.running || {}), 3000);
     const [pv, setPv] = useState(null);
     const [pvBusy, setPvBusy] = useState(false);
     const [capOpen, setCapOpen] = useState(false);
     const [expOpen, setExpOpen] = useState(false);
     // 「可生成总量」里点「按这个设置」：切到对应生成方式，每单元版数 = 那一行的版数，本次最多 = 0（全部），范围清空 = 全部
-    const applyCap = (mode, variants) => {
-      setP((o) => ({ ...o, mode, variants, limit: 0, scenic: '', scenic_city: '', grade: [], topics: [], kb: [], only_approved: false,
-        data_type: mode === 'rewrite' ? '真实' : o.data_type, split: mode === 'rewrite' ? 'train' : o.split, intent: mode === 'rewrite' ? [] : o.intent }));
+    const applyCap = (m, variants) => {
+      setMode(m);
+      setPm((o) => ({ ...o, [m]: { ...o[m], variants, limit: 0, scenic: '', scenic_city: '', grade: [], topics: [], kb: [], only_approved: false,
+        ...(m === 'rewrite' ? { data_type: '真实', split: 'train', intent: [] } : {}) } }));
       setCapOpen(false);
       Toast.success(`已设置：每单元 ${variants} 版，本次最多 0（全部）。并发按方舟账号限额填，再点「开始生成」`);
     };
     const [jobId, setJobId] = useState(0);
-    const [st, refresh] = usePoll(() => api(`/api/cs/state${jobId ? `?job_id=${jobId}` : ''}`), 1500, [jobId]);
+    useEffect(() => { setJobId(0); }, [mode]);
+    const [st, refresh] = usePoll(() => api(`/api/cs/state?mode=${mode}${jobId ? `&job_id=${jobId}` : ''}`), 1500, [jobId, mode]);
     const [bt, refreshBt] = usePoll(() => api('/api/cs/batches'), 10000);
     const [cur, setCur] = useState(0);
-    const set = (k) => (v) => setP((o) => ({ ...o, [k]: v }));
+    const set = (k) => (v) => (k === 'data_dir' ? setDataDir(v) : k === 'mode' ? setMode(v) : setP((o) => ({ ...o, [k]: v })));
     const body = () => ({ ...p, intent: (p.intent || []).join(','), topics: (p.topics || []).join(','), grade: (p.grade || []).join(','), kb: (p.kb || []).join(',') });
     useEffect(() => { setPv(null); }, [p.mode]);
     const job = st && st.job, stats = (job && job.stats) || {};
@@ -965,7 +1057,7 @@
     const start = async () => {
       try { const j = await post('/api/cs/start', body()); setJobId(j.id); Toast.success(`已开始 #${j.id}`); refresh(); } catch (e) { Toast.error(e.message); }
     };
-    const stop = async () => { try { await post('/api/cs/stop'); Toast.info('正在停止…'); refresh(); } catch (e) { Toast.error(e.message); } };
+    const stop = async () => { try { await post('/api/cs/stop', { job_id: job && job.id, mode }); Toast.info('正在停止…'); refresh(); } catch (e) { Toast.error(e.message); } };
     const loadMysql = async (batch) => {
       Modal.confirm({ title: `把 ${batch} 写入 MySQL？`, content: `写进 ${bt && bt.session_table} 和 ${bt && bt.turn_table}；同一会话重复写会覆盖，不会重复。`, okText: '写入', cancelText: '取消',
         onOk: async () => { try { const j = await post('/api/cs/load_mysql', { batch }); setJobId(j.id); refresh(); } catch (e) { Toast.error(e.message); } } });
@@ -988,7 +1080,7 @@
           <div className="form">
             <${Field} label="生成方式">
               <${RadioGroup} type="button" value=${p.mode} onChange=${(e) => set('mode')(e.target.value)}>
-                <${Radio} value="rewrite">改写客服对话<//><${Radio} value="expand">扩展客服对话<//><${Radio} value="guide_eval">讲解内容评价<//><${Radio} value="guide_narr">个性化讲解<//>
+                ${Object.entries(CS_MODE_NAME).map(([m, n]) => html`<${Radio} key=${m} value=${m}>${n}${runs && runs[m] ? html` <span className="run-dot" title="运行中"></span>` : ''}<//>`)}
               <//>
               <span className="muted sm">${{ expand: '事实取自景区表，问法参考真实对话；约百万条', guide_eval: '讲解文字 + 标准答案（错误清单、覆盖、分数）', guide_narr: '合成游客画像 + 参考讲解词' }[p.mode] || '一通真实问答改写成几版会话；数量受原始对话限制'}</span>
             <//>
@@ -1009,7 +1101,8 @@
               <span className="lbl">${guide ? (p.mode === 'guide_eval' ? '每条知识（不同问题组合）' : '每条知识（不同游客）') : '每个景区每个主题'}</span><${InputNumber} hideButtons value=${p.variants} onChange=${set('variants')} min=${1} max=${guide ? 50 : 20} style=${{ width: 80 }} suffix="版" />
               <span className="lbl">本次最多</span><${InputNumber} hideButtons value=${p.limit} onChange=${set('limit')} min=${0} style=${{ width: 120 }} suffix="条" />
               <span className="lbl">并发</span><${InputNumber} hideButtons value=${p.workers} onChange=${set('workers')} min=${1} max=${128} style=${{ width: 80 }} />
-              <span className="muted sm">本次最多填 0 = 全部</span>
+              <span className="muted sm">本次最多填 0 = 全部；并发只影响速度</span>
+              <${Popover} trigger="click" position="bottomLeft" content=${html`<${ParamHelp} mode=${p.mode} />`}><a className="sm" style=${{ cursor: 'pointer' }}>参数说明</a><//>
             <//>` : html`
             <${Field} label="原始范围">
               <${Select} value=${p.data_type} onChange=${set('data_type')} style=${{ width: 110 }} optionList=${['真实', '改写', '合成', '真实,改写'].map((x) => ({ value: x, label: x }))} />
@@ -1024,9 +1117,17 @@
               <span className="lbl">取</span><${InputNumber} hideButtons value=${p.limit} onChange=${set('limit')} min=${0} style=${{ width: 100 }} suffix="通" />
               <span className="lbl">每通改写</span><${InputNumber} hideButtons value=${p.variants} onChange=${set('variants')} min=${1} max=${10} style=${{ width: 90 }} suffix="版" />
               <span className="lbl">并发</span><${InputNumber} hideButtons value=${p.workers} onChange=${set('workers')} min=${1} max=${128} style=${{ width: 80 }} />
+              <span className="muted sm">取 0 通 = 全部</span>
+              <${Popover} trigger="click" position="bottomLeft" content=${html`<${ParamHelp} mode=${p.mode} />`}><a className="sm" style=${{ cursor: 'pointer' }}>参数说明</a><//>
             <//>`}
+            <${Field} label="调用模型">
+              <${Input} value=${p.ai_model} onChange=${set('ai_model')} placeholder=${aiDef ? `默认用设置页的：${aiDef.model}` : '模型 ID / 接入点 ID'} style=${{ flex: 1, minWidth: 180 }} showClear />
+              <${Tooltip} content="生成训练数据一般不需要联网：事实都来自景区表 / 讲解资料；开了更慢、更贵，还可能把网上的说法带进来">
+                <span style=${{ display: 'inline-flex', alignItems: 'center', gap: 6 }}><${Switch} size="small" checked=${p.ai_web_search} onChange=${set('ai_web_search')} />联网搜索</span><//>
+              <span className="muted sm">只对本页任务生效，不改设置页${aiDef && aiDef.web ? '（设置页开着联网，本页默认关）' : ''}</span>
+            <//>
             <${Field} label="选项">
-              <${Checkbox} checked=${p.mysql} onChange=${(e) => set('mysql')(e.target.checked)}>同时写入 MySQL<//>
+              <span className="muted sm">数据只写 MySQL；参数按生成方式分别保存</span>
               ${!scen && html`<${Checkbox} checked=${p.allow_unmapped} onChange=${(e) => set('allow_unmapped')(e.target.checked)}>对不到我们景区的也生成<//>`}
               <span style=${{ flex: 1 }}></span>
               <${Button} onClick=${() => setCapOpen(true)} icon=${html`<${Ic.IconHistogram} />`}>可生成总量<//>
@@ -1095,7 +1196,8 @@
         <${Card} title="处理记录" sub=${st ? `${fmt(st.total_items)} 条 · 点一行看数据交换` : ''} bodyClass="flush"
           extra=${html`<div style=${{ display: 'flex', gap: 8, alignItems: 'center' }}>${st && st.history && st.history.length > 1 && html`<${Select} size="small" value=${job && job.id} style=${{ width: 220 }} onChange=${setJobId}
             optionList=${st.history.map((x) => ({ value: x.id, label: `#${x.id} ${x.type_name} · ${(x.started || x.created || '').slice(5, 16)}` }))} />`}
-            <${Button} size="small" theme="solid" icon=${html`<${Ic.IconDownload} />`} onClick=${() => setExpOpen(true)}>导出数据<//></div>`}>
+            <${Button} size="small" theme="solid" icon=${html`<${Ic.IconDownload} />`} onClick=${() => setExpOpen(true)}>导出数据<//>
+            <${Button} size="small" type="danger" theme="light" icon=${html`<${Ic.IconDelete} />`} onClick=${() => setCleanOpen(true)}>清理数据<//></div>`}>
           <div className="fill" ref=${box}>${h > 0 && html`<${Table} size="small" columns=${cols} dataSource=${(st && st.items) || []} rowKey="n" pagination=${false}
             scroll=${{ y: h - 41 }} empty=${html`<${Empty} description="还没有处理记录" />`} onRow=${(r) => ({ onClick: () => setCur(r.n), style: { cursor: 'pointer' } })} />`}</div>
         <//>
@@ -1132,6 +1234,7 @@
             </div><//>
             <//>
           <//>
+      ${cleanOpen && html`<${DataClean} initial=${CS_DS[mode]} onClose=${() => setCleanOpen(false)} onDone=${() => { refresh(); refreshBt(); }} />`}
       ${capOpen && html`<${CsCapacity} visible=${capOpen} onClose=${() => setCapOpen(false)} dataDir=${p.data_dir} onApply=${applyCap} />`}
     </div>`;
   }

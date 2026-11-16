@@ -34,6 +34,7 @@ import argparse
 import csv
 import hashlib
 import json
+import os
 import random
 import re
 import sys
@@ -180,7 +181,7 @@ def build_prompt(src, scenic_name, persona, channel, plan=None):
 
 {plan_rules(plan) if plan else ""}
 
-只输出一个 JSON 对象，不要其他文字（不是在问本景区时只输出 {{"relevant": false, "reason": "原因"}}）：
+只输出一个 JSON 对象，不要其他文字；字符串里需要引号时用「」，不要用英文双引号（不是在问本景区时只输出 {{"relevant": false, "reason": "原因"}}）：
 {{"relevant":true,{SESSION_JSON[1:]}"""
 
 
@@ -902,14 +903,18 @@ def run(args, cfg, log=print, should_stop=lambda: False, progress=lambda done, t
     out = Path(args.out) if args.out else HERE / "out" / f"cs_synth_{time.strftime('%Y%m%d')}"
     out.mkdir(parents=True, exist_ok=True)
     f_dlg, f_src, f_rej, f_map = out / "dialogs.jsonl", out / "source_extract.jsonl", out / "rejected.jsonl", out / "mapping.csv"
+    f_done = out / "done_keys.txt"
+    files = getattr(args, "files", True) or not args.mysql  # 只写库模式（工作台默认）：不写 dialogs / mapping / source_extract 文件
     done = set()
-    if f_dlg.exists():
+    if f_dlg.exists() and not f_done.exists():  # 旧批次：先从 dialogs.jsonl 建进度文件，之后以进度文件为准（清理数据时只改它）
+        ks = []
         for line in f_dlg.read_text(encoding="utf-8").splitlines():
             try:
                 r = json.loads(line)
-                done.add((r["source"]["dialogue_id"], r["source"]["variant"]))
+                ks.append(f"{r['source']['dialogue_id']}|{r['source']['variant']}")
             except (ValueError, KeyError):
                 pass
+        f_done.write_text("\n".join(ks) + ("\n" if ks else ""), encoding="utf-8")
     if f_rej.exists():  # 模型已判断「不是在问这个景区」的不再重复调用
         for line in f_rej.read_text(encoding="utf-8").splitlines():
             try:
@@ -925,11 +930,18 @@ def run(args, cfg, log=print, should_stop=lambda: False, progress=lambda done, t
                 have_src.add(json.loads(line)["dialogue_id"])
             except (ValueError, KeyError):
                 pass
+    for d in {out, *OUT_ROOT.glob("cs_synth_*")}:  # 进度：所有改写批次的 done_keys（跨天续跑不重复）
+        fd = d / "done_keys.txt"
+        if fd.exists():
+            for k in fd.read_text(encoding="utf-8").split():
+                a, _, b = k.rpartition("|")
+                if b.isdigit():
+                    done.add((a, int(b)))
     new_map = not f_map.exists()
     lock = threading.Lock()
-    fm = f_map.open("a", encoding="utf-8-sig" if new_map else "utf-8", newline="")
+    fm = f_map.open("a", encoding="utf-8-sig" if new_map else "utf-8", newline="") if files else open(os.devnull, "w")
     mw = csv.writer(fm)
-    if new_map:
+    if new_map and files:
         mw.writerow(["session_id", "source_dialogue_id", "variant", "scenic_id", "scenic_name", "source_attraction_id", "source_attraction_name",
                      "intent_type", "scene_type", "turns", "needs_review", "check_flags", "model", "generated_at"])
     sql = None
@@ -983,23 +995,30 @@ def run(args, cfg, log=print, should_stop=lambda: False, progress=lambda done, t
                     stats["cancelled"] += 1
                     progress(n, len(jobs))
                     continue
-                if s["id"] not in have_src:  # 原始数据：原表整行 + 逐轮发言，每通只写一次
+                if kind == "ok" and sql:  # 先写库；只写库模式下写库失败算调用失败，下次重跑
+                    try:
+                        with sql.cursor() as cur:
+                            mysql_write(cur, rec)
+                    except Exception as e:  # noqa: BLE001
+                        log(f"  写 MySQL 失败 {rec['session_id']}：{type(e).__name__}: {e}")
+                        if not files:
+                            kind, rec = "failed", dict(error=f"写 MySQL 失败：{type(e).__name__}: {e}")
+                if files and s["id"] not in have_src:  # 原始数据：原表整行 + 逐轮发言，每通只写一次
                     with f_src.open("a", encoding="utf-8") as f:
                         f.write(json.dumps(dict(dialogue_id=s["id"], row=s["row"], turns=s["turns"]), ensure_ascii=False) + "\n")
                     have_src.add(s["id"])
                 if kind == "ok":
+                    with f_done.open("a", encoding="utf-8") as f:  # 进度（断点续跑用）
+                        f.write(f"{s['id']}|{v}\n")
+                if kind == "ok" and files:
                     with f_dlg.open("a", encoding="utf-8") as f:
                         f.write(json.dumps(rec, ensure_ascii=False) + "\n")
                     g = rec["source"]
                     mw.writerow([rec["session_id"], s["id"], v, rec["scenic_id"] or "", rec["scenic_name"], s["attraction_id"], s["attraction_name"],
                                  s["intent"], s["scene"], len(rec["turns"]), int(g["needs_review"]), "；".join(g["check_flags"]), g["model"], g["generated_at"]])
                     fm.flush()
-                    if sql:
-                        try:
-                            with sql.cursor() as cur:
-                                mysql_write(cur, rec)
-                        except Exception as e:  # noqa: BLE001  写库失败不丢数据：JSONL 里有，可用 --load-jsonl 补写
-                            log(f"  写 MySQL 失败 {rec['session_id']}：{type(e).__name__}: {e}（JSONL 已保存，可稍后 --load-jsonl 补写）")
+                if kind == "ok":
+                    g = rec["source"]
                     stats["ok"] += 1
                     stats["review"] += int(g["needs_review"])
                 else:

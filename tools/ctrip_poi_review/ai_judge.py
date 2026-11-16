@@ -246,8 +246,52 @@ def parse(text):
     try:
         js = json.loads(t[a:b + 1])
     except json.JSONDecodeError as e:
-        raise AIError(f"模型返回的 JSON 解析失败：{e}；{text[:200]}") from e
+        try:  # 常见情况：字符串里夹了没转义的英文双引号（如 "七绝"）或换行，修一下再解析
+            js = json.loads(repair_json(t[a:b + 1]))
+        except json.JSONDecodeError:
+            raise AIError(f"模型返回的 JSON 解析失败：{e}；{text[:200]}") from e
     return js
+
+
+QUOTE_NOTE = "（字符串里需要引号时用「」，不要用英文双引号）"
+
+
+def repair_json(s):
+    """修模型输出的不规范 JSON：字符串里没转义的英文双引号改成「」，裸换行改成 \\n。
+    判断依据：字符串里遇到 "，后面（跳过空白）不是 , } ] : 或结尾，就不是字符串结束，而是正文里的引号。"""
+    out, in_str, esc, open_q = [], False, False, True
+    i, n = 0, len(s)
+    while i < n:
+        c = s[i]
+        if in_str:
+            if esc:
+                esc = False
+                out.append(c)
+            elif c == "\\":
+                esc = True
+                out.append(c)
+            elif c == '"':
+                j = i + 1
+                while j < n and s[j] in " \t\r\n":
+                    j += 1
+                if j >= n or s[j] in ",}]:":
+                    in_str = False
+                    out.append(c)
+                else:
+                    out.append("「" if open_q else "」")
+                    open_q = not open_q
+            elif c == "\n":
+                out.append("\\n")
+            elif c == "\r":
+                pass
+            else:
+                out.append(c)
+        else:
+            if c == '"':
+                in_str, open_q = True, True
+            out.append(c)
+        i += 1
+    return "".join(out)
 
 
 def _num(v, default=0.0):

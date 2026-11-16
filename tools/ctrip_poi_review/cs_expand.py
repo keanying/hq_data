@@ -23,6 +23,7 @@
 import argparse
 import csv
 import json
+import os
 import re
 import threading
 import time
@@ -409,7 +410,7 @@ def build_prompt(row, plan):
 
 {cs_synth.plan_rules(plan["session"])}
 
-只输出一个 JSON 对象，不要其他文字：
+只输出一个 JSON 对象，不要其他文字；字符串里需要引号时用「」，不要用英文双引号：
 {cs_synth.SESSION_JSON}"""
 
 
@@ -566,10 +567,11 @@ def run(args, cfg, log=print, should_stop=lambda: False, progress=lambda done, t
     have_kn = {json.loads(x)["unit_id"] for x in f_kn.read_text(encoding="utf-8").splitlines() if x.strip()} if f_kn.exists() else set()
     have_sc = {json.loads(x)["scenic_id"] for x in f_sc.read_text(encoding="utf-8").splitlines() if x.strip()} if f_sc.exists() else set()
     have_src = {json.loads(x)["dialogue_id"] for x in f_src.read_text(encoding="utf-8").splitlines() if x.strip()} if f_src.exists() else set()
+    files = getattr(args, "files", True) or not args.mysql  # 只写库模式（工作台默认）：不写 dialogs / mapping / *_extract 文件
     new_map = not f_map.exists()
-    fm = f_map.open("a", encoding="utf-8-sig" if new_map else "utf-8", newline="")
+    fm = f_map.open("a", encoding="utf-8-sig" if new_map else "utf-8", newline="") if files else open(os.devnull, "w")
     mw = csv.writer(fm)
-    if new_map:
+    if new_map and files:
         mw.writerow(["session_id", "scenic_id", "scenic_name", "topic", "variant", "style_ref_ids", "turns", "needs_review", "check_flags", "model", "generated_at"])
     conn = None
     if args.mysql:
@@ -622,7 +624,13 @@ def run(args, cfg, log=print, should_stop=lambda: False, progress=lambda done, t
             stats["cancelled"] += 1
             return
         key = f"{row['_id']}|{topic}|{v}"
-        if kind == "ok":
+        if kind == "ok" and args.mysql:  # 先写库；只写库模式下写库失败 = 没存下来，算调用失败，下次重跑
+            err = write_mysql(rec)
+            if err:
+                log(f"  写 MySQL 失败 {rec['session_id']}：{err}")
+                if not files:
+                    kind, rec = "failed", dict(error=f"写 MySQL 失败：{err}")
+        if kind == "ok" and files:
             if row["_id"] not in have_sc:  # 用到的景区表整行，每个景区写一次
                 with f_sc.open("a", encoding="utf-8") as f:
                     f.write(json.dumps(dict(scenic_id=row["_id"], table=table, row={k: (str(x) if x is not None else None) for k, x in row.items()
@@ -644,12 +652,10 @@ def run(args, cfg, log=print, should_stop=lambda: False, progress=lambda done, t
             mw.writerow([rec["session_id"], rec["scenic_id"], rec["scenic_name"], g["topic_name"], v, ",".join(x["dialogue_id"] for x in g["style_refs"]),
                          len(rec["turns"]), int(g["needs_review"]), "；".join(g["check_flags"]), g["model"], g["generated_at"]])
             fm.flush()
-            with f_done.open("a", encoding="utf-8") as f:
+        if kind == "ok":
+            g = rec["source"]
+            with f_done.open("a", encoding="utf-8") as f:  # 进度（断点续跑用，很小）
                 f.write(key + "\n")
-            if args.mysql:
-                err = write_mysql(rec)
-                if err:
-                    log(f"  写 MySQL 失败 {rec['session_id']}：{err}（JSONL 已保存，可稍后「写入 MySQL」补写）")
             stats["ok"] += 1
             stats["review"] += int(g["needs_review"])
         else:
