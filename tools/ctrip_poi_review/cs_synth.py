@@ -51,7 +51,7 @@ PROMPT_VERSION = "cs_rewrite_v3"
 CHANNELS = ["小程序-在线客服", "APP-在线客服", "公众号-在线客服", "H5-在线客服", "PC官网-在线客服"]
 PERSONAS = ["第一次来的外地游客，说话简短", "带小孩的家长，比较细心", "带老人出行的年轻人", "学生，预算有限", "着急的游客，会催促客服",
             "说话很口语化、喜欢用表情的年轻人", "常来的本地人", "公司团建的组织者"]
-END_TYPES = ["用户主动结束", "客服结束", "超时自动结束", "转人工后结束"]
+END_TYPES = ["用户主动结束", "客服结束", "超时自动结束", "静默离开", "转人工后结束", "用户不满中断"]
 MONEY_RE = re.compile(r"(?:¥|￥)\s*\d+(?:\.\d+)?|\d+(?:\.\d+)?\s*元")
 TIME_RE = re.compile(r"\d{1,2}[:：]\d{2}")
 
@@ -152,7 +152,7 @@ def scenic_map(log=print, data_dir=None):
 
 
 # ---------------------------------------------------------------- 提示词 / 生成
-def build_prompt(src, scenic_name, persona, channel):
+def build_prompt(src, scenic_name, persona, channel, plan=None):
     spot = src["attraction_name"] or ""
     same = not spot or spot in scenic_name or scenic_name in spot
     lines = [f"{'游客' if t['role'] == '游客' else '客服' if t['role'] == '客服' else t['role']}：{t['text']}" for t in src["turns"]] \
@@ -170,67 +170,218 @@ def build_prompt(src, scenic_name, persona, channel):
 改写要求：
 1. 客服只能使用原始回答里出现过的事实（价格、开放时间、预约 / 退改政策、交通线路、设施等）；原文没有的信息不要编，客服可以说「以景区官方公告为准」或「帮您转人工确认」。不要出现与这个景区不符的设施。
 2. 游客的提问要口语化、贴合人设，可以拆成多条消息、追问、催促（如「在吗」「快点回」）、发表情；不要照抄原问题。
-3. 客服用官方客服口吻（「您好」「亲」等），把原始回答改写成客服回复，可以分几条说；第一条可以是机器人（robot）自动接待，之后由人工（human）回复，也可以全程机器人。
+3. 客服用官方客服口吻（「您好」「亲」等），把原始回答改写成客服回复，可以分几条说；游客第一条之后可以先由机器人（robot）接待，再由人工（human）回复，也可以全程机器人。
 4. 如果原文里有明确的票种 / 价格，可以用一条 msg_type 为 card 的卡片消息表达，例如「[门票卡片] 成人票 ¥60」，内容必须是原文里的。
 0. 你是「{scenic_name}」的客服，只回答和本景区有关的内容（门票、开放时间、预约、交通到本景区、园内设施和游玩、本景区周边吃住）。
    先判断原始问答是不是在问本景区：如果主要在问别的景点 / 别的城市，或者把本景区和别的景点放在一起比较、问住在哪儿两边都方便，就输出 {{"relevant": false, "reason": "原因"}}，不要改写。
    原文里顺带提到的其他景点信息一律删掉，不要以本景区客服的身份介绍别的景点。
-5. 4～10 条消息；景区名写「{scenic_name}」{'' if same else f"，问的具体地方仍是「{spot}」（可以说「{scenic_name}的{spot}」），不要把{spot}的信息说成整个景区的"}；不要提「携程」「网友」「我们家去过」。
+5. 景区名写「{scenic_name}」{'' if same else f"，问的具体地方仍是「{spot}」（可以说「{scenic_name}的{spot}」），不要把{spot}的信息说成整个景区的"}；不要提「携程」「网友」「我们家去过」。
 6. gap_sec 是这条消息距离上一条的秒数（游客 3～60 秒，客服 5～90 秒，第一条为 0）。
 
-只输出一个 JSON 对象，不要其他文字：
-{{"relevant":true,"turns":[{{"role":"user或agent","agent_type":"robot或human（仅 agent 填）","msg_type":"text或card","text":"内容","gap_sec":整数}}],
- "end_type":"{'/'.join(END_TYPES)} 之一","satisfaction_score":null或1到5的整数,"is_resolved":true或false}}"""
+{plan_rules(plan) if plan else ""}
+
+只输出一个 JSON 对象，不要其他文字（不是在问本景区时只输出 {{"relevant": false, "reason": "原因"}}）：
+{{"relevant":true,{SESSION_JSON[1:]}"""
 
 
 def _seeded(*parts):
     return random.Random(int(hashlib.sha1("|".join(map(str, parts)).encode()).hexdigest()[:12], 16))
 
 
-def assemble(src, scenic, variant, js, cfg, rnd):
+def assemble(src, scenic, variant, js, cfg, rnd, plan=None):
     """模型给的轮次 + 程序生成的会话外壳（ID、时间、订单号等）→ 目标格式。"""
     if js.get("relevant") is False:
         raise NotRelevant(f"模型判断原始问答不是在问「{scenic['scenic_name'] if scenic else src['attraction_name']}」：{js.get('reason') or ''}")
     need_order = (src["scene"] in ("预订购票", "订单售后")) or (src["action"] not in (None, "", "none"))
     rec = build_session(js, rnd, "%s|%s" % (src["id"], variant), need_order, scenic["scenic_id"] if scenic else None,
-                        scenic["scenic_name"] if scenic else src["attraction_name"])
-    flags = quality_flags(src, rec)
+                        scenic["scenic_name"] if scenic else src["attraction_name"], plan=plan)
+    flags = quality_flags(src, rec) + (session_checks(plan, rec, js.get("coref")) if plan else [])
     # 输出 = 目标格式的字段 + 一个 source：指回原始对话，以及改写方式 / 质检结果
     rec["source"] = dict(dialogue_id=src["id"], data_type=src["data_type"], dataset_split_type=src["split"], attraction_id=src["attraction_id"],
                          attraction_name=src["attraction_name"], city=src["city"], intent_type=src["intent"], scene_type=src["scene"],
                          source_url=src["url"], variant=variant, generate_method="llm_rewrite", model=cfg.get("ai_model"),
                          prompt_version=PROMPT_VERSION, generated_at=datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-                         is_resolved=bool(js.get("is_resolved")), needs_review=bool(flags), check_flags=flags)
+                         is_resolved=(plan["resolved"] if plan else bool(js.get("is_resolved"))), needs_review=bool(flags), check_flags=flags)
+    if plan:
+        rec["source"]["session_plan"] = plan_meta(plan, js.get("coref"))
     return rec
 
 
-def build_session(js, rnd, key, need_order, scenic_id, scenic_name, id_digits=6):
+def plan_meta(p, coref=None):
+    """会话设定写进 source（只给数据侧 / 质检看）。"""
+    return dict(target_msgs=p["n"], end_type=p["end_type"], satisfaction=p["score"], resolved=p["resolved"], coref=p["coref"],
+                coref_annotation=coref or [], order=p["order"], noise=p["noise"])
+
+
+# ---------------------------------------------------------------- 会话设定（程序事先定好，模型照着写；校验报告 P0-2 / P1-2 / P1-5 / P2-1 / P2-3 / P2-6）
+END_PLAN = [("用户主动结束", 45), ("客服结束", 15), ("超时自动结束", 15), ("静默离开", 10), ("转人工后结束", 10), ("用户不满中断", 5)]
+END_DESC = {"用户主动结束": "游客说「好的 / 谢谢」之类后结束", "客服结束": "客服确认游客没有别的问题后礼貌结束",
+            "超时自动结束": "最后一条是客服的追问，游客之后不再回复", "静默离开": "客服答完后游客没再说话，最后一条是客服",
+            "转人工后结束": "机器人处理不了，转人工，人工接手说明后结束", "用户不满中断": "游客对答复不满意，抱怨一句后不再回复"}
+SCORE_PLAN = [(None, 35), (5, 16), (4, 23), (3, 16), (2, 6), (1, 4)]  # 已评价的约 5 分 25%、4 分 35%、3 分 25%、2 分 9%、1 分 6%
+LEN_PLAN = [(3, 4), (4, 8), (5, 10), (6, 12), (7, 12), (8, 11), (9, 9), (10, 8), (11, 6), (12, 5), (13, 4), (14, 3), (15, 2), (16, 2),
+            (17, 1), (18, 1), (19, 1), (20, 1)]  # 消息条数长尾分布（3～20）
+COREF_RE = re.compile(r"那个|这个|那边|这边|那里|这里|它|那家|那张|那种|这种|那.{0,6}呢|呢[？?]?$|那.{0,4}(?:能|可以|要|怎么|是|多少|几|还)")
+REPEAT_RE = re.compile(r"([\u4e00-\u9fff]{4,}?)[～~，,。！!、 ]*\1")
+
+
+def date_window(lo=None):
+    """会话日期范围：不晚于截止日前一天（环境变量 CS_DATE_END=YYYY-MM-DD，默认今天），不早于 lo（如景区资料更新日的次日），最多往前一年。"""
+    import os
+    end = os.environ.get("CS_DATE_END")
+    cutoff = datetime.strptime(end, "%Y-%m-%d") if end else datetime.now().replace(hour=0, minute=0, second=0, microsecond=0)
+    hi = cutoff - timedelta(days=1)
+    start = hi - timedelta(days=364)
+    if lo and lo > start:
+        start = min(lo, hi)
+    return start, hi
+
+
+def _parse_day(v):
+    m = re.match(r"(\d{4})-?(\d{2})-?(\d{2})", str(v or ""))
+    return datetime(int(m.group(1)), int(m.group(2)), int(m.group(3))) if m else None
+
+
+def plan_session(rnd, need_order=False, facts_after=None, tickets=None, coref_rate=0.21):
+    """一通会话的设定：开始时间、条数、结束方式、满意度、是否解决、指代、订单、语音 / 错别字 / 无标点。"""
+    lo = _parse_day(facts_after) + timedelta(days=1) if _parse_day(facts_after) else None
+    a, b = date_window(lo)
+    day = a + timedelta(days=rnd.randint(0, max(0, (b - a).days)))
+    start = day.replace(hour=rnd.randint(8, 21), minute=rnd.randint(0, 59), second=rnd.randint(0, 59))
+    pick = lambda plan: rnd.choices([x for x, _ in plan], weights=[w for _, w in plan])[0]  # noqa: E731
+    end_type = pick(END_PLAN)
+    score = pick(SCORE_PLAN)
+    if end_type == "用户不满中断":
+        score = rnd.choice([None, 1, 2])
+    elif end_type in ("超时自动结束", "静默离开") and rnd.random() < 0.6:
+        score = None
+    resolved = {"用户不满中断": False, "转人工后结束": False}.get(end_type, rnd.random() < (0.5 if end_type in ("超时自动结束", "静默离开") else 0.92))
+    n = max(3, pick(LEN_PLAN))
+    if end_type == "转人工后结束":
+        n = max(n, 5)
+    r = rnd.random()
+    coref = "far" if r < coref_rate / 3 else "near" if r < coref_rate else None
+    if coref == "far":
+        n = max(n, 8)
+    elif coref == "near":
+        n = max(n, 5)
+    order = None
+    if need_order:
+        t = rnd.choice(tickets or ["门票"])
+        visit = day + timedelta(days=rnd.randint(1, 10))
+        order = dict(order_id=f"DD{(day - timedelta(days=rnd.randint(0, 5))):%Y%m%d}{rnd.randint(0, 999999):06d}", ticket=t,
+                     qty=rnd.choice([1, 1, 2, 2, 3, 4]), visit_date=f"{visit:%Y-%m-%d}")
+    r = rnd.random()
+    noise = "voice" if r < 0.08 else "typo" if r < 0.13 else "nopunct" if r < 0.18 else None
+    return dict(start=start, n=n, end_type=end_type, score=score, resolved=resolved, coref=coref, order=order, noise=noise)
+
+
+def plan_rules(p):
+    """会话设定 → 提示词里的规则段。"""
+    lines = [f"- 一共 {p['n']} 条消息（可以多或少 1 条）；第一条必须是游客发的（机器人接待语放在游客第一条之后）。",
+             f"- 结束方式：{p['end_type']}（{END_DESC[p['end_type']]}）；"
+             + ("游客没有评价" if p["score"] is None else f"满意度 {p['score']} 分（" + ("明显不满意" if p["score"] <= 2 else "一般" if p["score"] == 3 else "满意") + "）")
+             + f"；问题{'已解决' if p['resolved'] else '没有完全解决'}，对话内容要和这些一致。"]
+    if p["coref"]:
+        lines.append("- 游客后面的提问要用指代或省略（如「那个能退吗」「小孩呢」「那边几点关门」），所指的东西在前面出现过"
+                     + ("，而且要隔开至少 3 条消息（例如第 2 条提到、第 6 条以后才用「那个」指它）" if p["coref"] == "far" else "") + "；在 JSON 的 coref 里标出来。")
+    if p["order"]:
+        o = p["order"]
+        lines.append(f"- 这是带订单的咨询：游客要在消息里明确说出订单号 {o['order_id']}、票种「{o['ticket']}」、{o['qty']} 张、游玩日期 {o['visit_date']}"
+                     "（可以分几条说）；客服核对时复述订单号。")
+    if p["noise"] == "voice":
+        lines.append("- 游客有 1～2 条是语音消息：msg_type 写 voice，text 写语音转出来的文字（口语、没有标点、可能有一两个同音错字）。")
+    elif p["noise"] == "typo":
+        lines.append("- 游客有 1～2 条消息带错别字或同音字（如「门票」打成「门漂」），客服照常理解。")
+    elif p["noise"] == "nopunct":
+        lines.append("- 游客打字不带标点（整条消息没有逗号句号问号）。")
+    return "会话设定（必须遵守）：\n" + "\n".join(lines)
+
+
+SESSION_JSON = ('{"turns":[{"role":"user或agent","agent_type":"robot或human（仅 agent 填）","msg_type":"text / card / voice","text":"内容","gap_sec":整数}],'
+                '\n "coref":[{"turn":用指代的消息序号,"ref_turn":被指的东西第一次出现的消息序号,"expr":"指代原话"}]}')
+
+
+def session_checks(p, rec, coref_ann=None):
+    """会话是否照设定写了（不合的标需复核）。"""
+    flags = list(rec.pop("_notes", []))
+    turns = rec["turns"]
+    if abs(len(turns) - p["n"]) > 2:
+        flags.append(f"消息条数 {len(turns)}，设定 {p['n']}")
+    users = [t for t in turns if t["role"] == "user"]
+    if p["order"] and not any(p["order"]["order_id"] in t["text"] for t in users):
+        flags.append("游客消息里没有说出订单号")
+    if p["noise"] == "voice" and not any(t.get("msg_type") == "voice" for t in users):
+        flags.append("设定有语音消息，但没有 voice")
+    if p["coref"]:
+        ok = []
+        for c in coref_ann or []:
+            try:
+                ti, ri = int(c.get("turn")), int(c.get("ref_turn"))
+            except (TypeError, ValueError):
+                continue
+            if 1 <= ti <= len(turns) and turns[ti - 1]["role"] == "user" and str(c.get("expr") or "") and str(c.get("expr")) in turns[ti - 1]["text"] and ri < ti:
+                ok.append(ti - ri)
+        if not ok and not any(COREF_RE.search(t["text"]) for t in users[1:]):
+            flags.append("设定要指代 / 省略，没找到")
+        elif p["coref"] == "far" and not any(d >= 3 for d in ok):
+            flags.append("设定要跨 3 条以上的指代，标注里没有")
+    for t in turns:
+        m = REPEAT_RE.search(t["text"])
+        if m:
+            flags.append(f"第 {t['turn']} 条疑似复读「{m.group(1)}」")
+    return flags
+
+
+def build_session(js, rnd, key, need_order, scenic_id, scenic_name, id_digits=6, plan=None):
     """模型给的轮次 → 会话外壳（session_id、访客、开始时间、每轮 ts、订单号、结束方式、时长），不含 source。
     key 决定 session_id（同一 key 重跑得到同一个 ID，写库时覆盖而不是重复）。"""
     raw_turns = [t for t in js.get("turns") or [] if isinstance(t, dict) and str(t.get("text") or "").strip()]
+    notes = []
+    if plan is not None:
+        lead = 0
+        while lead < len(raw_turns) and raw_turns[lead].get("role") != "user":
+            lead += 1
+        if lead:  # 首条必须是游客：去掉开头的客服 / 机器人消息
+            raw_turns = raw_turns[lead:]
+            notes.append(f"去掉了开头 {lead} 条客服消息（首条须为游客）")
     if len(raw_turns) < 2 or not any(t.get("role") == "user" for t in raw_turns) or not any(t.get("role") == "agent" for t in raw_turns):
         raise ValueError("轮次太少，或缺少游客 / 客服发言")
-    day = datetime(2026, 1, 1) + timedelta(days=rnd.randint(0, 364))
-    start = day.replace(hour=rnd.randint(8, 21), minute=rnd.randint(0, 59), second=rnd.randint(0, 59))
+    if plan is not None:
+        start = plan["start"]
+        day = start.replace(hour=0, minute=0, second=0)
+    else:
+        day = datetime(2026, 1, 1) + timedelta(days=rnd.randint(0, 364))
+        start = day.replace(hour=rnd.randint(8, 21), minute=rnd.randint(0, 59), second=rnd.randint(0, 59))
     human_id = f"A{rnd.randint(1000, 1999)}"
     t, turns = start, []
     for i, x in enumerate(raw_turns, 1):
         gap = int(x.get("gap_sec") or 0) if i > 1 else 0
         t = t + timedelta(seconds=max(0, min(gap, 600)))
         role = "user" if x.get("role") == "user" else "agent"
-        turn = dict(turn=i, role=role, msg_type="card" if x.get("msg_type") == "card" else "text", text=str(x["text"]).strip(), ts=t.strftime("%H:%M:%S"))
+        mt = x.get("msg_type") if x.get("msg_type") in ("card", "voice") else "text"
+        if mt == "voice" and role != "user":
+            mt = "text"
+        turn = dict(turn=i, role=role, msg_type=mt, text=str(x["text"]).strip(), ts=t.strftime("%H:%M:%S"))
         if role == "agent":
             turn["agent_id"] = "ROBOT" if x.get("agent_type") == "robot" else human_id
         turns.append(turn)
-    order = f"DD{(day - timedelta(days=rnd.randint(1, 10))).strftime('%Y%m%d')}{rnd.randint(0, 999999):06d}" if need_order else None
-    score = js.get("satisfaction_score")
-    score = int(score) if isinstance(score, (int, float)) and 1 <= int(score) <= 5 else None
-    end_type = js.get("end_type") if js.get("end_type") in END_TYPES else "用户主动结束"
+    if plan is not None:  # 结束方式、满意度、订单由设定决定（不让模型自己挑，避免分布失真）
+        order = plan["order"]["order_id"] if plan["order"] else None
+        score, end_type = plan["score"], plan["end_type"]
+    else:
+        order = f"DD{(day - timedelta(days=rnd.randint(1, 10))).strftime('%Y%m%d')}{rnd.randint(0, 999999):06d}" if need_order else None
+        score = js.get("satisfaction_score")
+        score = int(score) if isinstance(score, (int, float)) and 1 <= int(score) <= 5 else None
+        end_type = js.get("end_type") if js.get("end_type") in END_TYPES else "用户主动结束"
     h = int(hashlib.sha1(key.encode()).hexdigest()[:8 if id_digits <= 6 else 15], 16) % (10 ** id_digits)  # 6 位：和旧版同一算法，重跑仍覆盖
     sid = "cs_%s_%0*d" % (start.strftime("%Y%m%d"), id_digits, h)
-    return dict(session_id=sid, channel=None, visitor_id=f"V{rnd.randint(10000000, 99999999)}", scenic_id=scenic_id, scenic_name=scenic_name,
-                start_time=start.strftime("%Y-%m-%d %H:%M:%S"), related_order_id=order, turns=turns, end_type=end_type,
-                satisfaction_score=score, session_duration_sec=int((t - start).total_seconds()))
+    rec = dict(session_id=sid, channel=None, visitor_id=f"V{rnd.randint(10000000, 99999999)}", scenic_id=scenic_id, scenic_name=scenic_name,
+               start_time=start.strftime("%Y-%m-%d %H:%M:%S"), related_order_id=order, turns=turns, end_type=end_type,
+               satisfaction_score=score, session_duration_sec=int((t - start).total_seconds()))
+    if notes:
+        rec["_notes"] = notes
+    return rec
 
 
 def quality_flags(src, rec):
@@ -389,7 +540,33 @@ def batch_dir(name):
 
 
 # ---------------------------------------------------------------- 从 MySQL 导出（页面「导出」→「从 MySQL」）
-EXPORT_FORMATS = {"jsonl": "会话 JSONL（目标格式 + source）", "json": "会话 JSON 数组", "csv_sessions": "会话表 CSV", "csv_turns": "轮次表 CSV"}
+EXPORT_FORMATS = {"l1_jsonl": "标注交付 L1 JSONL（不含答案 / 标签，给标注员）", "prov_jsonl": "溯源 sidecar JSONL（source + 结束方式 + 满意度，仅数据侧 / QC）",
+                  "jsonl": "完整 JSONL（L1 + source，内部用）", "json": "完整 JSON 数组（内部用）", "csv_sessions": "会话表 CSV", "csv_turns": "轮次表 CSV"}
+
+# 交付拆分（校验报告 T2 P0-1 / T3「反标注泄漏」）：标注员只拿 L1；答案、标签、生成参考、质检结论放 provenance sidecar
+L1_KEYS = {
+    "cs": ["session_id", "channel", "visitor_id", "scenic_id", "scenic_name", "start_time", "related_order_id", "turns", "session_duration_sec"],
+    "eval": ["eval_task_id", "poi", "kb_entry", "guide_clip"],
+    "narr": ["request_id", "scene", "request_time", "poi", "sub_poi_knowledge", "visitor_profile", "task_params"],
+}
+PROV_EXTRA = {"cs": ["end_type", "satisfaction_score"], "eval": ["eval_result"], "narr": ["reference_narration"]}
+ID_KEY = {"cs": "session_id", "eval": "eval_task_id", "narr": "request_id"}
+
+
+def rec_kind(rec):
+    return "eval" if "eval_task_id" in rec else "narr" if "request_id" in rec and "scene" in rec else "cs"
+
+
+def split_delivery(rec):
+    """一条样本 → (L1 标注文件那一行, provenance sidecar 那一行)。两边用同一个 ID 关联。"""
+    k = rec_kind(rec)
+    l1 = {key: rec.get(key) for key in L1_KEYS[k] if key in rec}
+    prov = {ID_KEY[k]: rec.get(ID_KEY[k])}
+    for key in PROV_EXTRA[k]:
+        if key in rec:
+            prov[key] = rec[key]
+    prov["source"] = rec.get("source")
+    return l1, prov
 
 
 def _export_sql(f):
@@ -504,6 +681,9 @@ def export_iter(f, fmt="jsonl", batch=500):
                                                              ts=t["msg_ts"].strftime("%H:%M:%S") if hasattr(t["msg_ts"], "strftime") else t["msg_ts"],
                                                              agent_id=t["agent_id"]).items() if not (k == "agent_id" and v is None)} for t in ts],
                                end_type=r["end_type"], satisfaction_score=r["satisfaction_score"], session_duration_sec=r["session_duration_sec"], source=g)
+                    if fmt in ("l1_jsonl", "prov_jsonl"):
+                        out.append(json.dumps(split_delivery(rec)[0 if fmt == "l1_jsonl" else 1], ensure_ascii=False) + "\n")
+                        continue
                     line = json.dumps(rec, ensure_ascii=False)
                     if fmt == "json":
                         out.append(("" if first else ",\n") + line)
@@ -769,7 +949,9 @@ def run(args, cfg, log=print, should_stop=lambda: False, progress=lambda done, t
         rnd = _seeded(args.seed, s["id"], v)
         channel, persona = rnd.choice(CHANNELS), rnd.choice(PERSONAS)
         name = sc["scenic_name"] if sc else s["attraction_name"]
-        prompt = build_prompt(s, name, persona, channel)
+        need_order = (s["scene"] in ("预订购票", "订单售后")) or (s["action"] not in (None, "", "none"))
+        plan = plan_session(_seeded(args.seed, "plan", s["id"], v), need_order)
+        prompt = build_prompt(s, name, persona, channel, plan)
         ex_ = dict(prompt=prompt, persona=persona, channel=channel, started=time.strftime("%H:%M:%S"))
         t0 = time.time()
         try:
@@ -779,7 +961,7 @@ def run(args, cfg, log=print, should_stop=lambda: False, progress=lambda done, t
         ex_.update(response=text, elapsed=elapsed, request_id=meta.get("request_id"))
         try:
             js = ai_judge.parse(text)
-            rec = assemble(s, sc, v, js, cfg, rnd)
+            rec = assemble(s, sc, v, js, cfg, rnd, plan)
             rec["channel"] = channel
             rec = {k: rec[k] for k in ["session_id", "channel", "visitor_id", "scenic_id", "scenic_name", "start_time", "related_order_id", "turns",
                                        "end_type", "satisfaction_score", "session_duration_sec", "source"]}

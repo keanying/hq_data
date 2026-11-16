@@ -5,9 +5,10 @@
     redqa   RedAttractionQA：能唯一对到景区的段落，每 5 条一组（data/redqa/）
     scenic  客户景区表的基础资料：简介、等级、称号、文保、主要景点、面积、山水、游玩时长、季节（景区本体）
 
-① 讲解内容评价：模型按知识库写一段讲解员口述（guide_clip_txt，文字，不是录音），程序事先定好要故意放进几处问题
-   （0～3 处：年代错误 / 数字错误 / 结构材质错误 / 无依据说法 / 夸大绝对化），模型逐字标出；
-   eval_result（标准答案）= 错误清单 + 讲对了哪些 / 漏了哪些 + 口头禅统计 + 分数 + 结论，分数和结论由程序按固定规则算。
+① 讲解内容评价：guide_clip 按标注手册 5.2.1（clip_id / source / guide_id / duration_sec / asr_confidence / media_url / asr_text / collect_time），
+   asr_text 由模型按知识库写（合成，没有真实音频），collect_time 晚于 kb_version。问题配比：单点数值偏差 40% / 多点事实错误 25% /
+   完全正确 15% / 合规违规 10% / 逻辑问题 10%，另有约 12% 低置信度（< 0.7）拒答样本；讲解来源 录音笔 50 / 音频导览 25 / 短视频字幕 15 / 直播切片 10。
+   eval_result（标准答案，交付时放 provenance sidecar，不给标注员）= 问题清单 + 讲对 / 漏讲 + 语气词密度 + 分数 + 结论（程序按固定规则算）。
 ② 个性化讲解：程序合成一个前后一致的游客画像（标为合成）和任务参数，模型只用子景点知识写参考讲解词（reference_narration）。
 
     python guide_synth.py --task eval --limit 20
@@ -147,119 +148,201 @@ def _fid(prefix, key, rnd):
 
 
 # ---------------------------------------------------------------- ① 讲解内容评价
-ERROR_TYPES = {
-    "年代错误": (r"\d{3,4}\s*年|[一二三四五六七八九十]+年|朝|世纪|年间", "把这条里的年代 / 朝代说错（换成别的朝代或年份），说得像真的一样"),
-    "数字错误": (r"\d+(?:\.\d+)?\s*(?:米|平方米|亩|层|间|件|座|尊|公里|万|个|位|株|级)", "把这条里的数字说错（明显偏大或偏小）"),
-    "结构材质错误": (r"结构|砖|木|石|琉璃|形制|歇山|庑殿|楼阁|工字", "把这条里的结构 / 材质 / 形制说错"),
-    "无依据说法": (None, "说一个知识库里没有的具体细节，当作事实讲（话题从你写的 gaps 里选一个）"),
-    "夸大绝对化": (None, "用「一模一样」「全国唯一」「最古老」这类夸大 / 绝对化说法（知识库没有依据的）"),
+# 校验报告 T3：问题配比 40% 单点数值偏差 / 25% 多点事实错误 / 15% 完全正确 / 10% 合规违规 / 10% 逻辑问题，另有约 12% 低置信度拒答样本；
+# guide_clip 按手册 5.2.1 的结构（来源枚举、时长、ASR 置信度、采集时间），讲解来源分布 50 / 25 / 15 / 10。
+CATEGORY_PLAN = [("单点数值偏差", 40), ("多点事实错误", 25), ("完全正确", 15), ("合规违规", 10), ("逻辑问题", 10)]
+REFUSE_RATE = 0.12
+RECORDER = cs_synth._env("GUIDE_CLIP_SOURCE_RECORDER", "录音笔")  # 手册码表是「录音笔」；产品若改成「讲解员录音」，设这个环境变量即可
+CLIP_SOURCES = [(RECORDER, 50), ("音频导览", 25), ("短视频字幕", 15), ("直播切片", 10)]
+SOURCE_STYLE = {  # 来源 → (写法, 每 100 字最少语气词, ASR 置信度范围)
+    RECORDER: ("讲解员现场讲解的录音转写：口语多，带「嗯」「呃」「那个」「啊」等语气词和重复、停顿", 4, (0.82, 0.96)),
+    "音频导览": ("景区音频导览的转写：事先写好的稿子，句子完整流畅，几乎没有语气词", 0, (0.90, 0.98)),
+    "短视频字幕": ("讲解类短视频的字幕：短句、口语、节奏快，偶尔有语气词", 2, (0.85, 0.96)),
+    "直播切片": ("旅游直播的片段转写：主播边走边讲，会和观众互动（「家人们」「大家看」），语气词较多", 3, (0.80, 0.95)),
 }
-SEVERITY = {"年代错误": "高", "数字错误": "高", "结构材质错误": "高", "无依据说法": "中", "夸大绝对化": "低"}
-STYLE = [("口语很多，带「嗯」「呃」「那个」「啊」等口头禅和重复，像录音转写", 3), ("口语适中，偶尔有「嗯」「啊」", 2), ("比较流畅的口头讲解，几乎没有口头禅", 1)]
-FILLER_RE = re.compile(r"嗯|呃|额|那个|这个呢|然后呢|对吧|啊[，。…]|哈[，。…]")
+ISSUE_TYPES = {  # 类型 → (大类, 严重度, 说明)
+    "数值偏差": ("事实错误", "高", "把这条里的数字说错，明显超出 2% 容差（例如 71.679 米说成「八十米左右」）"),
+    "年代错误": ("事实错误", "高", "把这条里的年代 / 朝代说错，说得像真的一样"),
+    "结构材质错误": ("事实错误", "高", "把这条里的结构 / 材质 / 形制说错"),
+    "无依据说法": ("事实错误", "中", "说一个知识库里没有的具体细节，当作事实讲（话题从你写的 gaps 里选一个）"),
+    "硬推销": ("合规违规", "高", "硬推销：讲着讲着劝游客买文创 / 套票 / 合影服务"),
+    "绝对化用语": ("合规违规", "中", "用「全国唯一」「世界第一」「最古老」这类没有依据的绝对化说法"),
+    "低俗调侃": ("合规违规", "高", "对历史人物或文物低俗调侃、开不当玩笑"),
+    "缺安全提示": ("合规违规", "高", "讲到台阶 / 水边 / 人多 / 文物时不提醒安全，反而鼓励游客去摸、去爬、去挤"),
+    "时间线倒置": ("逻辑问题", "中", "把事件先后顺序讲反（如说成先重建、后始建，或倒塌之后才建成）"),
+    "前后矛盾": ("逻辑问题", "中", "前面说一个说法 / 数字，后面又说成另一个（said 写前一处，said2 写后一处）"),
+}
+NUM_RX = r"\d+(?:\.\d+)?\s*(?:米|平方米|平方公里|亩|层|间|件|座|尊|公里|万|个|位|株|级|吨|厘米|公顷)"
+FILLER_RE = re.compile(r"嗯|呃|额|那个|这个呢|然后呢|对吧|就是说|啊[，。…！]|哈[，。…！]")
 
 
-def plan_errors(u, rnd):
-    """这一版放几处问题、放哪种、对哪条事实。"""
-    n = rnd.choices([0, 1, 2, 3], weights=[20, 35, 30, 15])[0]
-    cands = []
-    for et, (rx, _) in ERROR_TYPES.items():
-        if rx is None:
-            cands.append((et, None))
-            continue
-        for f in u["facts"]:
-            if re.search(rx, f["value"]):
-                cands.append((et, f["attr"]))
-    rnd.shuffle(cands)
-    out, used = [], set()
-    for et, attr in cands:
-        if len(out) >= n:
+def _pick(rnd, plan):
+    return rnd.choices([x for x, _ in plan], weights=[w for _, w in plan])[0]
+
+
+def plan_issues(u, rnd, category):
+    """按大类挑具体问题，并尽量对到知识库里能放这种错的条目。"""
+    attrs_num = [f["attr"] for f in u["facts"] if re.search(NUM_RX, f["value"])]
+    attrs_year = [f["attr"] for f in u["facts"] if re.search(r"\d{3,4}\s*年|朝|世纪|年间", f["value"])]
+    attrs_struct = [f["attr"] for f in u["facts"] if re.search(r"结构|砖|木|石|琉璃|形制|歇山|庑殿|楼阁|工字|钢", f["value"])]
+    if category == "完全正确":
+        return []
+    if category == "单点数值偏差":
+        if attrs_num:
+            return [("数值偏差", rnd.choice(attrs_num))]
+        if attrs_year:
+            return [("年代错误", rnd.choice(attrs_year))]
+        return [("无依据说法", None)]
+    if category == "多点事实错误":
+        pool = [("数值偏差", a) for a in attrs_num] + [("年代错误", a) for a in attrs_year] + [("结构材质错误", a) for a in attrs_struct]
+        rnd.shuffle(pool)
+        out, used = [], set()
+        for t, a in pool:
+            if a not in used:
+                out.append((t, a))
+                used.add(a)
+            if len(out) >= rnd.choice([2, 2, 3, 3, 4]):
+                break
+        if len(out) < 2:
+            out.append(("无依据说法", None))
+        return out
+    if category == "合规违规":
+        return [(t, None) for t in rnd.sample(["硬推销", "绝对化用语", "低俗调侃", "缺安全提示"], rnd.choice([1, 1, 2]))]
+    return [(t, None) for t in rnd.sample(["时间线倒置", "前后矛盾"], rnd.choice([1, 1, 2]))]
+
+
+def pad_facts(u, row):
+    """知识条目少于 6 条：补所属景区的真实基础资料（景区名、等级、所在地区、类型），到 6 条为止；最多 10 条。"""
+    facts = list(u["facts"])[:10]
+    if len(facts) >= 6:
+        return facts
+    if u["kind"] == "scenic":  # 景区本体：补景区表里其他真实字段
+        for col, label in (("scenic_address", "地址"), ("open_status_type", "开放状态"), ("special_open_rule_desc", "特殊开放规则"),
+                           ("scenic_feature_tags", "特色"), ("scenic_sub_type", "细分类型"), ("guide_language_type", "讲解语种")):
+            v = cs_expand.fmt_value(col, row.get(col))
+            if v and len(facts) < 6 and col not in {x["field"] for x in cs_expand.row_conflicts(row)}:
+                facts.append(dict(seq=f"S{len(facts) + 1}", attr=label, value=v, source_ids=[f"{row['_id']}:{col}"]))
+        return facts
+    place = "".join(dict.fromkeys(x for x in [row.get("province_name"), row.get("city_name"), row.get("district_name")] if x))
+    extra = [("所属景区", row["_name"] + (f"（{row.get('scenic_grade_level')}）" if row.get("scenic_grade_level") else "")),
+             ("所在地区", place), ("景区类型", cs_expand.fmt_value("scenic_main_type", row.get("scenic_main_type")))]
+    for a, v in extra:
+        if len(facts) >= 6:
             break
-        if (attr and attr in used) or (et in ("无依据说法", "夸大绝对化") and any(x[0] == et for x in out)):
+        if not v or (a == "所属景区" and row["_name"] == u["spot"]) or any(f["attr"] == a for f in facts):
             continue
-        out.append((et, attr))
-        if attr:
-            used.add(attr)
-    return out
+        facts.append(dict(seq=f"S{len(facts) + 1}", attr=a, value=v, source_ids=[f"{row['_id']}:scenic_table"]))
+    return facts
 
 
 def eval_prompt(row, u, plan):
-    facts = "\n".join(f"- {f['attr']}：{f['value']}" for f in u["facts"])
-    if plan["errors"]:
-        errs = "\n".join(f"   - {et}：" + (f"对「{attr}」这一条，" if attr else "") + ERROR_TYPES[et][1] for et, attr in plan["errors"])
-        rule2 = f"2. 必须故意放进下面 {len(plan['errors'])} 处问题（全部放进去，且只放这些），并在 JSON 里逐字标出原话：\n{errs}"
+    facts = "\n".join(f"- {f['attr']}：{f['value']}" for f in plan["facts"])
+    style, min_fill, _ = SOURCE_STYLE[plan["source"]]
+    if plan["refuse"]:
+        rule2 = ("2. 这是一段收音很差的片段：大量杂音，转写里有好几处「[听不清]」、断句混乱、同音错字，只能隐约听出讲的是这个景点；"
+                 "不放其他问题，issues 输出空数组。")
+    elif plan["issues"]:
+        lines = "\n".join(f"   - {t}：" + (f"对「{a}」这一条，" if a else "") + ISSUE_TYPES[t][2] for t, a in plan["issues"])
+        rule2 = f"2. 必须故意放进下面 {len(plan['issues'])} 处问题（全部放进去，且只放这些），并在 issues 里逐字标出原话：\n{lines}"
     else:
-        rule2 = "2. 这一版不放任何问题：所有内容都要和知识库一致，不要出现知识库以外的具体细节、数字、人名，也不要夸大；errors / unsupported / exaggerations 都输出空数组。"
-    return f"""你在做「讲解内容评价」训练数据。下面是「{row['_name']}」里「{u['spot']}」的知识库条目。请写一段讲解员现场给游客讲解的文字（{plan['style'][0]}），按要求故意放进问题，并如实标注。
+        rule2 = "2. 这一版不放任何问题：内容都和知识库一致，不出现知识库以外的具体细节、数字、人名，不夸大、不推销、不调侃，前后一致；issues 输出空数组。"
+    return f"""你在做「讲解内容评价」训练数据。下面是「{row['_name']}」里「{u['spot']}」的知识库条目。请写一段讲解文字：{style}，按要求放进问题并如实标注。
 
 【知识库】（{KB_NAME[u['kind']]}）
 {facts}
 
 要求：
-1. 讲解 {plan['len'][0]}～{plan['len'][1]} 字，像讲解员边走边说；讲到知识库里的 {plan['k']} 条左右内容，没讲的条目不要硬塞。
+1. 讲解 {plan['len'][0]}～{plan['len'][1]} 字，讲到知识库里的 {plan['k']} 条左右内容，没讲的条目不要硬塞。{'语气词（嗯、呃、那个、啊…）每 100 字至少 ' + str(min_fill) + ' 处。' if min_fill else ''}
 {rule2}
 3. 除了故意放进去的问题，其他内容必须和知识库一致；不要出现知识库里没有的数字、年代、人名。
-4. gaps：写 2 个游客可能会问、但这个知识库没有覆盖的具体话题（如「塔内电梯品牌」「各层壁画作者署名」），不能是知识库里已有的内容。
-5. said 必须是 guide_text 里逐字连续的一段原话；correct 写知识库里的正确说法。covered_attrs 只写讲对了的条目名（用知识库里的条目名）。
+4. gaps：写 1～3 个游客可能会问、但这个知识库没有覆盖的具体话题（如「塔内电梯品牌」「各层壁画作者署名」），不能是知识库里已有的内容。
+5. said / said2 必须是 asr_text 里逐字连续的原话；correct 写知识库里的正确说法（合规 / 逻辑问题写应该怎么讲）。covered_attrs 只写讲对了的条目名。
 
 只输出一个 JSON 对象：
-{{"gaps":["",""],"guide_text":"讲解文字","errors":[{{"type":"年代错误/数字错误/结构材质错误","attr":"知识库条目名","said":"原话","correct":"正确说法"}}],
- "unsupported":[{{"said":"原话","topic":"对应话题"}}],"exaggerations":[{{"said":"原话"}}],"covered_attrs":["条目名"],"suggestions":["给讲解员的 1～2 条修改建议"]}}"""
+{{"gaps":["…"],"asr_text":"讲解文字","issues":[{{"type":"{'/'.join(ISSUE_TYPES)}","attr":"知识库条目名（没有就留空）","said":"原话","said2":"前后矛盾时的另一处原话","correct":"正确说法"}}],
+ "covered_attrs":["条目名"],"suggestions":["给讲解员的 1～2 条修改建议"]}}"""
 
 
 def _nums(text):
     return set(re.findall(r"\d+(?:\.\d+)?", text or ""))
 
 
+def _near(n, kb_nums, tol=0.02):
+    """数值和知识库里某个数差在 2% 以内视为一致（手册容差）。"""
+    try:
+        x = float(n)
+    except ValueError:
+        return False
+    return any(abs(x - float(k)) <= tol * max(abs(float(k)), 1e-9) for k in kb_nums)
+
+
 def eval_result(u, plan, js):
     """标准答案：程序核对模型的标注，按固定规则算分。返回 (eval_result, check_flags)。"""
-    text = str(js.get("guide_text") or "")
-    attrs = {f["attr"]: f["value"] for f in u["facts"]}
-    flags = []
-    errors = []
-    for e in js.get("errors") or []:
+    text = str(js.get("asr_text") or js.get("guide_text") or "")
+    facts = plan["facts"]
+    attrs = {f["attr"]: f["value"] for f in facts}
+    flags, issues = [], []
+    n_chars = len(re.sub(r"\s", "", text))
+    fillers = FILLER_RE.findall(text)
+    density = round(len(fillers) * 100 / max(1, n_chars), 1)
+    min_fill = SOURCE_STYLE[plan["source"]][1]
+    if not plan["refuse"] and density < min_fill:
+        flags.append(f"语气词每 100 字 {density} 处，{plan['source']} 要求 ≥{min_fill}")
+    if plan["refuse"]:
+        res = dict(verdict="拒答", refusal=dict(reason=f"ASR 置信度 {plan['conf']} 低于 0.7，且多处听不清，无法可靠评价", asr_confidence=plan["conf"]),
+                   scores=None, issues=[], covered_facts=[], missed_facts=[], disfluency=dict(filler_count=len(fillers), per_100_chars=density),
+                   suggestions=["收音质量不足，建议重新采集或人工听写后再评"], scoring_rule=SCORING_RULE)
+        if js.get("issues"):
+            flags.append("拒答样本不应标问题")
+        return res, flags
+    for e in js.get("issues") or []:
         said = str(e.get("said") or "").strip()
-        et = e.get("type") if e.get("type") in SEVERITY else "事实错误"
-        if not said or said not in text:
-            flags.append(f"标注的原话在讲解里找不到：{said[:20]}")
+        said2 = str(e.get("said2") or "").strip()
+        t = e.get("type") if e.get("type") in ISSUE_TYPES else None
+        if not t:
+            flags.append(f"问题类型不认识：{e.get('type')}")
             continue
+        if not said or said not in text or (said2 and said2 not in text):
+            flags.append(f"标注的原话在讲解里找不到：{(said or said2)[:20]}")
+            continue
+        cat, sev, _ = ISSUE_TYPES[t]
         attr = e.get("attr") if e.get("attr") in attrs else None
-        if not attr:
-            flags.append(f"错误标注的条目不在知识库：{e.get('attr')}")
-        errors.append(dict(type=et, attr=attr, guide_said=said, kb_value=attrs.get(attr) or e.get("correct"), severity=SEVERITY.get(et, "高")))
-    unsupported = [dict(guide_said=str(x.get("said")).strip(), topic=x.get("topic"), severity="中") for x in js.get("unsupported") or []
-                   if str(x.get("said") or "").strip() in text and str(x.get("said") or "").strip()]
-    exaggerations = [dict(guide_said=str(x.get("said")).strip(), severity="低") for x in js.get("exaggerations") or []
-                     if str(x.get("said") or "").strip() in text and str(x.get("said") or "").strip()]
-    for x in (js.get("unsupported") or []) + (js.get("exaggerations") or []):
-        said = str(x.get("said") or "").strip()
-        if said and said not in text:
-            flags.append(f"标注的原话在讲解里找不到：{said[:20]}")
-    want = len(plan["errors"])
-    got = len(errors) + len(unsupported) + len(exaggerations)
-    if got != want:
-        flags.append(f"要求放 {want} 处问题，标出 {got} 处")
-    marked = " ".join(x["guide_said"] for x in errors + unsupported + exaggerations)
-    kb_text = " ".join(attrs.values())
-    extra = sorted(n for n in _nums(text) - _nums(kb_text) if n not in _nums(marked))
+        if cat == "事实错误" and t != "无依据说法" and not attr:
+            flags.append(f"事实错误没有对到知识库条目：{e.get('attr')}")
+        issues.append(dict(category=cat, type=t, attr=attr, guide_said=said, guide_said_2=said2 or None,
+                           kb_value=attrs.get(attr) or e.get("correct"), severity=sev))
+    want = sorted(t for t, _ in plan["issues"])
+    got = sorted(x["type"] for x in issues)
+    if want != got:
+        flags.append(f"计划放 {('、'.join(want) or '无')}，实际标出 {('、'.join(got) or '无')}")
+    marked = " ".join((x["guide_said"] or "") + " " + (x["guide_said_2"] or "") for x in issues)
+    kb_nums = _nums(" ".join(attrs.values()))
+    extra = sorted(n for n in _nums(text) - kb_nums if n not in _nums(marked) and not _near(n, kb_nums))
     if extra:
         flags.append("讲解里有知识库没有、也没标出来的数字：" + "、".join(extra[:5]))
-    covered = [a for a in js.get("covered_attrs") or [] if a in attrs and a not in {e["attr"] for e in errors}]
-    missed = [a for a in attrs if a not in covered and a not in {e["attr"] for e in errors}]
-    fillers = FILLER_RE.findall(text)
-    acc = max(0, 100 - 25 * len(errors) - 15 * len(unsupported) - 10 * len(exaggerations))
-    comp = round(100 * len(covered) / max(1, len(attrs)))
-    expr = max(60, 100 - 3 * len(fillers))
-    total = round(0.5 * acc + 0.3 * comp + 0.2 * expr, 1)
-    high = any(e["severity"] == "高" for e in errors)
-    verdict = "不合格" if (acc < 70 or high) else ("合格" if (not errors and not unsupported and not exaggerations and total >= 75) else "需改进")
-    res = dict(verdict=verdict, scores=dict(准确性=acc, 完整性=comp, 表达=expr, 总分=total),
-               errors=errors, unsupported=unsupported, exaggerations=exaggerations, covered_facts=covered, missed_facts=missed,
-               disfluency=dict(filler_count=len(fillers), examples=sorted(set(fillers))[:6]),
-               suggestions=[str(x) for x in (js.get("suggestions") or [])][:3],
-               scoring_rule="准确性 = 100 − 25×事实错误 − 15×无依据 − 10×夸大；完整性 = 讲对的条目 / 全部条目；表达 = 100 − 3×口头禅（不低于 60）；"
-                            "总分 = 0.5×准确 + 0.3×完整 + 0.2×表达；有高严重度错误或准确性 < 70 为不合格，无问题且总分 ≥ 75 为合格，其余需改进")
+    bad_attrs = {x["attr"] for x in issues if x["attr"]}
+    covered = [a for a in js.get("covered_attrs") or [] if a in attrs and a not in bad_attrs]
+    missed = [a for a in attrs if a not in covered and a not in bad_attrs]
+    n = lambda cat, sev: sum(1 for x in issues if x["category"] == cat and x["severity"] == sev)  # noqa: E731
+    acc = max(0, 100 - 25 * n("事实错误", "高") - 15 * n("事实错误", "中"))
+    comp_ = max(0, 100 - 40 * n("合规违规", "高") - 20 * n("合规违规", "中"))
+    logic = max(0, 100 - 30 * sum(1 for x in issues if x["category"] == "逻辑问题"))
+    full = round(100 * len(covered) / max(1, len(attrs)))
+    expr = max(60, round(100 - 4 * max(0, density - min_fill - 2)))
+    total = round(0.35 * acc + 0.2 * comp_ + 0.15 * logic + 0.2 * full + 0.1 * expr, 1)
+    high = any(x["severity"] == "高" for x in issues)
+    verdict = "不合格" if (high or acc < 70 or comp_ < 70) else ("合格" if not issues and total >= 75 else "需改进")
+    res = dict(verdict=verdict, scores=dict(准确性=acc, 合规性=comp_, 逻辑性=logic, 完整性=full, 表达=expr, 总分=total),
+               issues=issues, covered_facts=covered, missed_facts=missed, disfluency=dict(filler_count=len(fillers), per_100_chars=density,
+                                                                                       examples=sorted(set(fillers))[:6]),
+               suggestions=[str(x) for x in (js.get("suggestions") or [])][:3], scoring_rule=SCORING_RULE)
     return res, flags
+
+
+SCORING_RULE = ("ASR 置信度 < 0.7 拒答；数值与知识库差 ≤2% 视为正确。准确性 = 100 − 25×高严重事实错误 − 15×无依据；合规性 = 100 − 40×高严重合规 − 20×中严重合规；"
+                "逻辑性 = 100 − 30×逻辑问题；完整性 = 讲对条目占比；表达 = 100 − 4×(语气词密度 − 来源基准 − 2)，不低于 60；"
+                "总分 = 0.35 准确 + 0.2 合规 + 0.15 逻辑 + 0.2 完整 + 0.1 表达；有高严重度问题或准确 / 合规 < 70 为不合格，无问题且总分 ≥ 75 为合格，其余需改进。"
+                "（工具侧参考规则，以标注手册为准）")
 
 
 # ---------------------------------------------------------------- ② 个性化讲解
@@ -428,15 +511,33 @@ def narr_check(u, plan, js):
 
 
 # ---------------------------------------------------------------- 组装
+def _when(rnd, u, row):
+    """讲解采集 / 请求时间：晚于知识库版本日（和景区资料更新日），不晚于截止日前一天（手册 5.3.1 R2：kb_version 早于讲解发生日）。"""
+    snap = max(filter(None, [cs_synth._parse_day(kb_version(u)), cs_synth._parse_day(row.get("update_time"))]), default=None)
+    a, b = cs_synth.date_window(snap + timedelta(days=1) if snap else None)
+    day = a + timedelta(days=rnd.randint(0, max(0, (b - a).days)))
+    return day.replace(hour=rnd.randint(8, 18), minute=rnd.randint(0, 59), second=rnd.randint(0, 59))
+
+
 def plan_item(task, row, u, v, seed):
     rnd = _seeded(seed, "guide", task, row["_id"], u["unit_id"], v)
+    when = _when(_seeded(seed, "guide-day", task, row["_id"], u["unit_id"], v), u, row)
     if task == "eval":
-        style = rnd.choice(STYLE)
-        k = min(len(u["facts"]), rnd.randint(3, 5))
-        return dict(rnd=rnd, errors=plan_errors(u, rnd), style=style, k=k, len=rnd.choice([(150, 220), (200, 300), (250, 350)]))
-    day_rnd = _seeded(seed, "guide-day", task, row["_id"], u["unit_id"], v)
-    req_id, day = _fid("nar", f"narr|{row['_id']}|{u['unit_id']}|{v}", day_rnd)
-    req_time = day.replace(hour=rnd.randint(8, 18), minute=rnd.randint(0, 59), second=rnd.randint(0, 59))
+        facts = pad_facts(u, row)
+        category = _pick(rnd, CATEGORY_PLAN)
+        refuse = rnd.random() < REFUSE_RATE
+        source = _pick(rnd, CLIP_SOURCES)
+        lo, hi = SOURCE_STYLE[source][2]
+        conf = round(rnd.uniform(0.45, 0.69), 2) if refuse else round(rnd.uniform(lo, hi), 2)
+        issues = [] if refuse else plan_issues(dict(u, facts=facts), rnd, category)
+        k = min(len(facts), rnd.randint(3, 6))
+        h = int(hashlib.sha1(f"eval|{row['_id']}|{u['unit_id']}|{v}".encode()).hexdigest()[:12], 16)
+        return dict(rnd=rnd, facts=facts, category=("拒答（低置信度）" if refuse else category), refuse=refuse, issues=issues, source=source, conf=conf,
+                    k=k, len=rnd.choice([(130, 200), (180, 280), (250, 360)]), when=when, guide_id=f"G{rnd.randint(1000, 9999)}",
+                    eval_id=f"ge_{when:%Y%m%d}_{h % 100000000:08d}", clip_id=f"au_{when:%Y%m%d}_{h % 1000000:06d}")
+    key = "narr|%s|%s|%s" % (row["_id"], u["unit_id"], v)
+    req_id = f"nar_{when:%Y%m%d}_{int(hashlib.sha1(key.encode()).hexdigest()[:12], 16) % 100000000:08d}"
+    day, req_time = when.replace(hour=0, minute=0, second=0), when
     profile = make_profile(rnd, row, day)
     style = rnd.choice([None, None, "亲切口语", "专业严谨", "故事化"] + (["童趣易懂"] if profile["同行儿童数"] or profile["出游客群编码"] == "G07" else []))
     tp = {"字数上限": rnd.choice([120, 150, 200, 200, 300]), "讲解风格": style, "输出语言": "zh-CN",
@@ -464,19 +565,29 @@ def build_record(task, row, u, v, plan, js, cfg):
                fact_seq_nos=[f["seq"] for f in u["facts"]], fact_sources=u["sources"], scenic_table=_scenic_table(),
                variant=v, model=cfg.get("ai_model"), prompt_version=PROMPT_VERSION[task], generated_at=datetime.now().strftime("%Y-%m-%d %H:%M:%S"))
     if task == "eval":
-        res, flags = eval_result(u, plan, js)
-        gaps = [str(g) for g in (js.get("gaps") or []) if str(g).strip() and str(g) not in " ".join(f["value"] for f in u["facts"])][:3]
-        eid, _ = _fid("ge", f"eval|{row['_id']}|{u['unit_id']}|{v}", _seeded(0, "ge-day", row["_id"], u["unit_id"], v))
-        poi_id = _int(u.get("poi_id")) or (_main_poi(row) if u["kind"] == "scenic" or u["spot"] == row["_name"] else None)
-        rec = {"eval_task_id": eid,
-               "poi": dict(poi_id=poi_id, poi_name=u["spot"], scenic_id=row["_id"], **_place(row)),
-               "kb_entry": dict(kb_id=kb_id(u), kb_version=kb_version(u), source=KB_NAME[u["kind"]], facts=facts, coverage=coverage(u["facts"]), gaps=gaps),
-               "guide_clip_txt": str(js.get("guide_text") or "").strip(),
-               "eval_result": res}
-        src.update(text_type="模型生成的讲解员口述文字（非录音、非 ASR）", style=plan["style"][0],
-                   planned_issues=[dict(type=et, attr=attr) for et, attr in plan["errors"]], needs_review=bool(flags), check_flags=flags)
-        if not rec["guide_clip_txt"]:
+        text = str(js.get("asr_text") or js.get("guide_text") or "").strip()
+        if not text:
             raise ValueError("没有讲解文字")
+        res, flags = eval_result(u, plan, js)
+        facts = [dict(attr=f["attr"], value=f["value"]) for f in plan["facts"]]
+        kb_text = " ".join(f["value"] for f in plan["facts"])
+        gaps = [str(g) for g in (js.get("gaps") or []) if str(g).strip() and str(g) not in kb_text][:3]
+        if not gaps:
+            flags.append("没有 gaps")
+        n_chars = len(re.sub(r"\s", "", text))
+        dur = max(20, round(n_chars / 4.5 * plan["rnd"].uniform(0.97, 1.03)))  # 约 4.5 字 / 秒；不短于 20 秒（手册 5.3.1 R4）
+        if n_chars < 90:
+            flags.append(f"讲解只有 {n_chars} 字（不到 20 秒）")
+        poi_id = _int(u.get("poi_id")) or (_main_poi(row) if u["kind"] == "scenic" or u["spot"] == row["_name"] else None)
+        rec = {"eval_task_id": plan["eval_id"],
+               "poi": dict(poi_id=poi_id, poi_name=u["spot"], scenic_id=row["_id"], **_place(row)),
+               "kb_entry": dict(kb_id=kb_id(u), kb_version=kb_version(u), source=KB_NAME[u["kind"]], facts=facts, coverage=coverage(plan["facts"]), gaps=gaps),
+               "guide_clip": dict(clip_id=plan["clip_id"], source=plan["source"], guide_id=plan["guide_id"], duration_sec=dur, asr_confidence=plan["conf"],
+                                  media_url=None, asr_text=text, collect_time=plan["when"].strftime("%Y-%m-%d %H:%M:%S")),
+               "eval_result": res}
+        src.update(fact_seq_nos=[f["seq"] for f in plan["facts"]],
+                   clip_type="合成：模型按知识库生成的讲解转写文字，没有真实音频（media_url 为空），时长按 4.5 字/秒估算，置信度按来源分布设定",
+                   category=plan["category"], planned_issues=[dict(type=t, attr=a) for t, a in plan["issues"]], needs_review=bool(flags), check_flags=flags)
     else:
         ref, flags = narr_check(u, plan, js)
         rec = {"request_id": plan["request_id"], "scene": TASK_NAME["narr"], "request_time": plan["request_time"].strftime("%Y-%m-%d %H:%M:%S"),
@@ -496,7 +607,7 @@ def ddl(task):
   eval_task_id VARCHAR(64) NOT NULL, scenic_id VARCHAR(64) NULL, scenic_name VARCHAR(255) NULL, poi_name VARCHAR(255) NULL, city_name VARCHAR(64) NULL,
   kb_id VARCHAR(128) NULL, kb_kind VARCHAR(16) NULL COMMENT 'guide 讲解包 / redqa / scenic 景区表', issue_cnt INT NULL COMMENT '放进的问题数',
   verdict VARCHAR(16) NULL COMMENT '合格 / 需改进 / 不合格', total_score DECIMAL(5,1) NULL, needs_review TINYINT NULL,
-  record_json LONGTEXT NOT NULL COMMENT '完整样本：poi + kb_entry + guide_clip_txt + eval_result + source', travel_date INT NOT NULL,
+  record_json LONGTEXT NOT NULL COMMENT '完整样本：poi + kb_entry + guide_clip + eval_result + source', travel_date INT NOT NULL,
   created_at DATETIME DEFAULT CURRENT_TIMESTAMP, PRIMARY KEY (eval_task_id), KEY idx_scenic (scenic_id), KEY idx_date (travel_date)
 ) DEFAULT CHARSET=utf8mb4 COMMENT='讲解内容评价样本（输入 + 标准答案）'"""
     return f"""CREATE TABLE IF NOT EXISTS {NARR_TABLE} (
@@ -517,7 +628,7 @@ def mysql_write(cur, task, rec):
         cur.execute(f"""REPLACE INTO {t} (eval_task_id, scenic_id, scenic_name, poi_name, city_name, kb_id, kb_kind, issue_cnt, verdict, total_score, needs_review,
                         record_json, travel_date) VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)""",
                     (rec["eval_task_id"], rec["poi"]["scenic_id"], g.get("scenic_name"), rec["poi"]["poi_name"], rec["poi"]["city"], rec["kb_entry"]["kb_id"],
-                     g["kb_kind"], len(g["planned_issues"]), rec["eval_result"]["verdict"], rec["eval_result"]["scores"]["总分"], int(g["needs_review"]), js, d))
+                     g["kb_kind"], len(g["planned_issues"]), rec["eval_result"]["verdict"], (rec["eval_result"].get("scores") or {}).get("总分"), int(g["needs_review"]), js, d))
     else:
         t = db.ident(NARR_TABLE)
         d = int(rec["request_id"].split("_")[1])
@@ -614,6 +725,8 @@ def export_iter(task, f, fmt="jsonl"):
                     elif fmt == "json":
                         out.append(("" if first else ",\n") + r["record_json"])
                         first = False
+                    elif fmt in ("l1_jsonl", "prov_jsonl"):  # 交付拆分：L1 给标注员（不含答案），sidecar 给数据侧 / QC
+                        out.append(json.dumps(cs_synth.split_delivery(json.loads(r["record_json"]))[0 if fmt == "l1_jsonl" else 1], ensure_ascii=False) + "\n")
                     else:
                         out.append(r["record_json"] + "\n")
                 yield "".join(out)
@@ -671,7 +784,9 @@ def run(args, cfg, log=print, should_stop=lambda: False, progress=lambda done, t
     done = _done_keys(task, out)
     order = sorted(units)
     _seeded(args.seed, "order", task).shuffle(order)
-    plan_keys = [(sid, u, v) for v in range(1, variants + 1) for sid in order for u in units[sid]]
+    # 轮流排：先每个景区各出 1 条，再各出第 2 条……（校验报告 T3 P2-3：不会一批全是同一个 POI / 同一份知识）
+    width = max((len(x) for x in units.values()), default=0)
+    plan_keys = [(sid, units[sid][k], v) for v in range(1, variants + 1) for k in range(width) for sid in order if k < len(units[sid])]
     todo = [(sid, u, v) for sid, u, v in plan_keys if f"{u['unit_id']}|{v}" not in done]
     n_left = len(todo)
     if args.limit:
@@ -718,8 +833,8 @@ def run(args, cfg, log=print, should_stop=lambda: False, progress=lambda done, t
         plan = plan_item(task, row, u, v, args.seed)
         prompt = eval_prompt(row, u, plan) if task == "eval" else narr_prompt(row, u, plan)
         ex_ = dict(prompt=prompt, started=time.strftime("%H:%M:%S"),
-                   persona=(plan["style"][0] if task == "eval" else f"{plan['profile']['出游客群名称']} · {plan['profile']['年龄']}岁"),
-                   channel=TASK_NAME[task], situation=("计划放入：" + ("、".join(f"{et}{'（' + a + '）' if a else ''}" for et, a in plan["errors"]) or "无问题"))
+                   persona=(f"{plan['source']} · 置信度 {plan['conf']}" if task == "eval" else f"{plan['profile']['出游客群名称']} · {plan['profile']['年龄']}岁"),
+                   channel=TASK_NAME[task], situation=(f"{plan['category']}：" + ("、".join(f"{et}{'（' + a + '）' if a else ''}" for et, a in plan["issues"]) or "无问题"))
                    if task == "eval" else f"字数上限 {plan['task_params']['字数上限']} · 风格 {plan['task_params']['讲解风格'] or '未指定'}")
         t0 = time.time()
         try:
@@ -750,7 +865,7 @@ def run(args, cfg, log=print, should_stop=lambda: False, progress=lambda done, t
                 f.write(json.dumps(rec, ensure_ascii=False) + "\n")
             g = rec["source"]
             rid = rec.get("eval_task_id") or rec.get("request_id")
-            summary = (f"{rec['eval_result']['verdict']} {rec['eval_result']['scores']['总分']}" if task == "eval"
+            summary = (f"{rec['eval_result']['verdict']} {(rec['eval_result'].get('scores') or {}).get('总分', '')}" if task == "eval"
                        else f"{rec['visitor_profile']['出游客群名称']} {rec['reference_narration']['char_count']}字")
             mw.writerow([rid, sid, row["_name"], u["spot"], u["kind"], u["unit_id"], v, summary, int(g["needs_review"]), "；".join(g["check_flags"]),
                          g["model"], g["generated_at"]])

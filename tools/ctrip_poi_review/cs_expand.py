@@ -78,6 +78,23 @@ TOPICS = {
                   need=["scenic_desc"], refs=["游玩建议", "其他"],
                   situations=["还没决定去不去，先了解一下景区", "问景区是几A级", "问景区大不大", "问景区有什么特色 / 来历"]),
 }
+# 政策类 / 办理类（校验报告 P1-1）：景区表里没有退改、实名等具体规则，所以资料里明确写「未收录」，客服只能引导到订单页说明或转人工，不能编规则
+TOPICS["policy"] = dict(name="票务政策（退改 / 实名 / 包含范围 / 优惠证件）", intent="退改规则", scene="售前咨询",
+                        fields=["is_free_flag", "has_online_ticket_flag", "ticket_advance_days_qty", "ticket_preferential_amt", "ticket_transit_amt",
+                                "ticket_combo_amt", "scenic_tel_consult"],
+                        need=["has_online_ticket_flag", "is_free_flag"], refs=["退改规则", "退改", "门票", "预约购票"],
+                        note=("政策说明", "资料里没有收录具体的退改、实名、门票包含范围和优惠凭证规则，以购票页面（订单详情）里的说明为准"),
+                        situations=[("买了票临时有事，问能不能退、扣不扣钱", "退改规则"), ("问改游玩日期有没有手续费", "退改规则"),
+                                    ("问要不要实名、要不要带身份证", "实名制"), ("问门票包不包含观光车 / 索道 / 园中园", "门票包含范围"),
+                                    ("问老人、学生优惠要带什么证件", "优惠政策")])
+TOPICS["transact"] = dict(name="订单办理（退票 / 改期 / 查订单）", intent="退票办理", scene="订单售后", order=True,
+                          fields=["has_online_ticket_flag", "ticket_advance_days_qty", "scenic_tel_consult", "scenic_tel_complaint"],
+                          need=["has_online_ticket_flag"], require=("has_online_ticket_flag", "是"), refs=["退改规则", "退改", "预约购票", "预约"],
+                          note=("办理说明", "资料里没有收录具体的退改费用和时限；客服核对订单号、票种、张数、日期后，按订单页面规则帮游客提交申请或转人工处理，不承诺结果"),
+                          situations=[("临时有事要退票", "退票办理"), ("想把游玩日期往后改几天", "改期办理"), ("买错了票种想换", "改签办理"),
+                                      ("帮家人查一下订单出票了没有", "订单查询"), ("入园核销时提示订单无效", "订单异常")])
+TOPICS["booking"]["order_rate"] = 0.4
+
 MIXED = dict(name="综合咨询", intent="其他", scene="售前咨询", situations=["出发前一次把想问的都问了", "边问边做攻略", "帮家里人问的，问得比较细"])
 # 景点讲解 / 历史文化：事实来自景区讲解包（每条讲解一个单元）或 RedAttractionQA（能唯一对到景区的，每 5 条一个单元）
 CULTURE = dict(name="景点讲解", intent="游玩建议", scene="售前咨询", refs=["游玩建议", "其他"],
@@ -142,26 +159,70 @@ def fmt_value(col, v):
     return s
 
 
+ROAD_RE = re.compile(r"([\u4e00-\u9fff]{2,10}?(?:路|街|巷|大道|胡同|大街))(\d+号)")
+
+
+def _amt(row, c):
+    try:
+        return float(str(row.get(c)).strip())
+    except (TypeError, ValueError):
+        return None
+
+
+def row_conflicts(row):
+    """景区表一行里自相矛盾的字段（校验报告 P1-3 / P1-4）：票价倒挂、地址和简介里的地址不一致。返回 [{field, issue, detail}]，结果缓存在行上。"""
+    if "_conflicts" in row:
+        return row["_conflicts"]
+    out = []
+    pref = _amt(row, "ticket_preferential_amt")
+    if pref:
+        for c in ("ticket_adult_weekday_amt", "ticket_adult_peak_amt", "ticket_adult_low_amt"):
+            a = _amt(row, c)
+            if a is not None and 0 < a < pref:
+                out.append(dict(field=c, issue="票价倒挂", detail=f"{LABELS[c]} {_num(a)} 元 低于 优惠票 {_num(pref)} 元"))
+    peak, low = _amt(row, "ticket_adult_peak_amt"), _amt(row, "ticket_adult_low_amt")
+    if peak and low and low > peak:
+        out.append(dict(field="ticket_adult_low_amt", issue="淡季高于旺季", detail=f"淡季 {_num(low)} 元 高于 旺季 {_num(peak)} 元"))
+    addr, desc = str(row.get("scenic_address") or ""), str(row.get("scenic_desc") or "")
+    a, d = ROAD_RE.search(addr), ROAD_RE.search(desc)
+    road = lambda m: re.sub(r".*(?:省|市|区|县|镇|乡|街道|地区|嘴|开发区|新区)", "", m.group(1))  # noqa: E731  只比路名本身
+    ra, rd = (road(a), road(d)) if a and d else ("", "")
+    if a and d and a.group(2) == d.group(2) and ra and rd and not (ra.endswith(rd) or rd.endswith(ra)):  # 门牌号相同、路名不同
+        out.append(dict(field="scenic_address", issue="地址与简介不一致", detail=f"地址「{a.group(0)}」，简介「{d.group(0)}」"))
+    row["_conflicts"] = out
+    return out
+
+
 def topic_facts(row, topic):
-    """某个景区某个主题的资料 {字段: 文字}；必需字段全空 → None（这个景区不生成这个主题）。"""
+    """某个景区某个主题的资料 {字段: 文字}；必需字段全空 → None（这个景区不生成这个主题）。自相矛盾的字段不用。"""
     t = TOPICS[topic]
     if all(_blank(row.get(c)) for c in t["need"]):
         return None
+    if t.get("require") and fmt_value(t["require"][0], row.get(t["require"][0])) != t["require"][1]:
+        return None
     free = fmt_value("is_free_flag", row.get("is_free_flag")) == "是"
+    bad = {x["field"] for x in row_conflicts(row)}
     out = {}
     for c in t["fields"]:
-        if free and c in PRICE_FIELDS:  # 免费景区不给门票价，免得自相矛盾
+        if (free and c in PRICE_FIELDS) or c in bad:  # 免费景区不给门票价；有矛盾的字段不给
             continue
         v = fmt_value(c, row.get(c))
         if v is not None:
             out[c] = v
-    return out or None
+    if not out:
+        return None
+    if t.get("note"):
+        out[t["note"][0]] = t["note"][1]
+    return out
+
+
+MIX_TOPICS = [k for k, t in TOPICS.items() if not t.get("note")]  # 综合咨询只组合事实类主题（政策 / 办理类单独生成）
 
 
 def available(row, topics, ctx=None):
     """这个景区能生成哪些主题（综合咨询要有至少 2 个主题有资料；景点讲解每条讲解资料一个，记作 culture@<单元ID>）。"""
     have = [t for t in topics if t in TOPICS and topic_facts(row, t)]
-    if "mixed" in topics and len([t for t in TOPICS if topic_facts(row, t)]) >= 2:
+    if "mixed" in topics and len([t for t in MIX_TOPICS if topic_facts(row, t)]) >= 2:
         have.append("mixed")
     if "culture" in topics and ctx:
         have += [f"culture@{u['unit_id']}" for u in ctx["units"].get(row["_id"], [])]
@@ -266,10 +327,13 @@ def plan_job(row, topic, variant, ctx, seed):
             facts[k if seen[k] == 1 else f"{k}（{seen[k]}）"] = f["value"]
         meta = dict(CULTURE, name=f"景点讲解（{u['spot']}）")
         qs = rnd.sample(ctx["red_q"], min(3, len(ctx["red_q"]))) if ctx.get("red_q") else []
-        return dict(rnd=rnd, topic=topic, parts=["culture"], meta=meta, facts=facts, unit=u, persona=rnd.choice(PERSONAS), channel=rnd.choice(CHANNELS),
-                    situation=rnd.choice(CULTURE["situations"]), refs=pick_refs(pool, CULTURE["refs"], rnd, 2), red_q=qs)  # 讲解类不用 RiSAWOZ / CrossWOZ（那些是推荐 / 查询类对话）
+        out = dict(rnd=rnd, topic=topic, parts=["culture"], meta=meta, facts=facts, unit=u, persona=rnd.choice(PERSONAS), channel=rnd.choice(CHANNELS),
+                   situation=rnd.choice(CULTURE["situations"]), refs=pick_refs(pool, CULTURE["refs"], rnd, 2), red_q=qs)
+        snap = max(filter(None, [_snap(row), cs_synth._parse_day(u.get("version"))]), default=None)
+        out["session"] = cs_synth.plan_session(_seeded(seed, "plan", row["_id"], topic, variant), False, snap)
+        return out  # 讲解类不用 RiSAWOZ / CrossWOZ（那些是推荐 / 查询类对话）
     if topic == "mixed":
-        have = [t for t in TOPICS if topic_facts(row, t)]
+        have = [t for t in MIX_TOPICS if topic_facts(row, t)]
         parts = rnd.sample(have, min(len(have), rnd.choice([2, 2, 3])))
         meta = dict(MIXED, name="综合咨询（" + "、".join(TOPICS[p]["name"] for p in parts) + "）")
         facts = {}
@@ -280,8 +344,22 @@ def plan_job(row, topic, variant, ctx, seed):
         parts, meta = [topic], TOPICS[topic]
         facts = topic_facts(row, topic)
         refs_intents = meta["refs"]
+    sit = rnd.choice(meta["situations"])
+    if isinstance(sit, tuple):  # 情境带具体意图（政策 / 办理类）
+        sit, intent = sit
+        meta = dict(meta, intent=intent)
+    order = bool(meta.get("order")) or rnd.random() < meta.get("order_rate", 0)
+    tickets = [n for c, n in (("ticket_adult_weekday_amt", "成人票"), ("ticket_adult_peak_amt", "成人票"), ("ticket_preferential_amt", "优惠票"),
+                              ("ticket_combo_amt", "联票 / 套票")) if c in facts] or ["门票"]
+    tickets = [t for i, t in enumerate(tickets) if t not in tickets[:i]]
+    session = cs_synth.plan_session(_seeded(seed, "plan", row["_id"], topic, variant), order, _snap(row), tickets)
     return dict(rnd=rnd, topic=topic, parts=parts, meta=meta, facts=facts, persona=rnd.choice(PERSONAS), channel=rnd.choice(CHANNELS),
-                situation=rnd.choice(meta["situations"]), refs=pick_refs(pool, refs_intents, rnd, 2, woz, parts))
+                situation=sit, refs=pick_refs(pool, refs_intents, rnd, 2, woz, parts), session=session)
+
+
+def _snap(row):
+    """景区资料的快照日（update_time）：会话不能早于它（校验报告 P2-4）。"""
+    return cs_synth._parse_day(row.get("update_time"))
 
 
 def build_prompt(row, plan):
@@ -302,7 +380,11 @@ def build_prompt(row, plan):
         rule8 = ("\n8. 这是讲解类咨询：客服用自己的话把资料讲清楚、讲生动，可以分几条说；不要说「据某某文章 / 官网 / 报道」这类出处话术；"
                  "资料里的口径（「约」「五百多」「相传」）原样保留，不要改成确数，不要补充资料外的年代、尺寸、人物。")
     else:
-        head, facts_hd, extra, rule8 = f"本次主题：{plan['meta']['name']}", "【景区资料】（来自景区基础数据表，客服回答只能用这里的信息）", "", ""
+        head, facts_hd, extra, rule8 = f"本次主题：{plan['meta']['name']}（游客意图：{plan['meta']['intent']}）", "【景区资料】（来自景区基础数据表，客服回答只能用这里的信息）", "", ""
+    rule9 = ""
+    if plan["meta"].get("note"):
+        rule9 = ("\n9. 资料里没有具体的退改 / 实名 / 包含范围规则：客服不能自己说能不能退、退多少、几天内、要不要实名，只能说以购票页面（订单详情）里的说明为准，"
+                 "或帮游客提交申请 / 转人工核实。" + ("办理类要先核对订单号、票种、张数、日期，再说明下一步。" if plan["meta"].get("order") else ""))
     return f"""你在做「景区在线客服对话」训练数据。请为「{name}」（{place}）生成一通在线客服会话。
 
 渠道：{plan['channel']}
@@ -320,14 +402,15 @@ def build_prompt(row, plan):
 1. 客服说的每个事实（价格、时间、电话、地址、政策、设施、景点名、年代、尺寸…）都必须来自上面的资料，数字原样使用；资料里没有的，客服说「这个以景区官方公告为准」或「帮您转人工确认」，不要编。
 2. 游客的问题围绕本次主题，主要问资料能回答的；最多有 1 个追问是资料里没有的。不要问别的景区。
 3. 游客口语化、贴合人设和情境，可以拆成多条消息、追问、催促（如「在吗」）、发表情；不要照抄参考对话的原句。
-4. 客服用官方客服口吻（「您好」「亲」等），可以分几条说；第一条可以是机器人（robot）自动接待，之后由人工（human）回复，也可以全程机器人。
+4. 客服用官方客服口吻（「您好」「亲」等），可以分几条说；游客第一条之后可以先由机器人（robot）接待，再由人工（human）回复，也可以全程机器人。
 5. 资料里有票价时可以用一条 msg_type 为 card 的卡片消息，如「[门票卡片] 成人票 ¥60」，内容必须是资料里的。
-6. 4～10 条消息；景区名写「{name}」；不要提「携程」「网友」「资料」「数据表」。
-7. gap_sec 是这条消息距离上一条的秒数（游客 3～60 秒，客服 5～90 秒，第一条为 0）。{rule8}
+6. 景区名写「{name}」；不要提「携程」「网友」「资料」「数据表」。
+7. gap_sec 是这条消息距离上一条的秒数（游客 3～60 秒，客服 5～90 秒，第一条为 0）。{rule8}{rule9}
+
+{cs_synth.plan_rules(plan["session"])}
 
 只输出一个 JSON 对象，不要其他文字：
-{{"turns":[{{"role":"user或agent","agent_type":"robot或human（仅 agent 填）","msg_type":"text或card","text":"内容","gap_sec":整数}}],
- "end_type":"{'/'.join(END_TYPES)} 之一","satisfaction_score":null或1到5的整数,"is_resolved":true或false}}"""
+{cs_synth.SESSION_JSON}"""
 
 
 NUM_UNIT_RE = re.compile(r"\d+(?:\.\d+)?\s*(?:年|米|平方米|平方公里|亩|公里|千米|件|座|尊|层|窟|间|万|余|多)")
@@ -345,7 +428,10 @@ def quality_flags(row, plan, rec):
     others = {(s["attraction_name"], cs_synth._short(s.get("city"))) for s in plan["refs"]
               if s["attraction_name"] and s["attraction_name"] not in own}
     others |= {(n, "") for s in plan["refs"] for n in s.get("names") or [] if n and n not in own}
+    oid = (plan.get("session") or {}).get("order") and plan["session"]["order"]["order_id"]
     for t in rec["turns"]:
+        if oid:
+            t = dict(t, text=t["text"].replace(oid, ""))  # 订单号不参与金额 / 电话检查
         for o, city in others:  # 游客、客服都不该提别的景区
             for core in {cs_synth._core(o), cs_synth._core(o, (city,))}:  # 「上海欢乐谷」也查「欢乐谷」
                 if len(core) >= 3 and core in t["text"] and core not in own:
@@ -371,10 +457,10 @@ def quality_flags(row, plan, rec):
 
 
 def assemble(row, plan, variant, js, cfg, table):
-    meta = plan["meta"]
-    need_order = meta["scene"] == "预订购票" and plan["rnd"].random() < 0.5
-    rec = cs_synth.build_session(js, plan["rnd"], f"expand|{row['_id']}|{plan['topic']}|{variant}", need_order, row["_id"], row["_name"], id_digits=10)
-    flags = quality_flags(row, plan, rec)
+    meta, sp = plan["meta"], plan["session"]
+    rec = cs_synth.build_session(js, plan["rnd"], f"expand|{row['_id']}|{plan['topic']}|{variant}", bool(sp["order"]), row["_id"], row["_name"],
+                                 id_digits=10, plan=sp)
+    flags = cs_synth.session_checks(sp, rec, js.get("coref")) + quality_flags(row, plan, rec)
     rec["source"] = dict(generate_method="llm_expand", scenic_table=table, scenic_id=row["_id"], scenic_name=row["_name"], scenic_city=row["_city"],
                          scenic_update_time=str(row.get("update_time") or "") or None, topic=plan["topic"], topic_name=meta["name"],
                          intent_type=meta["intent"], scene_type=meta["scene"], fact_fields=list(plan["facts"]),
@@ -382,8 +468,9 @@ def assemble(row, plan, variant, js, cfg, table):
                          style_refs=[dict(dialogue_id=s["id"], dataset=s.get("dataset"), attraction_name=s["attraction_name"] or None,
                                           intent_type=s["intent"]) for s in plan["refs"]],
                          situation=plan["situation"], variant=variant, model=cfg.get("ai_model"), prompt_version=PROMPT_VERSION,
-                         generated_at=datetime.now().strftime("%Y-%m-%d %H:%M:%S"), is_resolved=bool(js.get("is_resolved")),
-                         needs_review=bool(flags), check_flags=flags)
+                         generated_at=datetime.now().strftime("%Y-%m-%d %H:%M:%S"), is_resolved=sp["resolved"],
+                         needs_review=bool(flags), check_flags=sorted(set(flags)), session_plan=cs_synth.plan_meta(sp, js.get("coref")),
+                         fact_conflicts_excluded=row_conflicts(row) or None)
     u = plan.get("unit")
     if u:  # 讲解类：用的是哪条讲解资料、哪几条事实、出处网址
         rec["source"].update(topic="culture", fact_fields=[f["seq"] for f in u["facts"]],
@@ -420,9 +507,11 @@ def preview(args, log=print):
                           topics={TOPICS[t]["name"]: {LABELS.get(k, k): x for k, x in topic_facts(r, t).items()} for t in have if t != "mixed"})
             break
     lim = int(getattr(args, "limit", 0) or 0)
+    conflicts = [r for r in rows if row_conflicts(r)]
     names = dict({k: x["name"] for k, x in TOPICS.items()}, mixed=MIXED["name"], culture="景点讲解（讲解资料条数）")
     return dict(mode="expand", scenics=len(rows), by_topic=[dict(topic=t, name=names[t], scenics=per[t]) for t in topics],
-                pairs=pairs, variants=v, total=total, this_run=min(total, lim) if lim else total, sample=sample, sources=ctx["stats"])
+                pairs=pairs, variants=v, total=total, this_run=min(total, lim) if lim else total, sample=sample, sources=ctx["stats"],
+                conflict_scenics=len(conflicts), conflict_examples=[dict(scenic_id=r["_id"], scenic_name=r["_name"], **c) for r in conflicts[:20] for c in row_conflicts(r)][:20])
 
 
 def _done_keys(out):
@@ -455,9 +544,15 @@ def run(args, cfg, log=print, should_stop=lambda: False, progress=lambda done, t
     rnd0 = _seeded(args.seed, "order")
     rows = rows[:]
     rnd0.shuffle(rows)  # 限量时也能分散到各个景区
-    avail = [(r, available(r, topics, ctx)) for r in rows]
+    avail = []
+    for r in rows:  # 每个景区的主题顺序也打乱，避免前面全是同一类
+        have = available(r, topics, ctx)
+        _seeded(args.seed, "topics", r["_id"]).shuffle(have)
+        avail.append((r, have))
     # 先每个（景区, 主题）各出第 1 版，再出第 2 版……：随时停下，覆盖面都是最广的
-    plan_keys = [(r, t, v) for v in range(1, variants + 1) for r, have in avail for t in have]
+    # 轮流排：第 1 版里先每个景区各出 1 条，再各出第 2 条……（校验报告 P2-2：前几百条不会挤在两三个景区）
+    width = max((len(h) for _, h in avail), default=0)
+    plan_keys = [(r, have[k], v) for v in range(1, variants + 1) for k in range(width) for r, have in avail if k < len(have)]
     todo = [(r, t, v) for r, t, v in plan_keys if f"{r['_id']}|{t}|{v}" not in done]
     n_left = len(todo)
     if args.limit:
@@ -608,6 +703,13 @@ def run(args, cfg, log=print, should_stop=lambda: False, progress=lambda done, t
     return stats
 
 
+def conflict_report(args, log=print):
+    """景区表里自相矛盾的字段清单（给数据负责人修正源表）：[{scenic_id, scenic_name, city, field, issue, detail}]。"""
+    rows = load_scenics(args, log)
+    return [dict(scenic_id=r["_id"], scenic_name=r["_name"], city=r["_city"], field=c["field"], field_name=LABELS.get(c["field"], c["field"]),
+                 issue=c["issue"], detail=c["detail"]) for r in rows for c in row_conflicts(r)]
+
+
 def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--data-dir", default=str(cs_synth.DATA_DIR), help="资料目录（客服对话包、讲解包、RedAttractionQA、对话数据集提取），默认仓库里的 data/")
@@ -622,9 +724,18 @@ def main():
     ap.add_argument("--workers", type=int, default=3, help="并发请求数，默认 3")
     ap.add_argument("--mysql", action="store_true", help=f"同时写进 MySQL：{cs_synth.SESSION_TABLE} / {cs_synth.TURN_TABLE}")
     ap.add_argument("--preview", action="store_true", help="只预估能生成多少，不调模型")
+    ap.add_argument("--fact-check", default="", help="只输出景区表自相矛盾字段的清单 CSV（票价倒挂、地址与简介不一致），生成时这些字段不用")
     ap.add_argument("--profile", default=str(cs_synth.HERE / ".pw-profile-service"), help="读 AI 设置的浏览器目录（数据库里有设置时以数据库为准）")
     ap.add_argument("--seed", type=int, default=7)
     args = ap.parse_args()
+    if args.fact_check:
+        rows = conflict_report(args)
+        with open(args.fact_check, "w", encoding="utf-8-sig", newline="") as f:
+            w = csv.DictWriter(f, fieldnames=["scenic_id", "scenic_name", "city", "field", "field_name", "issue", "detail"])
+            w.writeheader()
+            w.writerows(rows)
+        print(f"{len(rows)} 处矛盾（{len({r['scenic_id'] for r in rows})} 个景区）→ {args.fact_check}")
+        return 0
     if args.preview:
         import sys
         print(json.dumps(preview(args, log=lambda m: print(m, file=sys.stderr)), ensure_ascii=False, indent=2))

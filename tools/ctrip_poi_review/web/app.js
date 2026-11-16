@@ -695,7 +695,10 @@
               <${Button} size="small" type="danger" theme="solid" icon=${html`<${Ic.IconDelete} />`} disabled=${!sel.size}
                 onClick=${() => doDelete([...sel], exitSel)}>删除${sel.size ? `（${fmt(sel.size)}）` : ''}<//>
             </span>`
-            : html`<${Button} icon=${html`<${Ic.IconCheckboxTick} />`} onClick=${() => setSelMode(true)} disabled=${!list.items.length}>选择<//>`}
+            : html`<${Button} icon=${html`<${Ic.IconCheckboxTick} />`} onClick=${() => setSelMode(true)} disabled=${!list.items.length}>选择<//>
+              <${Tooltip} content="交付文件：手册字段（不含分区字段 travel_date），每个 POI 取 3～8 张、不足 3 张的 POI 不要；按当前城市筛选">
+                <a className="semi-button semi-button-tertiary semi-button-light" style=${{ padding: '0 12px', height: 32, display: 'inline-flex', alignItems: 'center', gap: 6, borderRadius: 6, textDecoration: 'none' }}
+                  href=${'/api/images/delivery?fmt=csv' + (f.city ? '&city=' + encodeURIComponent(f.city) : '')}><${Ic.IconDownload} />交付导出<//a><//>`}
           <${Select} value=${f.city} onChange=${(v) => set({ city: v || '', scenic_id: '', poi_id: '' })} optionList=${cityOpts} style=${{ width: 140 }} />
           <${Select} value=${f.scenic_id || undefined} placeholder="全部景区（可搜索）" optionList=${scenicOpts} style=${{ width: 240 }} filter remote
             onSearch=${onScenicSearch} showClear onChange=${(v) => set({ scenic_id: v || '', poi_id: '' })} emptyContent="没有有图片的景区" />
@@ -721,7 +724,8 @@
   // ------------------------------------------------------------ 客服数据（大模型改写原始客服问答 → 在线客服会话）
   const CS_INTENTS = ['门票', '门票价格', '预约', '预约购票', '开放时间', '交通', '游玩建议', '退改', '退改规则', '住宿', '餐饮', '其他'];
   const CS_TOPICS = [['ticket', '门票价格'], ['booking', '预约购票'], ['hours', '开放时间'], ['traffic', '交通停车'], ['plan', '游玩建议'],
-    ['contact', '咨询投诉电话'], ['guide', '讲解服务'], ['intro', '景区介绍'], ['mixed', '综合咨询（随机 2～3 个主题）'],
+    ['contact', '咨询投诉电话'], ['guide', '讲解服务'], ['intro', '景区介绍'], ['policy', '票务政策（退改 / 实名 / 包含范围）'],
+    ['transact', '订单办理（退票 / 改期 / 查订单，带订单号）'], ['mixed', '综合咨询（随机 2～3 个主题）'],
     ['culture', '景点讲解 / 历史文化（讲解包、RedAttractionQA）']].map(([value, label]) => ({ value, label }));
   const GD_KB = [['guide', '景区讲解包'], ['redqa', 'RedAttractionQA'], ['scenic', '景区表基础资料']].map(([value, label]) => ({ value, label }));
   const GD_MODE = { guide_eval: '讲解内容评价', guide_narr: '个性化讲解' };
@@ -777,15 +781,18 @@
           ${rec && (rec.eval_result || rec.reference_narration) ? html`
             ${rec.source.needs_review && html`<${Banner} type="warning" closeIcon=${null} style=${{ marginBottom: 8 }} description=${'需复核：' + rec.source.check_flags.join('；')} />`}
             ${rec.eval_result ? html`
-              <div className="muted sm" style=${{ margin: '0 0 4px 2px' }}>guide_clip_txt（讲解员口述，模型生成）</div>
-              <div className="gd-txt">${rec.guide_clip_txt}</div>
-              <div className="kv sm" style=${{ marginTop: 10 }}><span>结论</span><div><${Tag} size="small" color=${{ 合格: 'green', 需改进: 'amber', 不合格: 'red' }[rec.eval_result.verdict]}>${rec.eval_result.verdict}<//>
-                总分 <b>${rec.eval_result.scores.总分}</b> · 准确 ${rec.eval_result.scores.准确性} · 完整 ${rec.eval_result.scores.完整性} · 表达 ${rec.eval_result.scores.表达}</div>
-                ${[...rec.eval_result.errors.map((e) => [e.type, `「${e.guide_said}」→ 应为：${e.kb_value}`]), ...rec.eval_result.unsupported.map((e) => ['无依据', `「${e.guide_said}」（${e.topic || '知识库没有'}）`]),
-                   ...rec.eval_result.exaggerations.map((e) => ['夸大', `「${e.guide_said}」`])].map(([k, v], i) => html`<span key=${'e' + i} style=${{ color: '#c62828' }}>${k}</span><div key=${'f' + i}>${v}</div>`)}
-                <span>讲对</span><div>${rec.eval_result.covered_facts.join('、') || '—'}</div><span>漏讲</span><div>${rec.eval_result.missed_facts.join('、') || '—'}</div>
-                <span>口头禅</span><div>${rec.eval_result.disfluency.filler_count} 处 ${rec.eval_result.disfluency.examples.join(' ')}</div>
-                <span>建议</span><div>${rec.eval_result.suggestions.join('；') || '—'}</div></div>`
+              <div className="muted sm" style=${{ margin: '0 0 4px 2px' }}>guide_clip · ${rec.guide_clip.source} · ${rec.guide_clip.duration_sec} 秒 · 置信度 ${rec.guide_clip.asr_confidence} · 采集 ${rec.guide_clip.collect_time}（合成文字）</div>
+              <div className="gd-txt">${rec.guide_clip.asr_text}</div>
+              <div className="muted sm" style=${{ margin: '10px 0 4px 2px' }}>以下为标准答案（eval_result），交付时在溯源 sidecar 里，不给标注员</div>
+              <div className="kv sm"><span>结论</span><div><${Tag} size="small" color=${{ 合格: 'green', 需改进: 'amber', 不合格: 'red', 拒答: 'grey' }[rec.eval_result.verdict]}>${rec.eval_result.verdict}<//>
+                ${rec.eval_result.scores ? html` 总分 <b>${rec.eval_result.scores.总分}</b> · 准确 ${rec.eval_result.scores.准确性} · 合规 ${rec.eval_result.scores.合规性} · 逻辑 ${rec.eval_result.scores.逻辑性} · 完整 ${rec.eval_result.scores.完整性} · 表达 ${rec.eval_result.scores.表达}`
+                  : html` ${(rec.eval_result.refusal || {}).reason || ''}`}</div>
+                <span>类别</span><div>${rec.source.category || '—'}</div>
+                ${(rec.eval_result.issues || []).map((e, i) => html`<span key=${'e' + i} style=${{ color: '#c62828' }}>${e.category} · ${e.type}</span>
+                  <div key=${'f' + i}>「${e.guide_said}」${e.guide_said_2 ? `／「${e.guide_said_2}」` : ''}${e.kb_value ? ` → ${e.kb_value}` : ''}（${e.severity}）</div>`)}
+                <span>讲对</span><div>${(rec.eval_result.covered_facts || []).join('、') || '—'}</div><span>漏讲</span><div>${(rec.eval_result.missed_facts || []).join('、') || '—'}</div>
+                <span>语气词</span><div>${rec.eval_result.disfluency.filler_count} 处 · 每 100 字 ${rec.eval_result.disfluency.per_100_chars}</div>
+                <span>建议</span><div>${(rec.eval_result.suggestions || []).join('；') || '—'}</div></div>`
             : html`
               <div className="muted sm" style=${{ margin: '0 0 4px 2px' }}>reference_narration · ${rec.reference_narration.char_count} 字 / 上限 ${rec.task_params.字数上限} · ${rec.reference_narration.style || ''}</div>
               <div className="gd-txt">${rec.reference_narration.text}</div>
@@ -857,7 +864,7 @@
 
   /** 从 MySQL 两张表按条件导出（流式下载，百万条也行） */
   function CsExportDb({ cities, bt }) {
-    const [f, setF] = useState({ ds: 'cs', method: '', city: '', scenic: '', review: '', verdict: '', range: null, fmt: 'jsonl', limit: 0 });
+    const [f, setF] = useState({ ds: 'cs', method: '', city: '', scenic: '', review: '', verdict: '', range: null, fmt: 'l1_jsonl', limit: 0 });
     const gd = f.ds !== 'cs';
     const [cnt, setCnt] = useState(null);
     const [busy, setBusy] = useState(false);
@@ -868,9 +875,10 @@
       return Object.entries(q).filter(([, v]) => v !== '' && v != null && v !== 0).map(([k, v]) => `${k}=${encodeURIComponent(v)}`).join('&');
     };
     const count = async () => { setBusy(true); try { setCnt(await api((gd ? '/api/gd/export/count?' : '/api/cs/export/count?') + qs())); } catch (e) { Toast.error(e.message); } setBusy(false); };
-    const formats = gd ? { jsonl: '样本 JSONL（样例结构 + 标准答案 + source）', json: '样本 JSON 数组', csv: '表 CSV（含 record_json）' }
+    const formats = gd ? { l1_jsonl: '标注交付 L1 JSONL（不含标准答案，给标注员）', prov_jsonl: '溯源 sidecar JSONL（标准答案 + source，仅数据侧 / QC）',
+      jsonl: '完整 JSONL（L1 + 答案 + source，内部用）', json: '完整 JSON 数组（内部用）', csv: '表 CSV（含 record_json）' }
       : (bt && bt.formats) || { jsonl: '会话 JSONL', json: '会话 JSON 数组', csv_sessions: '会话表 CSV', csv_turns: '轮次表 CSV' };
-    const setDs = (v) => { setF((o) => ({ ...o, ds: v, fmt: 'jsonl' })); setCnt(null); };
+    const setDs = (v) => { setF((o) => ({ ...o, ds: v, fmt: 'l1_jsonl' })); setCnt(null); };
     return html`<div className="form cs-exp">
       <${Field} label="数据"><${Select} value=${f.ds} onChange=${setDs} style=${{ width: '100%' }}
         optionList=${[{ value: 'cs', label: '智能客服对话' }, { value: 'eval', label: '讲解内容评价' }, { value: 'narr', label: '个性化讲解' }]} /><//>
@@ -891,7 +899,7 @@
           href=${(gd ? '/api/gd/export?' : '/api/cs/export?') + qs({ fmt: f.fmt, limit: f.limit || '' })}><${Ic.IconDownload} />导出<//a>
         <span className="muted sm">${cnt ? (gd ? html`<b>${fmt(cnt.rows)}</b> 条` : html`<b>${fmt(cnt.sessions)}</b> 个会话 · ${fmt(cnt.turns)} 轮`) : ''}</span>
       </div>
-      <div className="muted sm" style=${{ gridColumn: '1 / -1' }}>来源：${gd ? (f.ds === 'eval' ? 'dwd_guide_eval_sample_di' : 'dwd_guide_narration_sample_di') : bt ? `${bt.session_table} / ${bt.turn_table}` : 'MySQL'}。边查边下载，数据量大时浏览器会持续下载一会儿。</div>
+      <div className="muted sm" style=${{ gridColumn: '1 / -1' }}>交付给标注员用「标注交付 L1」，同一批再导一份「溯源 sidecar」留给数据侧 / QC，两边用同一个 ID 关联。来源：${gd ? (f.ds === 'eval' ? 'dwd_guide_eval_sample_di' : 'dwd_guide_narration_sample_di') : bt ? `${bt.session_table} / ${bt.turn_table}` : 'MySQL'}。边查边下载，数据量大时浏览器会持续下载一会儿。</div>
     </div>`;
   }
 
@@ -968,7 +976,7 @@
               <${Checkbox} checked=${p.only_approved} onChange=${(e) => set('only_approved')(e.target.checked)}>只要已审核<//>
             <//>
             ${guide ? html`<${Field} label="知识来源"><${Select} value=${p.kb} onChange=${set('kb')} multiple placeholder="全部来源（讲解包、RedAttractionQA、景区表）" style=${{ flex: 1 }} optionList=${GD_KB} showClear /><//>`
-              : html`<${Field} label="主题"><${Select} value=${p.topics} onChange=${set('topics')} multiple maxTagCount=${3} placeholder="全部主题（9 类）" style=${{ flex: 1 }} optionList=${CS_TOPICS} showClear /><//>`}
+              : html`<${Field} label="主题"><${Select} value=${p.topics} onChange=${set('topics')} multiple maxTagCount=${3} placeholder="全部主题（11 类）" style=${{ flex: 1 }} optionList=${CS_TOPICS} showClear /><//>`}
             <${Field} label="数量">
               <span className="lbl">${guide ? (p.mode === 'guide_eval' ? '每条知识（不同问题组合）' : '每条知识（不同游客）') : '每个景区每个主题'}</span><${InputNumber} hideButtons value=${p.variants} onChange=${set('variants')} min=${1} max=${guide ? 50 : 20} style=${{ width: 80 }} suffix="版" />
               <span className="lbl">本次最多</span><${InputNumber} hideButtons value=${p.limit} onChange=${set('limit')} min=${0} style=${{ width: 120 }} suffix="条" />
@@ -1081,7 +1089,9 @@
               <div className="t"><b>${b.name}</b><${Tag} size="small" color=${{ expand: 'violet', guide_eval: 'orange', guide_narr: 'green' }[b.mode] || 'blue'}>${{ expand: '扩展', guide_eval: '讲解评价', guide_narr: '个性化讲解' }[b.mode] || '改写'}<//>
                 <span className="muted">${b.mtime} · 会话 ${fmt(b.files['dialogs.jsonl'] || 0)} · 需复核 ${b.review == null ? '—' : fmt(b.review)}${b.files['rejected.jsonl'] ? ` · 不合格/失败 ${b.files['rejected.jsonl']}` : ''}</span></div>
               <div className="links">
-                <a href=${`/api/cs/download?batch=${b.name}&file=dialogs.jsonl`}>会话 JSONL</a>
+                <a href=${`/api/cs/download?batch=${b.name}&file=dialogs_l1.jsonl`}>标注交付 L1</a>
+                <a href=${`/api/cs/download?batch=${b.name}&file=provenance.jsonl`}>溯源 sidecar</a>
+                <a href=${`/api/cs/download?batch=${b.name}&file=dialogs.jsonl`}>完整 JSONL</a>
                 <a href=${`/api/cs/download?batch=${b.name}&file=dialogs.json`}>会话 JSON</a>
                 <a href=${`/api/cs/download?batch=${b.name}&file=dialogs.jsonl&only=ok`}>只要合格</a>
                 <a href=${`/api/cs/download?batch=${b.name}&file=dialogs.jsonl&only=review`}>只要需复核</a>

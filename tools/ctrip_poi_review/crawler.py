@@ -72,8 +72,8 @@ def rows_from_items(items, total, scenic, poi, collect_time, image_total=None):
 # POI 主页上的图片总数（如「全部图片(105685)」「105685张图片」）。真实页面结构以 dump_page.py 抓到的为准，必要时在这里加规则
 JS_IMAGE_TOTAL = """() => {
   const t = (document.body && document.body.innerText || '').replace(/\\s+/g, ' ');
-  const pats = [/全部图片\\s*[（(]?\\s*(\\d[\\d,]*)/, /(\\d[\\d,]*)\\s*张图片/, /图片\\s*[（(]\\s*(\\d[\\d,]*)\\s*[)）]/,
-                /相册\\s*[（(]?\\s*(\\d[\\d,]*)/, /查看全部\\s*(\\d[\\d,]*)\\s*张/];
+  // 只认 POI 级别的写法；「N张图片」「查看全部N张」这类也会出现在单条点评里，会把点评的图片数当成 POI 总数（校验报告 T1 P1-1），不用
+  const pats = [/全部图片\\s*[（(]\\s*(\\d[\\d,]*)\\s*[)）]/, /相册\\s*[（(]\\s*(\\d[\\d,]*)\\s*[)）]/];
   for (const p of pats) { const m = t.match(p); if (m) return parseInt(m[1].replace(/,/g, ''), 10); }
   return null;
 }"""
@@ -193,7 +193,16 @@ class CommentImageCrawler:
         return None
 
     async def crawl(self, target, should_stop=lambda: False):
-        """target = {scenic: {...}, poi: {poiId, poiName, poiUri, ...}}；返回统计。"""
+        """target = {scenic: {...}, poi: {poiId, poiName, poiUri, ...}}；返回统计。采完把 total_count 校正为不小于已采张数。"""
+        try:
+            return await self._crawl(target, should_stop)
+        finally:
+            try:
+                db.fix_total_count(int(target["poi"]["poiId"]))
+            except Exception:  # noqa: BLE001  校正失败不影响采集
+                pass
+
+    async def _crawl(self, target, should_stop=lambda: False):
         scenic, poi = target["scenic"], target["poi"]
         sid, pid = scenic["id"], int(poi["poiId"])
         page = self.page

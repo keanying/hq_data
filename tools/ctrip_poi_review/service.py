@@ -510,7 +510,7 @@ def create_app(args):
         return dict(n=it["n"], time=it["time"], kind=it["kind"], variant=it["variant"], error=it.get("error"),
                     session_id=rec.get("session_id") or rec.get("eval_task_id") or rec.get("request_id"),
                     scenic_id=rec.get("scenic_id") or src.get("scenic_id"), scenic_name=rec.get("scenic_name") or src.get("scenic_name") or src.get("attraction_name"),
-                    source_id=src["dialogue_id"], summary=(f"{rec['eval_result']['verdict']} · {rec['eval_result']['scores']['总分']} 分" if rec.get("eval_result")
+                    source_id=src["dialogue_id"], summary=(f"{rec['eval_result']['verdict']}" + (f" · {rec['eval_result']['scores']['总分']} 分" if rec['eval_result'].get('scores') else "") if rec.get("eval_result")
                                                           else f"{rec['visitor_profile']['出游客群名称']} · {rec['reference_narration']['char_count']} 字" if rec.get("reference_narration") else None),
                     attraction_name=src.get("attraction_name"), intent=src.get("intent"), turns=len(rec.get("turns") or []),
                     needs_review=bool((rec.get("source") or {}).get("needs_review")), flags=(rec.get("source") or {}).get("check_flags") or [],
@@ -536,6 +536,47 @@ def create_app(args):
             raise HTTPException(404, "没有这条（只保留最近 1000 条）")
         return it
 
+    @app.get("/api/images/delivery")
+    def images_delivery(fmt: str = "csv", city: str = "", province: str = "", scenic: str = "", per_poi_min: int = 3, per_poi_max: int = 8, max_pois: int = 0):
+        """图片交付文件（手册字段，不含分区字段 travel_date）：每个 POI 取 per_poi_min～per_poi_max 张，不足的 POI 不要，按 POI 分组输出。"""
+        import csv as _csv
+        import io
+        f = dict(city=city, province=province, scenic=scenic, max_pois=max_pois)
+        lo, hi = max(1, per_poi_min), max(per_poi_min, per_poi_max)
+
+        def gen():
+            if fmt == "jsonl":
+                for group in db.images_delivery(f, lo, hi):
+                    yield "".join(json.dumps({k: (str(v) if hasattr(v, "isoformat") else v) for k, v in r.items()}, ensure_ascii=False, default=str) + "\n"
+                                  for r in group)
+                return
+            buf = io.StringIO()
+            w = _csv.writer(buf)
+            w.writerow(db.DELIVERY_IMAGE_COLS)
+            yield "\ufeff" + buf.getvalue()
+            for group in db.images_delivery(f, lo, hi):
+                buf = io.StringIO()
+                w = _csv.writer(buf)
+                for r in group:
+                    w.writerow([r[c] for c in db.DELIVERY_IMAGE_COLS])
+                yield buf.getvalue()
+        ext = "jsonl" if fmt == "jsonl" else "csv"
+        return StreamingResponse(gen(), media_type="text/csv; charset=utf-8" if ext == "csv" else "application/json; charset=utf-8",
+                                 headers={"Content-Disposition": f"attachment; filename=poi_image_delivery_{time.strftime('%Y%m%d_%H%M%S')}.{ext}"})
+
+    @app.get("/api/cs/fact_conflicts.csv")
+    def cs_fact_conflicts(scenic_city: str = "", scenic: str = ""):
+        """景区表自相矛盾字段清单（票价倒挂、地址与简介不一致），生成时这些字段不用；给数据负责人修正源表。"""
+        import csv as _csv
+        import io
+        rows = cs_expand.conflict_report(SimpleNamespace(scenic=scenic, scenic_city=scenic_city, grade="", only_approved=False), log=lambda *_: None)
+        buf = io.StringIO()
+        w = _csv.DictWriter(buf, fieldnames=["scenic_id", "scenic_name", "city", "field", "field_name", "issue", "detail"])
+        w.writeheader()
+        w.writerows(rows)
+        return Response("\ufeff" + buf.getvalue(), media_type="text/csv; charset=utf-8",
+                        headers={"Content-Disposition": f"attachment; filename=scenic_fact_conflicts_{time.strftime('%Y%m%d')}.csv"})
+
     @app.get("/api/cs/batches")
     def cs_batches():
         return dict(items=cs_synth.batches(), session_table=cs_synth.SESSION_TABLE, turn_table=cs_synth.TURN_TABLE, formats=cs_synth.EXPORT_FORMATS,
@@ -555,9 +596,9 @@ def create_app(args):
     def gd_export(task: str = "eval", fmt: str = "jsonl", scenic: str = "", city: str = "", review: str = "", verdict: str = "", limit: int = 0):
         """讲解评价 / 个性化讲解样本：从 MySQL 流式导出（JSONL / JSON 数组 / CSV）。"""
         t = "narr" if task == "narr" else "eval"
-        fmt = fmt if fmt in ("jsonl", "json", "csv") else "jsonl"
+        fmt = fmt if fmt in ("l1_jsonl", "prov_jsonl", "jsonl", "json", "csv") else "l1_jsonl"
         f = dict(scenic=scenic, city=city, review=review, verdict=verdict, limit=limit)
-        name = f"guide_{t}_{time.strftime('%Y%m%d_%H%M%S')}.{fmt}"
+        name = f"guide_{t}_{fmt.replace('_jsonl', '')}_{time.strftime('%Y%m%d_%H%M%S')}.{'jsonl' if fmt.endswith('jsonl') else fmt}"
         mt = "text/csv; charset=utf-8" if fmt == "csv" else "application/json; charset=utf-8"
         return StreamingResponse(guide_synth.export_iter(t, f, fmt), media_type=mt, headers={"Content-Disposition": f"attachment; filename={name}"})
 
@@ -570,7 +611,7 @@ def create_app(args):
             raise HTTPException(400, f"{type(e).__name__}: {e}") from e
 
     @app.get("/api/cs/export")
-    def cs_export(fmt: str = "jsonl", method: str = "", scenic: str = "", city: str = "", review: str = "", date_from: str = "", date_to: str = "",
+    def cs_export(fmt: str = "l1_jsonl", method: str = "", scenic: str = "", city: str = "", review: str = "", date_from: str = "", date_to: str = "",
                   limit: int = 0):
         """从 MySQL 两张表流式导出（会话 JSONL / JSON 数组 / 会话 CSV / 轮次 CSV），百万条也不占内存。"""
         if fmt not in cs_synth.EXPORT_FORMATS:
@@ -580,7 +621,7 @@ def create_app(args):
         except Exception as e:  # noqa: BLE001
             raise HTTPException(400, str(e)) from e
         f = export_filters(locals())
-        ext = {"jsonl": "jsonl", "json": "json"}.get(fmt, "csv")
+        ext = {"jsonl": "jsonl", "json": "json", "l1_jsonl": "jsonl", "prov_jsonl": "jsonl"}.get(fmt, "csv")
         tag = {"llm_rewrite": "rewrite_", "llm_expand": "expand_"}.get(method, "") + {"ok": "ok_", "review": "review_"}.get(review, "")
         name = f"cs_mysql_{tag}{fmt}_{time.strftime('%Y%m%d_%H%M%S')}.{ext}"
         mt = "text/csv; charset=utf-8" if ext == "csv" else "application/json; charset=utf-8"
@@ -593,10 +634,19 @@ def create_app(args):
             d = cs_synth.batch_dir(batch)
         except FileNotFoundError as e:
             raise HTTPException(404, str(e)) from e
-        name = "dialogs.jsonl" if file == "dialogs.json" else file
+        name = "dialogs.jsonl" if file in ("dialogs.json", "dialogs_l1.jsonl", "provenance.jsonl") else file
         if name not in cs_synth.BATCH_FILES or not (d / name).exists():
             raise HTTPException(404, f"这个批次没有 {file}")
         mt = "text/csv; charset=utf-8" if name.endswith(".csv") else "application/json; charset=utf-8"
+        if file in ("dialogs_l1.jsonl", "provenance.jsonl"):  # 交付拆分：标注文件 L1 / 溯源 sidecar，从 dialogs.jsonl 现拆
+            part = 0 if file == "dialogs_l1.jsonl" else 1
+
+            def gen_split():
+                with (d / name).open(encoding="utf-8") as fh:
+                    for line in fh:
+                        if line.strip():
+                            yield json.dumps(cs_synth.split_delivery(json.loads(line))[part], ensure_ascii=False) + "\n"
+            return StreamingResponse(gen_split(), media_type=mt, headers={"Content-Disposition": f"attachment; filename={batch}_{file}"})
         if name == "dialogs.jsonl" and (only or file == "dialogs.json"):
             want = None if not only else f'"needs_review": {"true" if only == "review" else "false"}'
 
