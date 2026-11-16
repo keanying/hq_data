@@ -844,7 +844,7 @@
   }
 
   /** 可生成总量：每个数据集一张卡片（可生成 / 已生成 / 预计用时），版数一行设置，计算明细默认收起 */
-  function CsCapacity({ visible, onClose, dataDir, onApply }) {
+  function CsCapacity({ visible, onClose, dataDir, onStart, runs }) {
     const [v, setV] = useState({ rewrite_variants: 10, expand_variants: 7, eval_variants: 5, narr_variants: 5, workers: 32 });
     const [d, setD] = useState(null);
     const [busy, setBusy] = useState(false);
@@ -866,7 +866,22 @@
       <div className="l">已生成 ${gen == null ? '—' : fmt(gen)}</div>
       ${apply && html`<div className="a">${apply}</div>`}
     </div>`;
-    const go = (mode, n) => html`<a onClick=${() => onApply(mode, n)}>按此设置生成 →</a>`;
+    const MODE_N = { rewrite: '客服改写', expand: '客服扩展', guide_eval: '讲解内容评价', guide_narr: '个性化讲解' };
+    // 直接开始：本次最多 0（全部）、版数和并发取上面这一行；先确认一次
+    const startOne = (mode, n, total) => Modal.confirm({
+      title: `开始生成「${MODE_N[mode]}」？`, okText: '开始生成', cancelText: '取消',
+      content: `每单元 ${n} 版、全部（${fmt(total)} 条），${v.workers} 并发，约 ${eta(total)}。已生成过的会跳过，随时可以在页面上停止。`,
+      onOk: () => onStart([{ mode, variants: n }], v.workers) });
+    const go = (mode, n, total, label) => (runs && runs[mode]
+      ? html`<${Tag} color="green" size="small">${label ? label + ' ' : ''}运行中<//>`
+      : html`<${Button} size="small" theme="solid" icon=${html`<${Ic.IconPlay} />`} onClick=${() => startOne(mode, n, total)}>${label ? label + '：' : ''}开始生成<//>`);
+    const startAll = () => {
+      const list = [['rewrite', d.rewrite], ['expand', d.expand], ['guide_eval', d.guide_eval], ['guide_narr', d.guide_narr]].filter(([m, x]) => x && x.total && !(runs && runs[m]));
+      if (!list.length) { Toast.info('都在跑了'); return; }
+      Modal.confirm({ title: `同时开始 ${list.length} 个任务？`, okText: '全部开始', cancelText: '取消',
+        content: `${list.map(([m, x]) => `${MODE_N[m]} ${fmt(x.total)} 条`).join('、')}。每个任务 ${v.workers} 并发，同时跑总并发约 ${list.length * v.workers}，请确认方舟账号的限额够用（不够就把并发调小）。`,
+        onOk: () => onStart(list.map(([m, x]) => ({ mode: m, variants: x.variants })), v.workers) });
+    };
     const gen = (...xs) => (xs.every((x) => x == null) ? null : xs.reduce((a, x) => a + (x || 0), 0));
     return html`<${Modal} title="可生成总量" visible=${visible} onCancel=${onClose} footer=${null} width=${920}>
       <div className="cap-bar">
@@ -879,15 +894,16 @@
           ${card('智能客服对话', d.rewrite.total + d.expand.total,
             [`改写 ${fmt(d.rewrite.total)}（${fmt(d.rewrite.units)} 通 × ${d.rewrite.variants} 版）`, `扩展 ${fmt(d.expand.total)}（${fmt(d.expand.units)} 单元 × ${d.expand.variants} 版）`],
             gen(d.rewrite.generated, d.expand.generated),
-            onApply && html`<span><a onClick=${() => onApply('rewrite', d.rewrite.variants)}>改写：按此设置生成 →</a><br /><a onClick=${() => onApply('expand', d.expand.variants)}>扩展：按此设置生成 →</a></span>`)}
+            onStart && html`<span className="cap-go">${go('rewrite', d.rewrite.variants, d.rewrite.total, '改写')}${go('expand', d.expand.variants, d.expand.total, '扩展')}</span>`)}
           ${d.guide_eval && card('讲解内容评价', d.guide_eval.total, [`${fmt(d.guide_eval.units)} 条知识 × ${d.guide_eval.variants} 版`],
-            d.guide_eval.generated, onApply && go('guide_eval', d.guide_eval.variants))}
+            d.guide_eval.generated, onStart && go('guide_eval', d.guide_eval.variants, d.guide_eval.total))}
           ${d.guide_narr && card('个性化讲解', d.guide_narr.total, [`${fmt(d.guide_narr.units)} 条知识 × ${d.guide_narr.variants} 版`],
-            d.guide_narr.generated, onApply && go('guide_narr', d.guide_narr.variants))}
+            d.guide_narr.generated, onStart && go('guide_narr', d.guide_narr.variants, d.guide_narr.total))}
           ${card('合计', d.total + (d.guide_total || 0), ['三个数据集加起来'], gen(d.rewrite.generated, d.expand.generated,
-            d.guide_eval && d.guide_eval.generated, d.guide_narr && d.guide_narr.generated))}
+            d.guide_eval && d.guide_eval.generated, d.guide_narr && d.guide_narr.generated),
+            onStart && html`<${Button} size="small" type="primary" theme="solid" icon=${html`<${Ic.IconPlay} />`} onClick=${startAll}>全部开始<//>`)}
         </div>
-        <div className="muted sm" style=${{ marginTop: 10 }}>可生成 = 调模型的条数，实际入库要扣掉不合格的。改上面的版数后点「计算」。<a style=${{ marginLeft: 8 }} onClick=${() => setMore(!more)}>${more ? '收起明细' : '看计算明细'}</a></div>
+        <div className="muted sm" style=${{ marginTop: 10 }}>「开始生成」= 按上面的版数和并发、本次最多 0（全部）直接开跑，已生成过的跳过。可生成 = 调模型的条数，实际入库要扣掉不合格的。改版数后先点「计算」。<a style=${{ marginLeft: 8 }} onClick=${() => setMore(!more)}>${more ? '收起明细' : '看计算明细'}</a></div>
         ${more && html`<div className="cap-more">
           <div>客服改写：能对到已审核景区的真实客服对话 ${fmt(d.rewrite.units)} 通 × ${d.rewrite.variants} 版（随审核增加）</div>
           <div>客服扩展：${fmt(d.expand.scenics)} 个景区 × 有资料的主题 + 讲解资料 = ${fmt(d.expand.units)} 单元 × ${d.expand.variants} 版</div>
@@ -1031,12 +1047,20 @@
     const [capOpen, setCapOpen] = useState(false);
     const [expOpen, setExpOpen] = useState(false);
     // 「可生成总量」里点「按这个设置」：切到对应生成方式，每单元版数 = 那一行的版数，本次最多 = 0（全部），范围清空 = 全部
-    const applyCap = (m, variants) => {
-      setMode(m);
-      setPm((o) => ({ ...o, [m]: { ...o[m], variants, limit: 0, scenic: '', scenic_city: '', grade: [], topics: [], kb: [], only_approved: false,
-        ...(m === 'rewrite' ? { data_type: '真实', split: 'train', intent: [] } : {}) } }));
-      setCapOpen(false);
-      Toast.success(`已设置：每单元 ${variants} 版，本次最多 0（全部）。并发按方舟账号限额填，再点「开始生成」`);
+    // 「可生成总量」里点「开始生成」：这种方式的参数改成 版数 = 卡片上的、本次最多 0（全部）、并发 = 弹窗里的、范围清空，然后直接开跑
+    const startCap = async (list, workers) => {
+      const started = [];
+      for (const { mode: m, variants } of list) {
+        const np = { ...pm[m], variants, limit: 0, workers, scenic: '', scenic_city: '', grade: [], topics: [], kb: [], only_approved: false,
+          ...(m === 'rewrite' ? { data_type: '真实', split: 'train', intent: [] } : {}) };
+        setPm((o) => ({ ...o, [m]: np }));
+        const b = { ...np, mode: m, data_dir: dataDir, intent: (np.intent || []).join(','), topics: (np.topics || []).join(','), grade: (np.grade || []).join(','), kb: (np.kb || []).join(',') };
+        try { const j = await post('/api/cs/start', b); started.push(`${CS_MODE_NAME[m]} #${j.id}`); } catch (e) { Toast.error(`${CS_MODE_NAME[m]}：${e.message}`); }
+      }
+      if (started.length) {
+        Toast.success('已开始：' + started.join('、'));
+        setMode(list[0].mode); setJobId(0); setCapOpen(false); refresh();
+      }
     };
     const [jobId, setJobId] = useState(0);
     useEffect(() => { setJobId(0); }, [mode]);
@@ -1235,7 +1259,7 @@
             <//>
           <//>
       ${cleanOpen && html`<${DataClean} initial=${CS_DS[mode]} onClose=${() => setCleanOpen(false)} onDone=${() => { refresh(); refreshBt(); }} />`}
-      ${capOpen && html`<${CsCapacity} visible=${capOpen} onClose=${() => setCapOpen(false)} dataDir=${p.data_dir} onApply=${applyCap} />`}
+      ${capOpen && html`<${CsCapacity} visible=${capOpen} onClose=${() => setCapOpen(false)} dataDir=${p.data_dir} onStart=${startCap} runs=${runs} />`}
     </div>`;
   }
 
