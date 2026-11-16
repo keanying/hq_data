@@ -619,6 +619,34 @@
   const SCORE_OPTS = [{ value: '', label: '全部评分' }, { value: '5', label: '5 分' }, { value: '4', label: '4 分及以上' }, { value: '3', label: '3 分及以上' }];
   const SORT_OPTS = [{ value: 'collect', label: '最新采集' }, { value: 'publish', label: '最新点评' }, { value: 'score', label: '评分最高' }, { value: 'size', label: '尺寸最大' }];
 
+  /** 图片导出 CSV：按校验要求——手册字段（不含分区字段 travel_date），只含已审核景区当前保留 POI 的图片（景区 ↔ POI 强对应），真实数据不截断 */
+  function ImageExport({ city, onClose }) {
+    const [scope, setScope] = useState('all');
+    const [st, setSt] = useState(null);
+    const [busy, setBusy] = useState(false);
+    const q = scope === 'city' && city ? `city=${encodeURIComponent(city)}` : '';
+    useEffect(() => {
+      setBusy(true); setSt(null);
+      api('/api/images/delivery/stats' + (q ? '?' + q : '')).then(setSt).catch((e) => Toast.error(e.message)).finally(() => setBusy(false));
+    }, [q]);
+    return html`<${Modal} title="导出图片数据（CSV）" visible onCancel=${onClose} footer=${null} width=${560}>
+      <div className="form" style=${{ gridTemplateColumns: '84px minmax(0, 1fr)' }}>
+        <${Field} label="范围"><${RadioGroup} type="button" value=${scope} onChange=${(e) => setScope(e.target.value)}>
+          <${Radio} value="all">全部数据<//><${Radio} value="city" disabled=${!city}>${city ? `只要 ${city}` : '当前城市（未选）'}<//><//><//>
+        <${Field} label="量级">${busy || !st ? html`<${Spin} size="small" />` : html`<span><b>${fmt(st.scenics)}</b> 个景区 · <b>${fmt(st.pois)}</b> 个 POI · <b>${fmt(st.images)}</b> 张图片
+          ${st.dropped_unconfirmed ? html`<span className="muted sm">（${fmt(st.dropped_unconfirmed)} 张因景区未审核或 POI 已取消，不导出）</span>` : ''}</span>`}<//>
+        <${Field} label="字段"><span className="muted sm">${'record_id、poi_id、poi_name、scenic_id、scenic_name、image_url、lon、lat、province、city、district、total_count、review_id、image_id、width、height、collect_time、data_source、is_modified'}（手册字段，不含分区字段 travel_date）</span><//>
+        <${Field} label="规则"><span className="muted sm">只含已审核景区当前保留的 POI 的图片（景区 ↔ POI 强对应）；真实数据不截断；按景区、POI 排序；UTF-8 带 BOM，Excel 直接打开</span><//>
+      </div>
+      <div style=${{ display: 'flex', justifyContent: 'flex-end', gap: 10, marginTop: 18 }}>
+        <${Button} onClick=${onClose}>取消<//>
+        <a className="semi-button semi-button-primary semi-button-solid" style=${{ padding: '0 16px', height: 32, display: 'inline-flex', alignItems: 'center', gap: 6, borderRadius: 6, color: '#fff', textDecoration: 'none',
+            pointerEvents: st && st.images ? 'auto' : 'none', opacity: st && st.images ? 1 : 0.5 }}
+          href=${'/api/images/delivery?fmt=csv' + (q ? '&' + q : '')} onClick=${() => { Toast.info('开始下载，数据多时浏览器会持续下载一会儿'); onClose(); }}><${Ic.IconDownload} />下载 CSV<//a>
+      </div>
+    <//>`;
+  }
+
   function GalleryPage({ query }) {
     const init = () => ({ city: query.city || '', scenic_id: query.scenic_id || '', poi_id: query.poi_id || '', score_min: query.score_min || '',
       sort: query.sort || 'collect', q: query.q || '' });
@@ -632,6 +660,7 @@
     const list = useInfinite('/api/images', f, 60);
     const box = useRef(null); const sentinel = useRef(null);
     const [vi, setVi] = useState(-1);
+    const [expOpen, setExpOpen] = useState(false);
     const [selMode, setSelMode] = useState(false);
     const [sel, setSel] = useState(() => new Set());
     const lastPick = useRef(-1);
@@ -696,9 +725,7 @@
                 onClick=${() => doDelete([...sel], exitSel)}>删除${sel.size ? `（${fmt(sel.size)}）` : ''}<//>
             </span>`
             : html`<${Button} icon=${html`<${Ic.IconCheckboxTick} />`} onClick=${() => setSelMode(true)} disabled=${!list.items.length}>选择<//>
-              <${Tooltip} content="交付文件：手册字段（不含分区字段 travel_date），只含已审核景区当前保留的 POI 的图片（景区 ↔ POI 强对应），不截断；按当前城市筛选">
-                <a className="semi-button semi-button-tertiary semi-button-light" style=${{ padding: '0 12px', height: 32, display: 'inline-flex', alignItems: 'center', gap: 6, borderRadius: 6, textDecoration: 'none' }}
-                  href=${'/api/images/delivery?fmt=csv' + (f.city ? '&city=' + encodeURIComponent(f.city) : '')}><${Ic.IconDownload} />交付导出<//a><//>`}
+              <${Button} theme="solid" icon=${html`<${Ic.IconDownload} />`} onClick=${() => setExpOpen(true)}>导出 CSV<//>`}
           <${Select} value=${f.city} onChange=${(v) => set({ city: v || '', scenic_id: '', poi_id: '' })} optionList=${cityOpts} style=${{ width: 140 }} />
           <${Select} value=${f.scenic_id || undefined} placeholder="全部景区（可搜索）" optionList=${scenicOpts} style=${{ width: 240 }} filter remote
             onSearch=${onScenicSearch} showClear onChange=${(v) => set({ scenic_id: v || '', poi_id: '' })} emptyContent="没有有图片的景区" />
@@ -716,6 +743,7 @@
           <div ref=${sentinel} className="more">${listFoot(list, '张')}</div>
         </div>
       <//>
+      ${expOpen && html`<${ImageExport} city=${f.city} onClose=${() => setExpOpen(false)} />`}
       ${vi >= 0 && html`<${Viewer} list=${list} index=${vi} setIndex=${setVi} onClose=${() => setVi(-1)}
         onDelete=${(ids) => doDelete(ids, () => { if (vi >= list.items.length - 1) setVi(Math.max(-1, list.items.length - 2)); })} />`}
     </div>`;
