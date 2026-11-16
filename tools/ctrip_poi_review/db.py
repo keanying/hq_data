@@ -966,9 +966,22 @@ DELIVERY_IMAGE_COLS = ["record_id", "poi_id", "poi_name", "scenic_id", "scenic_n
                        "total_count", "review_id", "image_id", "width", "height", "collect_time", "data_source", "is_modified"]  # 手册字段，不含分区字段 travel_date
 
 
-def images_delivery(f, per_poi_min=3, per_poi_max=8):
-    """交付用图片（校验报告 T1）：手册字段（不带 travel_date），每个 POI 取 per_poi_min～per_poi_max 张（不足 min 张的 POI 不要），按 POI 打散。
-    交付表存在时从交付表读（坐标已按交付口径换算），否则从工具表读。逐 POI 产出行。"""
+def confirmed_pois():
+    """已审核景区（approval=1）当前保留的 POI：{scenic_id: {poiId}}。交付图片只认这里面的（景区 ↔ POI 强对应）。"""
+    out = {}
+    with cursor() as cur:
+        cur.execute(f"SELECT {C['id']} id, {POI_INFO} info FROM {SCENIC_TABLE} WHERE COALESCE({APPROVAL}, 0) = 1 AND {POI_INFO} IS NOT NULL")
+        for r in cur.fetchall():
+            ids = {str(p.get("poiId")) for p in _parse_info(r["info"])}
+            if ids:
+                out[str(r["id"])] = ids
+    return out
+
+
+def images_delivery(f, per_poi_min=1, per_poi_max=0, stats=None):
+    """交付用图片（真实采集数据，按校验报告 T1 调整）：手册字段（不带分区字段 travel_date）；只要「景区已审核且这个 POI 仍在它的保留列表里」的图片
+    （景区 ↔ POI 强对应，核对后被取消的 POI、未审核景区的图片都不出）；每个 POI 至少 per_poi_min 张，per_poi_max=0 表示不限。
+    交付表存在时从交付表读（坐标已按交付口径换算），否则从工具表读。逐 POI 产出一组行；stats 传 dict 时回填统计。"""
     src = ODS_TABLE if ods_exists() else IMAGE_TABLE
     where, params = ["record_id IS NOT NULL"], []
     for k, col in (("city", "city"), ("province", "province")):
@@ -978,25 +991,46 @@ def images_delivery(f, per_poi_min=3, per_poi_max=8):
     if f.get("scenic"):
         where.append("(scenic_id = %s OR scenic_name LIKE %s)")
         params += [f["scenic"], f"%{f['scenic']}%"]
+    ok = confirmed_pois()
+    st = stats if stats is not None else {}
+    st.update(images=0, pois=0, scenics=set(), dropped_unconfirmed=0, dropped_small=0)
     import pymysql
     conn = pymysql.connect(**{**DB, "cursorclass": pymysql.cursors.SSDictCursor})
     try:
         with conn.cursor() as cur:
-            cur.execute(f"SELECT {', '.join(DELIVERY_IMAGE_COLS)} FROM {src} WHERE {' AND '.join(where)} ORDER BY poi_id, review_id, image_id", params)
-            buf, cur_poi, pois = [], None, 0
+            cur.execute(f"SELECT {', '.join(DELIVERY_IMAGE_COLS)} FROM {src} WHERE {' AND '.join(where)} ORDER BY scenic_id, poi_id, review_id, image_id", params)
+            buf, key = [], None
+
+            def flush():
+                if not buf:
+                    return None
+                if len(buf) < per_poi_min:
+                    st["dropped_small"] += len(buf)
+                    return None
+                g = buf[:per_poi_max] if per_poi_max else list(buf)
+                st["images"] += len(g)
+                st["pois"] += 1
+                st["scenics"].add(g[0]["scenic_id"])
+                return g
             for r in cur:
-                if r["poi_id"] != cur_poi:
-                    if len(buf) >= per_poi_min:
-                        yield buf[:per_poi_max]
-                        pois += 1
-                        if f.get("max_pois") and pois >= int(f["max_pois"]):
+                if str(r["poi_id"]) not in ok.get(str(r["scenic_id"]), ()):
+                    st["dropped_unconfirmed"] += 1
+                    continue
+                k = (r["scenic_id"], r["poi_id"])
+                if k != key:
+                    g = flush()
+                    if g:
+                        yield g
+                        if f.get("max_pois") and st["pois"] >= int(f["max_pois"]):
                             return
-                    buf, cur_poi = [], r["poi_id"]
+                    buf, key = [], k
                 buf.append(r)
-            if len(buf) >= per_poi_min:
-                yield buf[:per_poi_max]
+            g = flush()
+            if g:
+                yield g
     finally:
         conn.close()
+        st["scenics"] = len(st["scenics"]) if isinstance(st["scenics"], set) else st["scenics"]
 
 
 def ods_sync(ids=None, batch=2000):

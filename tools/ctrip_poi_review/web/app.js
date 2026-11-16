@@ -696,7 +696,7 @@
                 onClick=${() => doDelete([...sel], exitSel)}>删除${sel.size ? `（${fmt(sel.size)}）` : ''}<//>
             </span>`
             : html`<${Button} icon=${html`<${Ic.IconCheckboxTick} />`} onClick=${() => setSelMode(true)} disabled=${!list.items.length}>选择<//>
-              <${Tooltip} content="交付文件：手册字段（不含分区字段 travel_date），每个 POI 取 3～8 张、不足 3 张的 POI 不要；按当前城市筛选">
+              <${Tooltip} content="交付文件：手册字段（不含分区字段 travel_date），只含已审核景区当前保留的 POI 的图片（景区 ↔ POI 强对应），不截断；按当前城市筛选">
                 <a className="semi-button semi-button-tertiary semi-button-light" style=${{ padding: '0 12px', height: 32, display: 'inline-flex', alignItems: 'center', gap: 6, borderRadius: 6, textDecoration: 'none' }}
                   href=${'/api/images/delivery?fmt=csv' + (f.city ? '&city=' + encodeURIComponent(f.city) : '')}><${Ic.IconDownload} />交付导出<//a><//>`}
           <${Select} value=${f.city} onChange=${(v) => set({ city: v || '', scenic_id: '', poi_id: '' })} optionList=${cityOpts} style=${{ width: 140 }} />

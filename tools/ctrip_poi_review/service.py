@@ -537,12 +537,13 @@ def create_app(args):
         return it
 
     @app.get("/api/images/delivery")
-    def images_delivery(fmt: str = "csv", city: str = "", province: str = "", scenic: str = "", per_poi_min: int = 3, per_poi_max: int = 8, max_pois: int = 0):
-        """图片交付文件（手册字段，不含分区字段 travel_date）：每个 POI 取 per_poi_min～per_poi_max 张，不足的 POI 不要，按 POI 分组输出。"""
+    def images_delivery(fmt: str = "csv", city: str = "", province: str = "", scenic: str = "", per_poi_min: int = 1, per_poi_max: int = 0, max_pois: int = 0):
+        """图片交付文件（手册字段，不含分区字段 travel_date）：只要已审核景区当前保留的 POI 的图片（景区 ↔ POI 强对应）；
+        每个 POI 至少 per_poi_min 张，per_poi_max=0 不限（真实数据不截断）。"""
         import csv as _csv
         import io
         f = dict(city=city, province=province, scenic=scenic, max_pois=max_pois)
-        lo, hi = max(1, per_poi_min), max(per_poi_min, per_poi_max)
+        lo, hi = max(1, per_poi_min), (max(per_poi_min, per_poi_max) if per_poi_max else 0)
 
         def gen():
             if fmt == "jsonl":
@@ -563,6 +564,14 @@ def create_app(args):
         ext = "jsonl" if fmt == "jsonl" else "csv"
         return StreamingResponse(gen(), media_type="text/csv; charset=utf-8" if ext == "csv" else "application/json; charset=utf-8",
                                  headers={"Content-Disposition": f"attachment; filename=poi_image_delivery_{time.strftime('%Y%m%d_%H%M%S')}.{ext}"})
+
+    @app.get("/api/images/delivery/stats")
+    def images_delivery_stats(city: str = "", province: str = "", scenic: str = "", per_poi_min: int = 1):
+        """交付导出前看量级：多少景区、多少 POI、多少张；因 POI 未确认（景区未审核 / POI 已取消）被排除的张数。"""
+        st = {}
+        for _ in db.images_delivery(dict(city=city, province=province, scenic=scenic), max(1, per_poi_min), 0, stats=st):
+            pass
+        return st
 
     @app.get("/api/cs/fact_conflicts.csv")
     def cs_fact_conflicts(scenic_city: str = "", scenic: str = ""):
