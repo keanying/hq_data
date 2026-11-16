@@ -215,6 +215,19 @@ def _jsonable(rows):
     return rows
 
 
+def _migrate_total_count():
+    """一次性：历史数据的 total_count 校正为不小于已采张数（记在 hq_app_settings，只做一次）。"""
+    try:
+        done = settings_load("migrations").get("total_count_v1")
+        if not done:
+            n = fix_total_count()
+            settings_save("migrations", {"total_count_v1": time.strftime("%Y-%m-%d %H:%M:%S")})
+            if n:
+                print(f"已校正 {n} 行图片的 total_count（不小于该 POI 已采张数）", flush=True)
+    except Exception as e:  # noqa: BLE001
+        print(f"total_count 校正跳过：{type(e).__name__}: {e}", flush=True)
+
+
 def init_db():
     with cursor() as cur:
         clause = charset_clause(cur)
@@ -244,6 +257,7 @@ def init_db():
     n = backfill_poi_info()
     if n:
         print(f"已给 {n} 个景区的 {POI_INFO} 补齐 addr/lat/lon", flush=True)
+    _migrate_total_count()
 
 
 def ensure_poi_info_column():
@@ -933,6 +947,90 @@ def _ensure_partitions(cur, dates):
         cur.execute(f"ALTER TABLE {ODS_TABLE} ADD PARTITION (PARTITION p{lt} VALUES LESS THAN ({lt}))")
         print(f"已给 {ODS_TABLE} 追加分区 p{lt} VALUES LESS THAN ({lt})", flush=True)
         top = lt
+
+
+def fix_total_count(poi_id=None):
+    """total_count 口径 = 该 POI 图片总量（手册 3.2.1）：页面上的图片总数拿不到或小于已采张数时，取已采张数。poi_id=None 修全部。"""
+    where = "WHERE poi_id = %s" if poi_id is not None else ""
+    params = [poi_id] if poi_id is not None else []
+    n = 0
+    with cursor() as cur:
+        for t in [IMAGE_TABLE] + ([ODS_TABLE] if ods_exists() else []):
+            cur.execute(f"""UPDATE {t} i JOIN (SELECT poi_id, COUNT(DISTINCT image_id) c FROM {IMAGE_TABLE} {where} GROUP BY poi_id) x ON x.poi_id = i.poi_id
+                            SET i.total_count = x.c WHERE i.total_count IS NULL OR i.total_count < x.c""", params)
+            n += cur.rowcount
+    return n
+
+
+DELIVERY_IMAGE_COLS = ["record_id", "poi_id", "poi_name", "scenic_id", "scenic_name", "image_url", "lon", "lat", "province", "city", "district",
+                       "total_count", "review_id", "image_id", "width", "height", "collect_time", "data_source", "is_modified"]  # 手册字段，不含分区字段 travel_date
+
+
+def confirmed_pois():
+    """已审核景区（approval=1）当前保留的 POI：{scenic_id: {poiId}}。交付图片只认这里面的（景区 ↔ POI 强对应）。"""
+    out = {}
+    with cursor() as cur:
+        cur.execute(f"SELECT {C['id']} id, {POI_INFO} info FROM {SCENIC_TABLE} WHERE COALESCE({APPROVAL}, 0) = 1 AND {POI_INFO} IS NOT NULL")
+        for r in cur.fetchall():
+            ids = {str(p.get("poiId")) for p in _parse_info(r["info"])}
+            if ids:
+                out[str(r["id"])] = ids
+    return out
+
+
+def images_delivery(f, per_poi_min=1, per_poi_max=0, stats=None):
+    """交付用图片（真实采集数据，按校验报告 T1 调整）：手册字段（不带分区字段 travel_date）；只要「景区已审核且这个 POI 仍在它的保留列表里」的图片
+    （景区 ↔ POI 强对应，核对后被取消的 POI、未审核景区的图片都不出）；每个 POI 至少 per_poi_min 张，per_poi_max=0 表示不限。
+    交付表存在时从交付表读（坐标已按交付口径换算），否则从工具表读。逐 POI 产出一组行；stats 传 dict 时回填统计。"""
+    src = ODS_TABLE if ods_exists() else IMAGE_TABLE
+    where, params = ["record_id IS NOT NULL"], []
+    for k, col in (("city", "city"), ("province", "province")):
+        if f.get(k):
+            where.append(f"{col} = %s")
+            params.append(f[k])
+    if f.get("scenic"):
+        where.append("(scenic_id = %s OR scenic_name LIKE %s)")
+        params += [f["scenic"], f"%{f['scenic']}%"]
+    ok = confirmed_pois()
+    st = stats if stats is not None else {}
+    st.update(images=0, pois=0, scenics=set(), dropped_unconfirmed=0, dropped_small=0)
+    import pymysql
+    conn = pymysql.connect(**{**DB, "cursorclass": pymysql.cursors.SSDictCursor})
+    try:
+        with conn.cursor() as cur:
+            cur.execute(f"SELECT {', '.join(DELIVERY_IMAGE_COLS)} FROM {src} WHERE {' AND '.join(where)} ORDER BY scenic_id, poi_id, review_id, image_id", params)
+            buf, key = [], None
+
+            def flush():
+                if not buf:
+                    return None
+                if len(buf) < per_poi_min:
+                    st["dropped_small"] += len(buf)
+                    return None
+                g = buf[:per_poi_max] if per_poi_max else list(buf)
+                st["images"] += len(g)
+                st["pois"] += 1
+                st["scenics"].add(g[0]["scenic_id"])
+                return g
+            for r in cur:
+                if str(r["poi_id"]) not in ok.get(str(r["scenic_id"]), ()):
+                    st["dropped_unconfirmed"] += 1
+                    continue
+                k = (r["scenic_id"], r["poi_id"])
+                if k != key:
+                    g = flush()
+                    if g:
+                        yield g
+                        if f.get("max_pois") and st["pois"] >= int(f["max_pois"]):
+                            return
+                    buf, key = [], k
+                buf.append(r)
+            g = flush()
+            if g:
+                yield g
+    finally:
+        conn.close()
+        st["scenics"] = len(st["scenics"]) if isinstance(st["scenics"], set) else st["scenics"]
 
 
 def ods_sync(ids=None, batch=2000):
