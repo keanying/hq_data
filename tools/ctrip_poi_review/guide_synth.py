@@ -844,12 +844,14 @@ def run(args, cfg, log=print, should_stop=lambda: False, progress=lambda done, t
                    if task == "eval" else f"字数上限 {plan['task_params']['字数上限']} · 风格 {plan['task_params']['讲解风格'] or '未指定'}")
         t0 = time.time()
         try:
-            text, elapsed, meta = ai_judge.call(cfg, prompt)
+            text, elapsed, meta, js = ai_judge.call_json(cfg, prompt)  # JSON 不合法会先修复，修不了重问一次
+        except ai_judge.JSONParseError as e:
+            ex_.update(response=e.raw, elapsed=round(time.time() - t0, 1), request_id=e.request_id)
+            return ("rejected", sid, u, v, plan, dict(error=str(e), raw=(e.raw or "")[:2000]), ex_)
         except ai_judge.AIError as e:
             return ("failed", sid, u, v, plan, dict(error=str(e), http_status=e.http_status, request_id=e.request_id), dict(ex_, elapsed=round(time.time() - t0, 1)))
         ex_.update(response=text, elapsed=elapsed, request_id=meta.get("request_id"))
         try:
-            js = ai_judge.parse(text)
             lim = plan["task_params"]["字数上限"] if task == "narr" else 0
             if lim and len(re.sub(r"\s", "", str(js.get("text") or ""))) > lim:  # 超字数：让模型只删不增地压缩一次
                 short_prompt = (f"把下面这段讲解词压缩到 {int(lim * 0.85)} 字以内（标点也算，硬上限 {lim} 字）。只删减、合并，不增加任何新内容、数字、说法，"

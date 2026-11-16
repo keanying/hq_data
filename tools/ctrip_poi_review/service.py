@@ -643,7 +643,13 @@ def create_app(args):
             raise HTTPException(409, "有任务在跑，先停止：" + "、".join(running or ["批次写入 MySQL"]))
         logs = []
         res = await asyncio.to_thread(data_clean.clear, ds, "review" if payload.get("scope") == "review" else "all", logs.append)
-        return dict(deleted=res, log=logs[-20:])
+        # 页面上的处理记录、日志、任务历史也一起删（这些在内存里，不删的话清理后列表还在）
+        modes = {busy[d] for d in ds}
+        gone = [jid for jid, j in list(svc.jobs.items()) if j.type == "cs_synth" and job_mode(j) in modes and j.status not in ("queued", "running")]
+        for jid in gone:
+            svc.jobs.pop(jid, None)
+        logs.append(f"已删除这些数据集的 {len(gone)} 个任务记录（处理记录 / 日志 / 任务历史）")
+        return dict(deleted=res, jobs_removed=len(gone), log=logs[-20:])
 
     @app.get("/api/cs/batches")
     def cs_batches():

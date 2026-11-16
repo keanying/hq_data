@@ -141,6 +141,10 @@ class AIError(RuntimeError):
         self.http_status, self.request_id, self.raw = http_status, request_id, raw
 
 
+class JSONParseError(AIError):
+    """模型返回了内容，但修复后仍不是合法 JSON（重问过也不行）。raw = 最后一次的原文。"""
+
+
 def _extract_text(js):
     if isinstance(js, dict):
         if isinstance(js.get("output_text"), str) and js["output_text"].strip():
@@ -257,12 +261,40 @@ QUOTE_NOTE = "（字符串里需要引号时用「」，不要用英文双引号
 
 
 def repair_json(s):
-    """修模型输出的不规范 JSON：字符串里没转义的英文双引号改成「」，裸换行改成 \\n。
-    判断依据：字符串里遇到 "，后面（跳过空白）不是 , } ] : 或结尾，就不是字符串结束，而是正文里的引号。"""
-    out, in_str, esc, open_q = [], False, False, True
+    """修模型输出的不规范 JSON：字符串里没转义的英文双引号改成「」，裸换行改成 \n。
+    跟踪结构判断一个 " 是不是字符串结束：键名后面要跟 :；值后面要跟 } ] 或「, 再接下一个键 / 值」。其余的 " 当正文里的引号。"""
+    out, stack, expect_key = [], [], False
+    in_str, is_key, esc, open_q = False, False, False, True
     i, n = 0, len(s)
+
+    def nxt(j):
+        while j < n and s[j] in " \t\r\n":
+            j += 1
+        return j
+
+    def ends(j, key):
+        """位置 j 之后（跳过空白）的内容说明前面那个引号是不是字符串结束。"""
+        j = nxt(j)
+        ch = s[j] if j < n else ""
+        if key:
+            return ch == ":"
+        if ch in ("", "}", "]"):
+            return True
+        if ch == ",":
+            k = nxt(j + 1)
+            return k >= n or s[k] in '"{[-0123456789tfn}]' or s[k:k + 2] == '\\"'
+        return False
+
     while i < n:
         c = s[i]
+        if not in_str and c == "\\" and i + 1 < n and s[i + 1] == '"':  # 字符串外面的 \"（模型把键名的引号也转义了）：去掉反斜杠
+            i += 1
+            continue
+        if in_str and not esc and c == "\\" and i + 1 < n and s[i + 1] == '"' and ends(i + 2, is_key):  # 用 \" 结束了字符串
+            out.append('"')
+            in_str = False
+            i += 2
+            continue
         if in_str:
             if esc:
                 esc = False
@@ -271,10 +303,7 @@ def repair_json(s):
                 esc = True
                 out.append(c)
             elif c == '"':
-                j = i + 1
-                while j < n and s[j] in " \t\r\n":
-                    j += 1
-                if j >= n or s[j] in ",}]:":
+                if ends(i + 1, is_key):
                     in_str = False
                     out.append(c)
                 else:
@@ -289,9 +318,35 @@ def repair_json(s):
         else:
             if c == '"':
                 in_str, open_q = True, True
+                is_key = bool(stack) and stack[-1] == "{" and expect_key
+            elif c in "{[":
+                stack.append(c)
+                expect_key = c == "{"
+            elif c in "}]":
+                if stack:
+                    stack.pop()
+                expect_key = False
+            elif c == ",":
+                expect_key = bool(stack) and stack[-1] == "{"
+            elif c == ":":
+                expect_key = False
             out.append(c)
         i += 1
     return "".join(out)
+
+
+def call_json(cfg, text, retries=1):
+    """调模型并解析 JSON；解析失败（修复后仍不行）就重新问一次。返回 (原文, 用时, meta, js)。"""
+    last = None
+    total = 0.0
+    for attempt in range(retries + 1):
+        raw, elapsed, meta = call(cfg, text)
+        total += elapsed or 0
+        try:
+            return raw, round(total, 1), dict(meta, attempts=attempt + 1), parse(raw)
+        except AIError as e:
+            last = JSONParseError(f"{e}（已重问 {retries} 次）" if retries else str(e), request_id=meta.get("request_id"), raw=raw)
+    raise last
 
 
 def _num(v, default=0.0):

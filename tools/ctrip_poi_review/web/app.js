@@ -989,12 +989,17 @@
     }, [sel.join(','), scope]);
     const total = cnt ? Object.values(cnt).reduce((a, x) => a + (typeof x === 'number' ? x : 0), 0) : 0;
     const go = () => Modal.confirm({
-      title: `确定删除 ${fmt(total)} 条？`, content: scope === 'all' ? '会删除 MySQL 里这些数据集生成的全部样本，并清空生成进度（下次从头生成）。删除后不能恢复。'
+      title: total ? `确定删除 ${fmt(total)} 条？` : '确定清空这些数据集的处理记录？', content: scope === 'all' ? '会删除 MySQL 里这些数据集生成的全部样本、页面上的处理记录和日志，并清空生成进度（下次从头生成）。删除后不能恢复。'
         : '会删除这些数据集里「需复核」的样本，并从进度里去掉，下次开始生成时会重新生成它们。删除后不能恢复。',
       okText: '删除', cancelText: '取消', okButtonProps: { type: 'danger', theme: 'solid' },
       onOk: async () => {
         setBusy(true);
-        try { const r = await post('/api/data/clear', { datasets: sel, scope }); Toast.success('已清理：' + Object.entries(r.deleted).map(([k, v]) => `${(CLEAN_SETS.find((x) => x[0] === k) || [k, k])[1]} ${fmt(v)} 条`).join('，')); onDone && onDone(); onClose(); }
+        try {
+          const r = await post('/api/data/clear', { datasets: sel, scope });
+          Toast.success('已清理：' + Object.entries(r.deleted).map(([k, v]) => `${(CLEAN_SETS.find((x) => x[0] === k) || [k, k])[1]} ${fmt(v)} 条`).join('，')
+            + (r.jobs_removed ? `；处理记录 / 日志 ${r.jobs_removed} 个任务` : ''));
+          onDone && onDone(); onClose();
+        }
         catch (e) { Toast.error(e.message); }
         setBusy(false);
       } });
@@ -1005,10 +1010,10 @@
         <${Field} label="范围"><${RadioGroup} type="button" value=${scope} onChange=${(e) => setScope(e.target.value)}>
           <${Radio} value="all">全部<//><${Radio} value="review">只清「需复核」的（会重新生成）<//><//><//>
       </div>
-      <div className="muted sm" style=${{ margin: '12px 0 0', lineHeight: 1.7 }}>只删本工具生成的样本（MySQL 表里的），不碰景区表、图片和其他数据。有任务在跑的数据集要先停止。</div>
+      <div className="muted sm" style=${{ margin: '12px 0 0', lineHeight: 1.7 }}>删除：MySQL 里本工具生成的样本 + 页面上这些数据集的处理记录、日志和任务历史 + 生成进度。不碰景区表、图片和其他数据。有任务在跑的数据集要先停止。</div>
       <div style=${{ display: 'flex', justifyContent: 'flex-end', gap: 10, marginTop: 16 }}>
         <${Button} onClick=${onClose}>取消<//>
-        <${Button} type="danger" theme="solid" icon=${html`<${Ic.IconDelete} />`} disabled=${!sel.length || !cnt || !total} loading=${busy} onClick=${go}>删除 ${cnt ? fmt(total) : '…'} 条<//>
+        <${Button} type="danger" theme="solid" icon=${html`<${Ic.IconDelete} />`} disabled=${!sel.length || !cnt} loading=${busy} onClick=${go}>${total ? `删除 ${fmt(total)} 条` : '清空记录'}<//>
       </div>
     <//>`;
   }
@@ -1258,7 +1263,7 @@
             </div><//>
             <//>
           <//>
-      ${cleanOpen && html`<${DataClean} initial=${CS_DS[mode]} onClose=${() => setCleanOpen(false)} onDone=${() => { refresh(); refreshBt(); }} />`}
+      ${cleanOpen && html`<${DataClean} initial=${CS_DS[mode]} onClose=${() => setCleanOpen(false)} onDone=${() => { setJobId(0); setCur(0); refresh(); refreshBt(); }} />`}
       ${capOpen && html`<${CsCapacity} visible=${capOpen} onClose=${() => setCapOpen(false)} dataDir=${p.data_dir} onStart=${startCap} runs=${runs} />`}
     </div>`;
   }
