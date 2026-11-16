@@ -22,6 +22,7 @@ import argparse
 import csv
 import hashlib
 import json
+import os
 import re
 import threading
 import time
@@ -800,10 +801,11 @@ def run(args, cfg, log=print, should_stop=lambda: False, progress=lambda done, t
     f_dlg, f_rej, f_done, f_kn = out / "dialogs.jsonl", out / "rejected.jsonl", out / "done_keys.txt", out / "knowledge_extract.jsonl"
     f_map = out / "mapping.csv"
     have_kn = {json.loads(x)["unit_id"] for x in f_kn.read_text(encoding="utf-8").splitlines() if x.strip()} if f_kn.exists() else set()
+    files = getattr(args, "files", True) or not args.mysql  # 只写库模式（工作台默认）：不写 dialogs / mapping / knowledge_extract 文件
     new_map = not f_map.exists()
-    fm = f_map.open("a", encoding="utf-8-sig" if new_map else "utf-8", newline="")
+    fm = f_map.open("a", encoding="utf-8-sig" if new_map else "utf-8", newline="") if files else open(os.devnull, "w")
     mw = csv.writer(fm)
-    if new_map:
+    if new_map and files:
         mw.writerow(["id", "scenic_id", "scenic_name", "spot", "kb_kind", "unit_id", "variant", "summary", "needs_review", "check_flags", "model", "generated_at"])
     conn = None
     if args.mysql:
@@ -873,7 +875,13 @@ def run(args, cfg, log=print, should_stop=lambda: False, progress=lambda done, t
             return
         row = byid[sid]
         key = f"{u['unit_id']}|{v}"
-        if kind == "ok":
+        if kind == "ok" and args.mysql:  # 先写库；只写库模式下写库失败算调用失败，下次重跑
+            err = write_mysql(rec)
+            if err:
+                log(f"  写 MySQL 失败：{err}")
+                if not files:
+                    kind, rec = "failed", dict(error=f"写 MySQL 失败：{err}")
+        if kind == "ok" and files:
             if u["unit_id"] not in have_kn:
                 with f_kn.open("a", encoding="utf-8") as f:
                     f.write(json.dumps(dict(u, scenic_id=sid), ensure_ascii=False) + "\n")
@@ -887,12 +895,10 @@ def run(args, cfg, log=print, should_stop=lambda: False, progress=lambda done, t
             mw.writerow([rid, sid, row["_name"], u["spot"], u["kind"], u["unit_id"], v, summary, int(g["needs_review"]), "；".join(g["check_flags"]),
                          g["model"], g["generated_at"]])
             fm.flush()
-            with f_done.open("a", encoding="utf-8") as f:
+        if kind == "ok":
+            g = rec["source"]
+            with f_done.open("a", encoding="utf-8") as f:  # 进度（断点续跑用）
                 f.write(key + "\n")
-            if args.mysql:
-                err = write_mysql(rec)
-                if err:
-                    log(f"  写 MySQL 失败 {rid}：{err}（JSONL 已保存）")
             stats["ok"] += 1
             stats["review"] += int(g["needs_review"])
         else:

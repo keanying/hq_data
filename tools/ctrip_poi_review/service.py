@@ -371,7 +371,8 @@ def create_app(args):
     # mode：rewrite = 改写真实对话（cs_synth）；expand = 按景区真实数据扩展（cs_expand：事实取自景区表，问法参考真实对话）
     CS_DEFAULTS = dict(mode="rewrite", data_dir="", data_type="真实", split="train", city="", intent="", scenic="", scenic_city="", limit=20, variants=1,
                        workers=3, allow_unmapped=False, no_db=False, mysql=True, out="", seed=7, topics="", grade="", only_approved=False, kb="",
-                       ai_model="", ai_web_search=None)  # 这两个只对本次生成生效，空 = 用设置页的
+                       ai_model="", ai_web_search=None,  # 这两个只对本次生成生效，空 = 用设置页的
+                       files=False)  # 工作台只写 MySQL（不写 dialogs / mapping / *_extract 文件），进度另存小文件
 
     def cs_args(p):
         a = dict(CS_DEFAULTS)
@@ -382,13 +383,34 @@ def create_app(args):
         for k in ("limit", "variants", "workers", "seed"):
             a[k] = int(a[k] or 0)
         a["workers"] = max(1, min(a["workers"], 128))
+        a["mysql"] = True if not a.get("files") else a.get("mysql", True)  # 工作台默认只写 MySQL
         return SimpleNamespace(**a)
 
     def cs_mod(a):  # rewrite 改写客服对话 / expand 扩展客服对话 / guide_eval 讲解内容评价 / guide_narr 个性化讲解
         return guide_synth if a.mode in ("guide_eval", "guide_narr") else cs_expand if a.mode == "expand" else cs_synth
 
-    def cs_current():
-        return next((j for j in sorted(svc.jobs.values(), key=lambda j: -j.id) if j.type in ("cs_synth", "cs_load") and j.status in ("queued", "running")), None)
+    CS_MODES = ("rewrite", "expand", "guide_eval", "guide_narr")
+
+    def job_mode(j):
+        return (j.params or {}).get("mode") or ("load" if j.type == "cs_load" else "rewrite")
+
+    def cs_current(mode=None):
+        """在跑的生成任务；给了 mode 只看这种（不同生成方式各是各的任务，可以同时跑）。"""
+        return next((j for j in sorted(svc.jobs.values(), key=lambda j: -j.id) if j.type in ("cs_synth", "cs_load")
+                     and j.status in ("queued", "running") and (mode is None or job_mode(j) == mode)), None)
+
+    def save_mode_params(a):
+        """每种生成方式的参数单独存（数据库里的设置），下次打开页面按方式恢复。"""
+        keep = {k: getattr(a, k) for k in CS_DEFAULTS if k not in ("data_dir", "out", "mode", "files", "mysql")}
+        allp = dict(svc.prefs.get("cs_params") or {})
+        allp[a.mode] = keep
+        svc.prefs["cs_params"] = allp
+        svc.prefs.save()
+
+    @app.get("/api/cs/params")
+    def cs_params():
+        return dict(params=svc.prefs.get("cs_params") or {}, data_dir=svc.prefs.get("cs_data_dir") or "",
+                    running={m: (lambda j: j and j.brief())(cs_current(m)) for m in CS_MODES})
 
     async def cs_launch(job, fn):
         svc.jobs[job.id] = job
@@ -419,6 +441,7 @@ def create_app(args):
         if payload.get("data_dir"):
             svc.prefs["cs_data_dir"] = payload["data_dir"]
             svc.prefs.save()
+        save_mode_params(a)
         return dict(res, log=logs)
 
     @app.post("/api/cs/capacity")
@@ -427,6 +450,7 @@ def create_app(args):
         rv = max(1, min(int(payload.get("rewrite_variants") or 10), 10))
         ev = max(1, min(int(payload.get("expand_variants") or 7), 20))
         gv = max(1, min(int(payload.get("guide_variants") or 5), 50))
+        tv = {"eval": max(1, min(int(payload.get("eval_variants") or gv), 50)), "narr": max(1, min(int(payload.get("narr_variants") or gv), 50))}
         logs = []
 
         def calc():
@@ -460,7 +484,7 @@ def create_app(args):
                        generated=done.get("llm_rewrite"), generated_ok=done.get("llm_rewrite_ok"))
         expand = dict(units=ex["pairs"], scenics=ex["scenics"], variants=ev, total=ex["total"], by_topic=ex["by_topic"], sources=ex.get("sources"),
                       generated=done.get("llm_expand"), generated_ok=done.get("llm_expand_ok"))
-        guide = {t: dict(units=gd["units"], scenics=gd["scenics"], variants=gv, total=gd["total"], by_kb=gd["by_kb"],
+        guide = {t: dict(units=gd["units"], scenics=gd["scenics"], variants=tv[t], total=gd["units"] * tv[t], by_kb=gd["by_kb"],
                          generated=done.get("guide_" + t), generated_ok=done.get("guide_" + t + "_ok")) for t in ("eval", "narr")}
         return dict(rewrite=rewrite, expand=expand, guide_eval=guide["eval"], guide_narr=guide["narr"],
                     total=rewrite["total"] + expand["total"], guide_total=guide["eval"]["total"] + guide["narr"]["total"],
@@ -468,8 +492,11 @@ def create_app(args):
 
     @app.post("/api/cs/start")
     async def cs_start(payload: dict = Body(default={})):
-        if cs_current():
-            raise HTTPException(409, "已经有一个客服对话任务在跑，先停止它")
+        mode = (payload or {}).get("mode") or "rewrite"
+        if cs_current(mode):
+            raise HTTPException(409, "这种生成方式已经有任务在跑，先停止它（其他生成方式可以同时跑）")
+        if cs_current("load"):
+            raise HTTPException(409, "正在把批次写入 MySQL，等它完成")
         a = cs_args(payload)
         cfg = ai_judge.config(svc.prefs)
         if (a.ai_model or "").strip():  # 页面上单独指定的模型 / 联网搜索，只对这次任务生效，不改设置页
@@ -479,6 +506,7 @@ def create_app(args):
         if not cfg.get("ai_api_key"):
             raise HTTPException(400, "没有 AI 的 API Key：先在「设置 → AI 判断」里填")
         svc.prefs["cs_data_dir"] = a.data_dir
+        save_mode_params(a)
         svc.prefs.save()
         job = Job("cs_synth", {k: v for k, v in vars(a).items()})
         job.items = collections.deque(maxlen=1000)
@@ -502,8 +530,10 @@ def create_app(args):
         return job.brief()
 
     @app.post("/api/cs/stop")
-    def cs_stop():
-        j = cs_current()
+    def cs_stop(payload: dict = Body(default={})):
+        j = svc.jobs.get(int((payload or {}).get("job_id") or 0)) or cs_current((payload or {}).get("mode"))
+        if j and j.status not in ("queued", "running"):
+            j = None
         if not j:
             return dict(ok=False, message="当前没有在跑的任务")
         j.cancel = True
@@ -522,9 +552,10 @@ def create_app(args):
                     elapsed=(it.get("exchange") or {}).get("elapsed"))
 
     @app.get("/api/cs/state")
-    def cs_state(job_id: int = 0, offset: int = 0, limit: int = 100):
-        """当前（或指定）客服对话任务：状态、进度、统计、最近处理的条目（新的在前）、日志。"""
-        jobs = sorted([j for j in svc.jobs.values() if j.type in ("cs_synth", "cs_load")], key=lambda j: -j.id)
+    def cs_state(job_id: int = 0, mode: str = "", offset: int = 0, limit: int = 100):
+        """某种生成方式（mode）的当前（或指定）任务：状态、进度、统计、最近处理的条目（新的在前）、日志；history 只列这种方式的任务。"""
+        jobs = sorted([j for j in svc.jobs.values() if j.type in ("cs_synth", "cs_load") and (not mode or job_mode(j) in (mode, "load"))],
+                      key=lambda j: -j.id)
         j = svc.jobs.get(job_id) if job_id else (jobs[0] if jobs else None)
         if not j:
             return dict(job=None, history=[], items=[], total_items=0)
@@ -590,6 +621,29 @@ def create_app(args):
         w.writerows(rows)
         return Response("\ufeff" + buf.getvalue(), media_type="text/csv; charset=utf-8",
                         headers={"Content-Disposition": f"attachment; filename=scenic_fact_conflicts_{time.strftime('%Y%m%d')}.csv"})
+
+    @app.get("/api/data/clear/count")
+    def data_clear_count(datasets: str = "", scope: str = "all"):
+        """一键清理前先数：每个数据集会删多少条（scope=all 全部 / review 只清需复核）。"""
+        import data_clean
+        ds = [x for x in datasets.split(",") if x in data_clean.DATASETS] or list(data_clean.DATASETS)
+        return dict(counts=data_clean.count(ds, "review" if scope == "review" else "all"),
+                    names={k: v["name"] for k, v in data_clean.DATASETS.items()})
+
+    @app.post("/api/data/clear")
+    async def data_clear(payload: dict = Body(...)):
+        """一键清理：删 MySQL 里生成的样本并清进度（全部：批次目录也删；只清需复核：从进度里去掉，下次重新生成）。"""
+        import data_clean
+        ds = [x for x in payload.get("datasets") or [] if x in data_clean.DATASETS]
+        if not ds:
+            raise HTTPException(400, "没选要清理的数据集")
+        busy = {"cs_rewrite": "rewrite", "cs_expand": "expand", "eval": "guide_eval", "narr": "guide_narr"}
+        running = [data_clean.DATASETS[d]["name"] for d in ds if cs_current(busy[d])]
+        if running or cs_current("load"):
+            raise HTTPException(409, "有任务在跑，先停止：" + "、".join(running or ["批次写入 MySQL"]))
+        logs = []
+        res = await asyncio.to_thread(data_clean.clear, ds, "review" if payload.get("scope") == "review" else "all", logs.append)
+        return dict(deleted=res, log=logs[-20:])
 
     @app.get("/api/cs/batches")
     def cs_batches():
