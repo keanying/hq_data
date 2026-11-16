@@ -604,12 +604,15 @@ def run(args, cfg, log=print, should_stop=lambda: False, progress=lambda done, t
         ex_ = dict(prompt=prompt, persona=plan["persona"], channel=plan["channel"], situation=plan["situation"], started=time.strftime("%H:%M:%S"))
         t0 = time.time()
         try:
-            text, elapsed, meta = ai_judge.call(cfg, prompt)
+            text, elapsed, meta, js = ai_judge.call_json(cfg, prompt)  # JSON 不合法会先修复，修不了重问一次
+        except ai_judge.JSONParseError as e:
+            ex_.update(response=e.raw, elapsed=round(time.time() - t0, 1), request_id=e.request_id)
+            return ("rejected", row, topic, v, plan, dict(error=str(e), raw=(e.raw or "")[:2000]), ex_)
         except ai_judge.AIError as e:
             return ("failed", row, topic, v, plan, dict(error=str(e), http_status=e.http_status, request_id=e.request_id), dict(ex_, elapsed=round(time.time() - t0, 1)))
         ex_.update(response=text, elapsed=elapsed, request_id=meta.get("request_id"))
         try:
-            rec = assemble(row, plan, v, ai_judge.parse(text), cfg, table)
+            rec = assemble(row, plan, v, js, cfg, table)
             rec["channel"] = plan["channel"]
             rec = {k: rec[k] for k in ["session_id", "channel", "visitor_id", "scenic_id", "scenic_name", "start_time", "related_order_id", "turns",
                                        "end_type", "satisfaction_score", "session_duration_sec", "source"]}
