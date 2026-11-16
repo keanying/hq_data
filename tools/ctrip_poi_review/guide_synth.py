@@ -258,7 +258,7 @@ def eval_prompt(row, u, plan):
 4. gaps：写 1～3 个游客可能会问、但这个知识库没有覆盖的具体话题（如「塔内电梯品牌」「各层壁画作者署名」），不能是知识库里已有的内容。
 5. said / said2 必须是 asr_text 里逐字连续的原话；correct 写知识库里的正确说法（合规 / 逻辑问题写应该怎么讲）。covered_attrs 只写讲对了的条目名。
 
-只输出一个 JSON 对象：
+只输出一个 JSON 对象（字符串里需要引号时用「」，不要用英文双引号）：
 {{"gaps":["…"],"asr_text":"讲解文字","issues":[{{"type":"{'/'.join(ISSUE_TYPES)}","attr":"知识库条目名（没有就留空）","said":"原话","said2":"前后矛盾时的另一处原话","correct":"正确说法"}}],
  "covered_attrs":["条目名"],"suggestions":["给讲解员的 1～2 条修改建议"]}}"""
 
@@ -474,13 +474,14 @@ def narr_prompt(row, u, plan):
 2. 结合画像：先讲和兴趣相关的内容，语气、称呼贴合客群（独自旅行、亲子、银发……）；有孩子要说得孩子听得懂；风格未指定时自己选并写进 style。
 3. 从当前位置自然开场；参观须知里和眼前有关的，可以温和提醒一句（没有就不提）。
 4. 不用「最」「唯一」「第一」「绝对」等绝对化说法（知识里原话除外），不推销门票、商品、服务。
-5. 正文不超过 {tp['字数上限']} 字。
+5. 字数硬限制：正文（含标点）不超过 {tp['字数上限']} 字，写到 {int(tp['字数上限'] * 0.7)}～{int(tp['字数上限'] * 0.9)} 字最合适；宁可少讲一条知识，也不要超。
 
-只输出一个 JSON 对象：
+只输出一个 JSON 对象（字符串里需要引号时用「」，不要用英文双引号）：
 {{"text":"讲解词","used_attrs":["用到的知识条目名"],"personalization":["针对画像做了哪些调整，1～3 条"],"style":"实际采用的风格"}}"""
 
 
-ABS_RE = re.compile(r"最[一-鿿]{1,2}|唯一|第一|绝对|顶级|无与伦比")
+ABS_RE = re.compile(r"最[\u4e00-\u9fff]|唯一|第一|绝对|顶级|无与伦比")
+ABS_OK = {"最晚", "最早", "最后", "最近", "最好", "最初", "最终", "最多", "最少"}  # 时间 / 建议 / 数量的中性说法，不算绝对化
 SALES_RE = re.compile(r"购买|下单|优惠|折扣|买票|门票|会员|特价|套餐|文创店|商店|扫码")
 
 
@@ -496,8 +497,9 @@ def narr_check(u, plan, js):
     extra = sorted(_nums(text) - _nums(kb_text) - _nums(" ".join(plan["visit_rules"])))
     if extra:
         flags.append("讲解词里有知识没有的数字：" + "、".join(extra[:5]))
+    allowed = kb_text + " " + " ".join(plan["visit_rules"]) + " " + " ".join(plan.get("taboos") or [])
     for m in set(ABS_RE.findall(text)):
-        if m not in kb_text:
+        if m not in ABS_OK and m not in allowed:  # 知识 / 参观须知里原有的说法（如「最晚入园」「滇中第一高峰」）不算
             flags.append(f"绝对化表述「{m}」")
     for m in set(SALES_RE.findall(text)):
         flags.append(f"疑似推销「{m}」")
@@ -507,6 +509,8 @@ def narr_check(u, plan, js):
     used = [a for a in js.get("used_attrs") or [] if a in attrs]
     ref = dict(text=text, char_count=n, used_facts=used, personalization=[str(x) for x in (js.get("personalization") or [])][:3],
                style=js.get("style") or plan["task_params"]["讲解风格"])
+    if js.get("shortened_from"):
+        ref["shortened_from"] = js["shortened_from"]  # 原稿超字数，已自动压缩
     return ref, sorted(set(flags))
 
 
@@ -843,7 +847,20 @@ def run(args, cfg, log=print, should_stop=lambda: False, progress=lambda done, t
             return ("failed", sid, u, v, plan, dict(error=str(e), http_status=e.http_status, request_id=e.request_id), dict(ex_, elapsed=round(time.time() - t0, 1)))
         ex_.update(response=text, elapsed=elapsed, request_id=meta.get("request_id"))
         try:
-            rec = build_record(task, row, u, v, plan, ai_judge.parse(text), cfg)
+            js = ai_judge.parse(text)
+            lim = plan["task_params"]["字数上限"] if task == "narr" else 0
+            if lim and len(re.sub(r"\s", "", str(js.get("text") or ""))) > lim:  # 超字数：让模型只删不增地压缩一次
+                short_prompt = (f"把下面这段讲解词压缩到 {int(lim * 0.85)} 字以内（标点也算，硬上限 {lim} 字）。只删减、合并，不增加任何新内容、数字、说法，"
+                                f"保留开场和对游客的提醒。只输出 JSON：{{\"text\":\"压缩后的讲解词\"}}；字符串里需要引号时用「」。\n\n{js.get('text')}")
+                try:
+                    t2, e2, _ = ai_judge.call(cfg, short_prompt)
+                    js2 = ai_judge.parse(t2)
+                    if js2.get("text"):
+                        ex_.update(shorten_prompt=short_prompt, shorten_response=t2, elapsed=round((ex_.get("elapsed") or 0) + e2, 1))
+                        js = dict(js, text=js2["text"], shortened_from=len(re.sub(r"\s", "", str(js.get("text") or ""))))
+                except (ai_judge.AIError, ValueError):
+                    pass  # 压缩失败就保留原文，照常标「超字数」
+            rec = build_record(task, row, u, v, plan, js, cfg)
             rec["source"].update(scenic_name=row["_name"], elapsed=round(time.time() - t0, 1), request_id_llm=meta.get("request_id"))
             return ("ok", sid, u, v, plan, rec, ex_)
         except Exception as e:  # noqa: BLE001

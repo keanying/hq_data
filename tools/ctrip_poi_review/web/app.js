@@ -931,11 +931,35 @@
     </div>`;
   }
 
+  /** 「数量」三个参数是干什么的、什么时候放大（随生成方式变） */
+  const VARIANT_WHAT = {
+    rewrite: '同一通真实问答改写成几版不同的会话（换人设、渠道、条数、结束方式）',
+    expand: '同一个景区的同一个主题生成几版（换人设、情境、渠道、参考问法、会话设定）',
+    guide_eval: '同一条知识生成几版讲解（换讲解来源、问题类别、放进的问题、置信度）',
+    guide_narr: '同一条知识生成几版讲解词（换合成游客画像、字数上限、风格、位置）',
+  };
+  function ParamHelp({ mode }) {
+    return html`<div style=${{ width: 520, padding: '10px 14px', fontSize: 12.5, lineHeight: 1.75 }}>
+      <div><b>版数</b>：${VARIANT_WHAT[mode] || VARIANT_WHAT.expand}。总量 = 单元数 × 版数。版数越大总量越大，但同一份资料的样本越相像（讲的事实是同一组）。</div>
+      <div style=${{ marginTop: 6 }}><b>本次最多</b>：这一次最多生成几条，<b>0 = 全部</b>。只限这一次，不影响总量；用来试跑（如 200）或分批跑。停止后再点「开始生成」接着跑，生成过的不会重复。</div>
+      <div style=${{ marginTop: 6 }}><b>并发</b>：同时向模型发几个请求，<b>只影响速度，不影响数量和质量</b>。每个并发约 5 条 / 分（32 并发约 150 条 / 分）。上限看方舟账号的限额：「调用失败」里出现限流（429 / 请求过多）就调小。</div>
+      <div style=${{ marginTop: 10 }}><b>什么时候放大</b></div>
+      <div>① 先用小版数（3～5）、本次最多 200 试跑，点几条看数据交换，再看「需复核」「不合格」的比例。</div>
+      <div>② 需复核低于约 10%、不合格低于约 5%，就把本次最多改成 <b>0</b> 跑全量；并发按账号限额调到最大。</div>
+      <div>③ 全量跑完还要更多数据，再<b>加版数</b>：版数是增量的，比如从 5 改到 10，只会补第 6～10 版，前 5 版不重跑。</div>
+      <div>④ 需复核偏高时先别放大：点开看原因（超字数、数字资料里没有、复读……），调资料或参数后再跑。</div>
+    </div>`;
+  }
+
   function CsPage({ cities }) {
     const [p, setP] = useState({ mode: 'rewrite', data_dir: '', data_type: '真实', split: 'train', city: '', intent: [], scenic: '', scenic_city: '', limit: 20,
-      variants: 1, workers: 3, mysql: true, allow_unmapped: false, topics: [], grade: [], only_approved: false, kb: [] });
+      variants: 1, workers: 3, mysql: true, allow_unmapped: false, topics: [], grade: [], only_approved: false, kb: [], ai_model: '', ai_web_search: false });
+    const [aiDef, setAiDef] = useState(null);
     const expand = p.mode === 'expand', guide = p.mode.startsWith('guide_'), scen = expand || guide;
-    useEffect(() => { api('/api/settings').then((st) => { if (st.cs_data_dir) setP((o) => ({ ...o, data_dir: o.data_dir || st.cs_data_dir })); }).catch(() => {}); }, []);
+    useEffect(() => { api('/api/settings').then((st) => {
+      setAiDef({ model: st.ai_model, web: !!st.ai_web_search });
+      setP((o) => ({ ...o, data_dir: o.data_dir || st.cs_data_dir || '', ai_model: o.ai_model || st.ai_model || '', ai_web_search: false }));
+    }).catch(() => {}); }, []);
     const [pv, setPv] = useState(null);
     const [pvBusy, setPvBusy] = useState(false);
     const [capOpen, setCapOpen] = useState(false);
@@ -1009,7 +1033,8 @@
               <span className="lbl">${guide ? (p.mode === 'guide_eval' ? '每条知识（不同问题组合）' : '每条知识（不同游客）') : '每个景区每个主题'}</span><${InputNumber} hideButtons value=${p.variants} onChange=${set('variants')} min=${1} max=${guide ? 50 : 20} style=${{ width: 80 }} suffix="版" />
               <span className="lbl">本次最多</span><${InputNumber} hideButtons value=${p.limit} onChange=${set('limit')} min=${0} style=${{ width: 120 }} suffix="条" />
               <span className="lbl">并发</span><${InputNumber} hideButtons value=${p.workers} onChange=${set('workers')} min=${1} max=${128} style=${{ width: 80 }} />
-              <span className="muted sm">本次最多填 0 = 全部</span>
+              <span className="muted sm">本次最多填 0 = 全部；并发只影响速度</span>
+              <${Popover} trigger="click" position="bottomLeft" content=${html`<${ParamHelp} mode=${p.mode} />`}><a className="sm" style=${{ cursor: 'pointer' }}>参数说明</a><//>
             <//>` : html`
             <${Field} label="原始范围">
               <${Select} value=${p.data_type} onChange=${set('data_type')} style=${{ width: 110 }} optionList=${['真实', '改写', '合成', '真实,改写'].map((x) => ({ value: x, label: x }))} />
@@ -1024,7 +1049,15 @@
               <span className="lbl">取</span><${InputNumber} hideButtons value=${p.limit} onChange=${set('limit')} min=${0} style=${{ width: 100 }} suffix="通" />
               <span className="lbl">每通改写</span><${InputNumber} hideButtons value=${p.variants} onChange=${set('variants')} min=${1} max=${10} style=${{ width: 90 }} suffix="版" />
               <span className="lbl">并发</span><${InputNumber} hideButtons value=${p.workers} onChange=${set('workers')} min=${1} max=${128} style=${{ width: 80 }} />
+              <span className="muted sm">取 0 通 = 全部</span>
+              <${Popover} trigger="click" position="bottomLeft" content=${html`<${ParamHelp} mode=${p.mode} />`}><a className="sm" style=${{ cursor: 'pointer' }}>参数说明</a><//>
             <//>`}
+            <${Field} label="调用模型">
+              <${Input} value=${p.ai_model} onChange=${set('ai_model')} placeholder=${aiDef ? `默认用设置页的：${aiDef.model}` : '模型 ID / 接入点 ID'} style=${{ flex: 1, minWidth: 180 }} showClear />
+              <${Tooltip} content="生成训练数据一般不需要联网：事实都来自景区表 / 讲解资料；开了更慢、更贵，还可能把网上的说法带进来">
+                <span style=${{ display: 'inline-flex', alignItems: 'center', gap: 6 }}><${Switch} size="small" checked=${p.ai_web_search} onChange=${set('ai_web_search')} />联网搜索</span><//>
+              <span className="muted sm">只对本页任务生效，不改设置页${aiDef && aiDef.web ? '（设置页开着联网，本页默认关）' : ''}</span>
+            <//>
             <${Field} label="选项">
               <${Checkbox} checked=${p.mysql} onChange=${(e) => set('mysql')(e.target.checked)}>同时写入 MySQL<//>
               ${!scen && html`<${Checkbox} checked=${p.allow_unmapped} onChange=${(e) => set('allow_unmapped')(e.target.checked)}>对不到我们景区的也生成<//>`}

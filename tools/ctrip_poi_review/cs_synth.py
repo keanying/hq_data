@@ -180,7 +180,7 @@ def build_prompt(src, scenic_name, persona, channel, plan=None):
 
 {plan_rules(plan) if plan else ""}
 
-只输出一个 JSON 对象，不要其他文字（不是在问本景区时只输出 {{"relevant": false, "reason": "原因"}}）：
+只输出一个 JSON 对象，不要其他文字；字符串里需要引号时用「」，不要用英文双引号（不是在问本景区时只输出 {{"relevant": false, "reason": "原因"}}）：
 {{"relevant":true,{SESSION_JSON[1:]}"""
 
 

@@ -370,7 +370,8 @@ def create_app(args):
     # ---------------- 智能客服对话数据（大模型改写，单独运行，不占核对 / 采集的任务队列）
     # mode：rewrite = 改写真实对话（cs_synth）；expand = 按景区真实数据扩展（cs_expand：事实取自景区表，问法参考真实对话）
     CS_DEFAULTS = dict(mode="rewrite", data_dir="", data_type="真实", split="train", city="", intent="", scenic="", scenic_city="", limit=20, variants=1,
-                       workers=3, allow_unmapped=False, no_db=False, mysql=True, out="", seed=7, topics="", grade="", only_approved=False, kb="")
+                       workers=3, allow_unmapped=False, no_db=False, mysql=True, out="", seed=7, topics="", grade="", only_approved=False, kb="",
+                       ai_model="", ai_web_search=None)  # 这两个只对本次生成生效，空 = 用设置页的
 
     def cs_args(p):
         a = dict(CS_DEFAULTS)
@@ -471,6 +472,10 @@ def create_app(args):
             raise HTTPException(409, "已经有一个客服对话任务在跑，先停止它")
         a = cs_args(payload)
         cfg = ai_judge.config(svc.prefs)
+        if (a.ai_model or "").strip():  # 页面上单独指定的模型 / 联网搜索，只对这次任务生效，不改设置页
+            cfg["ai_model"] = a.ai_model.strip()
+        if a.ai_web_search is not None:
+            cfg["ai_web_search"] = bool(a.ai_web_search)
         if not cfg.get("ai_api_key"):
             raise HTTPException(400, "没有 AI 的 API Key：先在「设置 → AI 判断」里填")
         svc.prefs["cs_data_dir"] = a.data_dir
@@ -478,7 +483,7 @@ def create_app(args):
         job = Job("cs_synth", {k: v for k, v in vars(a).items()})
         job.items = collections.deque(maxlen=1000)
         job.stats = {}
-        job.write({"expand": "按景区真实数据扩展", "guide_eval": "讲解内容评价", "guide_narr": "个性化讲解"}.get(a.mode, "改写真实对话") + f" · 开始：模型 {cfg['ai_model']}（非流式，深度思考{'开' if cfg.get('ai_thinking') else '关'}）{'，写入 MySQL' if a.mysql else ''}")
+        job.write({"expand": "按景区真实数据扩展", "guide_eval": "讲解内容评价", "guide_narr": "个性化讲解"}.get(a.mode, "改写真实对话") + f" · 开始：联网搜索{'开' if cfg.get('ai_web_search') else '关'} · 模型 {cfg['ai_model']}（非流式，深度思考{'开' if cfg.get('ai_thinking') else '关'}）{'，写入 MySQL' if a.mysql else ''}")
 
         def on_item(it):
             it["n"] = len(job.items) + 1 if not job.items else job.items[-1]["n"] + 1

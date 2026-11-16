@@ -409,7 +409,7 @@ def build_prompt(row, plan):
 
 {cs_synth.plan_rules(plan["session"])}
 
-只输出一个 JSON 对象，不要其他文字：
+只输出一个 JSON 对象，不要其他文字；字符串里需要引号时用「」，不要用英文双引号：
 {cs_synth.SESSION_JSON}"""
 
 
