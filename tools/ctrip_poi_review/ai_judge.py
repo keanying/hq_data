@@ -272,8 +272,29 @@ def repair_json(s):
             j += 1
         return j
 
+    def ends(j, key):
+        """位置 j 之后（跳过空白）的内容说明前面那个引号是不是字符串结束。"""
+        j = nxt(j)
+        ch = s[j] if j < n else ""
+        if key:
+            return ch == ":"
+        if ch in ("", "}", "]"):
+            return True
+        if ch == ",":
+            k = nxt(j + 1)
+            return k >= n or s[k] in '"{[-0123456789tfn}]' or s[k:k + 2] == '\\"'
+        return False
+
     while i < n:
         c = s[i]
+        if not in_str and c == "\\" and i + 1 < n and s[i + 1] == '"':  # 字符串外面的 \"（模型把键名的引号也转义了）：去掉反斜杠
+            i += 1
+            continue
+        if in_str and not esc and c == "\\" and i + 1 < n and s[i + 1] == '"' and ends(i + 2, is_key):  # 用 \" 结束了字符串
+            out.append('"')
+            in_str = False
+            i += 2
+            continue
         if in_str:
             if esc:
                 esc = False
@@ -282,18 +303,7 @@ def repair_json(s):
                 esc = True
                 out.append(c)
             elif c == '"':
-                j = nxt(i + 1)
-                ch = s[j] if j < n else ""
-                if is_key:
-                    end = ch == ":"
-                elif ch in ("", "}", "]"):
-                    end = True
-                elif ch == ",":
-                    k = nxt(j + 1)
-                    end = k >= n or s[k] in '"{[-0123456789tfn}]'
-                else:
-                    end = False
-                if end:
+                if ends(i + 1, is_key):
                     in_str = False
                     out.append(c)
                 else:
