@@ -695,6 +695,14 @@ def _export_where(task, f):
     if task == "eval" and f.get("verdict"):
         where.append("verdict = %s")
         params.append(f["verdict"])
+    gd = cs_synth.gen_day(f.get("gen_date"))
+    if gd:  # 生成日期 = source.generated_at 的日期（和客服对话一致；补写进库的批次 created_at 会是补写那天）
+        where.append("record_json LIKE %s")
+        params.append(f'%"generated_at": "{gd}%')
+    ids = [x.strip() for x in re.split(r"[,，\s]+", str(f.get("sid") or "")) if x.strip()]
+    if ids:
+        where.append(f"{'eval_task_id' if task == 'eval' else 'request_id'} IN ({','.join(['%s'] * len(ids))})")
+        params += ids
     return (" WHERE " + " AND ".join(where) if where else ""), params
 
 

@@ -333,3 +333,14 @@ a:hover { color: var(--semi-color-link-hover); }
 .cap-card .a { margin-top: 6px; font-size: 12.5px; line-height: 1.8; }
 .cap-more { margin-top: 8px; padding: 10px 12px; background: var(--soft); border-radius: 10px; font-size: 12.5px; line-height: 1.8; }
 .run-dot { display: inline-block; width: 7px; height: 7px; border-radius: 50%; background: #22c55e; margin-left: 4px; vertical-align: middle; box-shadow: 0 0 0 3px rgba(34, 197, 94, .18); }
+
+/* 数据查看：MySQL 里已生成的训练数据 */
+.td-bar { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 10px; }
+.td-bar .semi-radioGroup { margin-right: 6px; }
+.td-bar > a { white-space: nowrap; }
+.semi-table-tbody .semi-table-row.td-cur > .semi-table-row-cell { background: rgba(108, 77, 255, .08); }
+.td-src { padding: 10px 12px; margin-bottom: 10px; background: var(--soft); border-radius: 10px; }
+.td-facts { margin: 0 0 12px 2px; }
+.td-facts summary { cursor: pointer; margin-bottom: 6px; }
+.td-foot { display: flex; align-items: center; gap: 8px; }
+.td-foot .grow { flex: 1; }
