@@ -35,8 +35,11 @@ class StoreTest(unittest.TestCase):
             self.assertTrue(nodes <= ids, f["name"])
             for a, b in f["edges"]:
                 self.assertIn(a, nodes); self.assertIn(b, nodes)
+            gids = {g["id"]: g for g in f["groups"]}
             for g in f["groups"]:
                 self.assertTrue(set(g["ids"]) <= nodes)
+                if g.get("parent"):
+                    self.assertTrue(set(g["ids"]) <= set(gids[g["parent"]]["ids"]))
         daily = next(f for f in draft["flows"] if f["id"] == "flow_daily")
         self.assertEqual(len(daily["nodes"]), 444)
 
@@ -83,12 +86,15 @@ class LayoutParityTest(unittest.TestCase):
             if not f.get("layout"):
                 continue
             for d in ("LR", "TB"):
-                for expand in (None, f["groups"][3]["id"], f["layout"]["branch"]["groups"][0]):
+                lay = f["layout"]
+                first_lane = lay["laneGroups"][lay["lanes"][0]]
+                for toggle in (None, lay["cells"][lay["lanes"][1]][lay["rows"][0]], lay["branch"]["groups"][0],
+                               first_lane, lay["branch"]["group"]):
                     g = copy.deepcopy(f)
                     g["layout"]["dir"] = d
                     for x in g["groups"]:
-                        if x["id"] == expand:
-                            x["collapsed"] = False
+                        if x["id"] == toggle:
+                            x["collapsed"] = not x.get("collapsed")
                     cases.append(g)
         py = []
         for g in copy.deepcopy(cases):

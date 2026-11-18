@@ -68,3 +68,6 @@
 .canvas.dir-tb .port-in{top:-7px;left:50%}
 .canvas.dir-tb .port-out{bottom:-7px;right:auto;left:50%}
 .canvas.dir-tb .node:before,.canvas.dir-tb .node:after{display:none}
+/* 分组：去掉展开按钮，双击分组展开/收起；嵌套分组的外层框更淡 */
+.group-toggle{display:none!important}
+.group-box .group-title{cursor:pointer}

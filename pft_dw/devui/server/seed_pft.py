@@ -25,6 +25,7 @@ LAYERS = ["ODS", "DIM", "DWD", "DWS", "ADS"]
 TASK_W, TASK_H = 192, 96
 PAIR_DX, PITCH_X, PITCH_Y = 222, 470, 128
 COL_GAP, ROW_GAP, BRANCH_GAP = 150, 40, 150
+LAYOUT_VERSION = 3   # 排布结构版本：变化时启动会升级已有 PFT 项目的工作流排布（不动任务代码）
 
 
 def load():
@@ -48,15 +49,30 @@ def task_key(node):
 
 
 # ---------- 泳道排布（与前端 web/model.mjs 的 relayout 同一算法） ----------
-def bounds(flow, g):
-    ns = [n for n in flow["nodes"] if n["taskId"] in g["ids"]]
-    if not ns:
+def _box(flow, g, seen):
+    if g["id"] in seen:
         return None
-    x = min(n["x"] for n in ns) - 18
-    y = min(n["y"] for n in ns) - 47
-    if g.get("collapsed"):
-        return x, y, 240, 82
-    return x, y, max(n["x"] for n in ns) + 210 - x, max(n["y"] for n in ns) + 113 - y
+    seen.add(g["id"])
+    kids = [c for c in flow["groups"] if c.get("parent") == g["id"]]
+    in_kid = {i for c in kids for i in c["ids"]}
+    rects = [(n["x"], n["y"], 192, 96) for n in flow["nodes"] if n["taskId"] in g["ids"] and n["taskId"] not in in_kid]
+    for c in kids:
+        b = _box(flow, c, seen)
+        if b:
+            rects.append((b[0], b[1], 240, 82) if c.get("collapsed") else b)
+    if not rects:
+        return None
+    x = min(r[0] for r in rects) - 18
+    y = min(r[1] for r in rects) - 47
+    return x, y, max(r[0] + r[2] for r in rects) + 18 - x, max(r[1] + r[3] for r in rects) + 17 - y
+
+
+def bounds(flow, g):
+    """与前端 groupBounds 一致：嵌套分组按子分组（收起时为卡片）与直属任务求外框"""
+    b = _box(flow, g, set())
+    if not b:
+        return None
+    return (b[0], b[1], 240, 82) if g.get("collapsed") else b
 
 
 def relayout(flow):
@@ -89,13 +105,22 @@ def relayout(flow):
     lane_gap, row_gap = L.get("laneGap", 150), L.get("rowGap", 40)
     A0, C0, rows = L.get("a0", 380), L.get("c0", 160), L.get("rows", [])
     ri = lambda r: rows.index(r) if r in rows else 0
+    LG = L.get("laneGroups", {})
+    folded = lambda lane: bool(G.get(LG.get(lane), {}).get("collapsed"))
+    pad = lambda lane: (47 if TB else 18) if LG.get(lane) else 0
     lane_size = [0] * len(L["lanes"])
     row_size = [0] * max(1, len(rows))
     for i, lane in enumerate(L["lanes"]):
+        if folded(lane):
+            e = ext(LG[lane])
+            if e:
+                lane_size[i] = e[1]
+                row_size[0] = max(row_size[0], e[2])
+            continue
         for r, gid in L["cells"].get(lane, {}).items():
             e = ext(gid)
             if e:
-                lane_size[i] = max(lane_size[i], e[1])
+                lane_size[i] = max(lane_size[i], e[1] + ((64 if TB else 36) if LG.get(lane) else 0))
                 row_size[ri(r)] = max(row_size[ri(r)], e[2])
     lane_pos, a = [], A0
     for s in lane_size:
@@ -108,10 +133,16 @@ def relayout(flow):
         if s:
             c += s + row_gap
     for i, lane in enumerate(L["lanes"]):
+        if folded(lane):
+            put(LG[lane], lane_pos[i], row_pos[0])
+            continue
         for r, gid in L["cells"].get(lane, {}).items():
-            put(gid, lane_pos[i], row_pos[ri(r)])
+            put(gid, lane_pos[i] + pad(lane), row_pos[ri(r)])
     B = L.get("branch")
-    if B:
+    if B and G.get(B.get("group"), {}).get("collapsed"):
+        ai = L["lanes"].index(B["anchor"]) if B.get("anchor") in L["lanes"] else 0
+        put(B["group"], lane_pos[ai], c - row_gap + B.get("gap", 150))
+    elif B:
         cols = B.get("cols", 2)
         ai = L["lanes"].index(B["anchor"]) if B.get("anchor") in L["lanes"] else 0
         es = [ext(g) for g in B["groups"]]
@@ -242,7 +273,7 @@ def build():
         flow = {"id": "flow_" + fid, "name": name, "folderId": "wf", "nodes": [], "edges": [], "groups": [],
                 "parameters": params if fid != "realtime" else [], "env": ""}
         flow["env"] = "\n".join(p["name"] + "=" + p["value"] for p in flow["parameters"])
-        layout = {"dir": "LR", "a0": 380, "c0": 160, "laneGap": COL_GAP, "rowGap": ROW_GAP,
+        layout = {"v": LAYOUT_VERSION, "dir": "LR", "a0": 380, "c0": 160, "laneGap": COL_GAP, "rowGap": ROW_GAP,
                   "lanes": [], "rows": [], "cells": {}}
         placed = set()
 
@@ -268,6 +299,15 @@ def build():
                 return gid
             return None
 
+        def wrap(gid, name, kids):
+            """外层分组：包含子分组的全部任务，插在子分组之前（先画外框）"""
+            ids = [i for k in kids for i in next(g for g in flow["groups"] if g["id"] == k)["ids"]]
+            at = min(i for i, g in enumerate(flow["groups"]) if g["id"] in kids)
+            for g in flow["groups"]:
+                if g["id"] in kids:
+                    g["parent"] = gid
+            flow["groups"].insert(at, {"id": gid, "name": name, "ids": ids, "collapsed": False})
+
         dq_of = {n["table"]: n for n in fnodes if n["kind"] == "dq"}
         doms = set()
         for cname, cnodes, by_domain in columns_spec:
@@ -289,6 +329,8 @@ def build():
                 if g:
                     cells[dom] = g
                     doms.add(dom)
+            wrap(f"g_{fid}_L_{cname}", cname, list(cells.values()))
+            layout.setdefault("laneGroups", {})[cname] = f"g_{fid}_L_{cname}"
         layout["rows"] = [d for d in dom_order if d in doms] + sorted(d for d in doms if d not in dom_order)
         if branch_spec:
             anchor, bname, bnodes = branch_spec
@@ -301,7 +343,9 @@ def build():
                 g = make_group(f"g_{fid}_{bname}_{dom}", f"{bname} · {dom_cn.get(dom, dom)}", items)
                 if g:
                     gids.append(g)
-            layout["branch"] = {"anchor": anchor, "groups": gids, "label": bname, "cols": 2, "gap": BRANCH_GAP}
+            wrap(f"g_{fid}_B_{bname}", f"{bname}（分支）", gids)
+            layout["branch"] = {"anchor": anchor, "groups": gids, "group": f"g_{fid}_B_{bname}", "label": bname,
+                                "cols": 2, "gap": BRANCH_GAP}
         for n in fnodes:
             if n["kind"] in ("start", "end"):
                 k = task_key(n)
@@ -399,6 +443,8 @@ def ensure(store, force=False):
     write_meta(store, *raw)
     if not store.flag("seeded"):
         store.ensure_project("tourism-default", "文旅数据项目", "景区经营、游客洞察与文旅数据开发", "林", "2026-10-07")
+    if not force and store.flag("seeded"):
+        upgrade_layout(store, draft)
     if force or not store.flag("seeded"):
         store.ensure_project(PID, PROJECT["name"], PROJECT["description"], PROJECT["owner"], PROJECT["createdAt"])
         store.save_draft(PID, draft)
@@ -406,6 +452,33 @@ def ensure(store, force=False):
         store.flag("seeded", "1")
         print(f"已写入 {PROJECT['name']}：{len(draft['tasks'])} 个任务，{len(draft['flows'])} 个工作流，代码中待补口径 {todo} 处（已标 TODO）")
     return draft
+
+
+def upgrade_layout(store, fresh):
+    """已有 PFT 项目的泳道工作流若排布版本较旧：替换分组、排布与节点坐标，保留任务代码、连线和用户新增的节点。"""
+    cur = store.draft(PID)
+    if not cur:
+        return
+    new_flows = {f["id"]: f for f in fresh["flows"] if f.get("layout")}
+    changed = []
+    for f in cur["flows"]:
+        nf = new_flows.get(f["id"])
+        if not nf or (f.get("layout") or {}).get("v") == LAYOUT_VERSION:
+            continue
+        dir_ = (f.get("layout") or {}).get("dir", "LR")
+        pos = {n["taskId"]: n for n in nf["nodes"]}
+        for n in f["nodes"]:
+            if n["taskId"] in pos:
+                n["x"], n["y"] = pos[n["taskId"]]["x"], pos[n["taskId"]]["y"]
+        have = {n["taskId"] for n in f["nodes"]}
+        f["groups"] = [dict(g, ids=[i for i in g["ids"] if i in have]) for g in nf["groups"]]
+        f["groups"] = [g for g in f["groups"] if g["ids"]]
+        f["layout"] = dict(nf["layout"], dir=dir_)
+        relayout(f)
+        changed.append(f["name"])
+    if changed:
+        store.save_draft(PID, cur)
+        print("已升级工作流排布：" + "、".join(changed))
 
 
 if __name__ == "__main__":

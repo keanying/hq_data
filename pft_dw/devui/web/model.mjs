@@ -10,10 +10,29 @@ export function seed(){const rows=[['景区基础信息','dim_scenic_info','DIM'
 export function worldPoint(camera,p){return {x:(p.x-camera.x)/camera.scale,y:(p.y-camera.y)/camera.scale};}
 export function zoomAt(camera,scale,point){const w=worldPoint(camera,point),s=Math.min(2.5,Math.max(.25,scale));return {x:point.x-w.x*s,y:point.y-w.y*s,scale:s};}
 export function canLink(edges,from,to){if(from===to||edges.some(e=>e[0]===from&&e[1]===to))return false;const visited=new Set();function reaches(id){if(id===from)return true;if(visited.has(id))return false;visited.add(id);return edges.filter(e=>e[0]===id).some(e=>reaches(e[1]));}return !reaches(to);}
-export function removeNodes(flow,ids){flow.nodes=flow.nodes.filter(n=>!ids.has(n.taskId));flow.edges=flow.edges.filter(e=>e.every(id=>!ids.has(id)));flow.groups.forEach(g=>g.ids=g.ids.filter(id=>!ids.has(id)));flow.groups=flow.groups.filter(g=>g.ids.length);}
-export function groupBounds(flow,group){const ns=flow.nodes.filter(n=>group.ids.includes(n.taskId));if(!ns.length)return null;const x=Math.min(...ns.map(n=>n.x))-18,y=Math.min(...ns.map(n=>n.y))-47;return {x,y,w:group.collapsed?240:Math.max(...ns.map(n=>n.x))+210-x,h:group.collapsed?82:Math.max(...ns.map(n=>n.y))+113-y};}
+// 分组可以嵌套：子分组带 parent 字段；分组的 ids 始终包含全部后代任务（父分组 ids ⊇ 子分组 ids）
+export function groupParent(flow,g){return g?.parent?flow.groups.find(x=>x.id===g.parent)||null:null}
+export function groupDepth(flow,g){let d=0,seen=new Set();for(let p=groupParent(flow,g);p&&!seen.has(p.id);p=groupParent(flow,p)){seen.add(p.id);d++}return d}
+export function hiddenGroup(flow,g){const seen=new Set();for(let p=groupParent(flow,g);p&&!seen.has(p.id);p=groupParent(flow,p)){seen.add(p.id);if(p.collapsed)return true}return false}
+export function removeNodes(flow,ids){flow.nodes=flow.nodes.filter(n=>!ids.has(n.taskId));flow.edges=flow.edges.filter(e=>e.every(id=>!ids.has(id)));flow.groups.forEach(g=>g.ids=g.ids.filter(id=>!ids.has(id)));flow.groups=flow.groups.filter(g=>g.ids.length);fixParents(flow);}
+export function fixParents(flow){const ids=new Set(flow.groups.map(g=>g.id));for(const g of flow.groups)if(g.parent&&!ids.has(g.parent))delete g.parent}
+function boxOf(flow,group,seen){
+ if(seen.has(group.id))return null;seen.add(group.id);
+ const kids=flow.groups.filter(c=>c.parent===group.id),inKid=new Set(kids.flatMap(c=>c.ids));
+ const rects=flow.nodes.filter(n=>group.ids.includes(n.taskId)&&!inKid.has(n.taskId)).map(n=>({x:n.x,y:n.y,w:192,h:96}));
+ for(const c of kids){const b=boxOf(flow,c,seen);if(b)rects.push(c.collapsed?{x:b.x,y:b.y,w:240,h:82}:b)}
+ if(!rects.length)return null;
+ const x=Math.min(...rects.map(r=>r.x))-18,y=Math.min(...rects.map(r=>r.y))-47;
+ return {x,y,w:Math.max(...rects.map(r=>r.x+r.w))+18-x,h:Math.max(...rects.map(r=>r.y+r.h))+17-y};
+}
+export function groupBounds(flow,group){const b=boxOf(flow,group,new Set());if(!b)return null;return group.collapsed?{x:b.x,y:b.y,w:240,h:82}:b;}
 // Projection changes only what is drawn; task positions, code and dependency edges stay intact.
-export function projectFlow(flow){const hidden=new Map(),items=[],byTask=new Map();for(const g of flow.groups){if(!g.collapsed)continue;const b=groupBounds(flow,g);if(!b)continue;const item={key:'group:'+g.id,groupId:g.id,ids:g.ids.filter(id=>flow.nodes.some(n=>n.taskId===id)),...b};items.push(item);for(const id of item.ids){hidden.set(id,g.id);byTask.set(id,item)}}for(const n of flow.nodes){if(hidden.has(n.taskId))continue;const item={key:'task:'+n.taskId,ids:[n.taskId],x:n.x,y:n.y,w:192,h:96};items.push(item);byTask.set(n.taskId,item)}const edges=[],seen=new Set();for(const [a,b]of flow.edges){const from=byTask.get(a),to=byTask.get(b);if(!from||!to||from.key===to.key)continue;const key=JSON.stringify([from.key,to.key]);if(seen.has(key))continue;seen.add(key);edges.push({from,to})}return {items,hidden,edges};}
+// 嵌套时取最外层的已收起分组作为卡片；被收起分组内部的子分组不画。
+export function projectFlow(flow){const hidden=new Map(),items=[],byTask=new Map();
+ const visible=flow.groups.filter(g=>g.collapsed&&!hiddenGroup(flow,g));
+ for(const g of visible){const b=groupBounds(flow,g);if(!b)continue;const item={key:'group:'+g.id,groupId:g.id,ids:g.ids.filter(id=>flow.nodes.some(n=>n.taskId===id)),...b};items.push(item);for(const id of item.ids){hidden.set(id,g.id);byTask.set(id,item)}}
+ for(const n of flow.nodes){if(hidden.has(n.taskId))continue;const item={key:'task:'+n.taskId,ids:[n.taskId],x:n.x,y:n.y,w:192,h:96};items.push(item);byTask.set(n.taskId,item)}
+ const edges=[],seen=new Set();for(const [a,b]of flow.edges){const from=byTask.get(a),to=byTask.get(b);if(!from||!to||from.key===to.key)continue;const key=JSON.stringify([from.key,to.key]);if(seen.has(key))continue;seen.add(key);edges.push({from,to})}return {items,hidden,edges};}
 
 export function connectionPairs(flow,fromKey,toKey){
  const items=projectFlow(flow).items,from=items.find(i=>i.key===fromKey),to=items.find(i=>i.key===toKey);
@@ -49,11 +68,14 @@ export function relayout(flow){
  const put=(gid,a,c)=>{const e=ext(gid);if(!e)return;const x=TB?c:a,y=TB?a:c,dx=x-e.b.x,dy=y-e.b.y;for(const id of G.get(gid).ids){const n=pos.get(id);if(n){n.x+=dx;n.y+=dy}}};
  const laneGap=L.laneGap??150,rowGap=L.rowGap??40,A0=L.a0??380,C0=L.c0??160,rows=L.rows||[],ri=r=>Math.max(0,rows.indexOf(r));
  const laneSize=L.lanes.map(()=>0),rowSize=rows.length?rows.map(()=>0):[0];
- L.lanes.forEach((lane,i)=>{for(const [r,gid] of Object.entries(L.cells[lane]||{})){const e=ext(gid);if(!e)continue;laneSize[i]=Math.max(laneSize[i],e.la);rowSize[ri(r)]=Math.max(rowSize[ri(r)],e.lc)}});
+ const LG=L.laneGroups||{},folded=lane=>G.get(LG[lane])?.collapsed;
+ L.lanes.forEach((lane,i)=>{if(folded(lane)){const e=ext(LG[lane]);if(e){laneSize[i]=e.la;rowSize[0]=Math.max(rowSize[0],e.lc)}return}for(const [r,gid] of Object.entries(L.cells[lane]||{})){const e=ext(gid);if(!e)continue;laneSize[i]=Math.max(laneSize[i],e.la+(LG[lane]?(TB?64:36):0));rowSize[ri(r)]=Math.max(rowSize[ri(r)],e.lc)}});
  const lanePos=[];let a=A0;laneSize.forEach((s,i)=>{lanePos[i]=a;if(s)a+=s+laneGap});
  const rowPos=[];let c=C0;rowSize.forEach((s,i)=>{rowPos[i]=c;if(s)c+=s+rowGap});
- L.lanes.forEach((lane,i)=>{for(const [r,gid] of Object.entries(L.cells[lane]||{}))put(gid,lanePos[i],rowPos[ri(r)])});
- if(L.branch){const B=L.branch,cols=B.cols||2,ai=Math.max(0,L.lanes.indexOf(B.anchor)),es=B.groups.map(ext),sub=Array(cols).fill(0),brow=[];
+ const pad=lane=>LG[lane]?(TB?47:18):0;
+ L.lanes.forEach((lane,i)=>{if(folded(lane)){put(LG[lane],lanePos[i],rowPos[0]);return}for(const [r,gid] of Object.entries(L.cells[lane]||{}))put(gid,lanePos[i]+pad(lane),rowPos[ri(r)])});
+ if(L.branch&&G.get(L.branch.group)?.collapsed){put(L.branch.group,lanePos[Math.max(0,L.lanes.indexOf(L.branch.anchor))],c-rowGap+(L.branch.gap??150))}
+ else if(L.branch){const B=L.branch,cols=B.cols||2,ai=Math.max(0,L.lanes.indexOf(B.anchor)),es=B.groups.map(ext),sub=Array(cols).fill(0),brow=[];
   es.forEach((e,i)=>{if(!e)return;sub[i%cols]=Math.max(sub[i%cols],e.la);const r=Math.floor(i/cols);brow[r]=Math.max(brow[r]||0,e.lc)});
   const subPos=[];let sa=lanePos[ai];sub.forEach((s,k)=>{subPos[k]=sa;sa+=s+90});
   const bPos=[];let bc=c-rowGap+(B.gap??150);brow.forEach((s,r)=>{bPos[r]=bc;bc+=s+rowGap});
