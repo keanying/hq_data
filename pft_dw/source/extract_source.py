@@ -281,5 +281,19 @@ for c in ws["B"]:
 out = os.path.join(HERE, "PFT2.0_源库表与字段.xlsx")
 wb.save(out)
 json.dump(dict(tables=tables_rows, columns=cols_rows, diff=DIFF, model=mrows), open(os.path.join(HERE, "source_tables.json"), "w", encoding="utf-8"), ensure_ascii=False)
+# 网页用：一张表一条记录，字段嵌在表里
+ODS_SHORT = defaultdict(list)
+for t in dw["tables"]:
+    if t["layer"] == "ODS":
+        ODS_SHORT[t["src"].split("（")[0].split(".")[-1]].append(t["short"])
+web = dict(info=[r for r in info], tables=[], diff=[dict(t=r[0], doc=r[1], f=r[2], k=r[3], d=r[4], a=r[5], b=r[6]) for r in DIFF],
+           model=[dict(doc=r[0], sec=r[1], e=r[2], cn=r[3], p=r[4], f=r[5], d=r[6], t=r[7], has=r[8]) for r in mrows])
+for r in tables_rows:
+    name = r[3]
+    t = MAIN.get(name) or next(x for x in OTHER if x["name"] == name)
+    web["tables"].append(dict(no=r[0], db=r[1], dom=r[2], name=name, cn=r[4], comment=r[5], n=r[6], pk=r[7], uk=r[8], idx=r[9], doc=r[10], flags=r[11],
+                              status=r[12], ods=ODS_SHORT.get(name, []), keys=t["keys"],
+                              cols=[dict(g=c["group"], n=c["name"], t=c["type"], nl=c["nullable"], df=c["default"], au=c["auto"], k=c["keys"], c=c["comment"]) for c in t["cols"]]))
+json.dump(web, open(os.path.join(HERE, "..", "web", "source.json"), "w", encoding="utf-8"), ensure_ascii=False, separators=(",", ":"))
 print("tables", len(all_names), "main", len(MAIN), "cols", len(cols_rows), "other_ddl", len(OTHER), "diff", len(DIFF), "model_entities", len(ents),
       "model_fields", sum(1 for r in MODEL if r["field"]), "no_ddl", no_ddl)

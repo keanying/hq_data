@@ -21,7 +21,8 @@ pft_dw/
 │   ├── index.html      血缘画布 / 质量体检 / 总线矩阵 / 表清单 / ADS 指标 / DWS 口径 / 待确认
 │   ├── data.json       模型数据（由 generator 生成）
 │   ├── schema.json     全表字段 + 字段级血缘 + DDL（网页按需加载）
-│   └── workflow.json   调度工作流与质检规则（网页「调度工作流」页）
+│   ├── workflow.json   调度工作流与质检规则（网页「调度工作流」页）
+│   └── source.json     客户文档提取的源库表与字段（网页「源库表与字段」页，由 source/extract_source.py 生成）
 ├── source/             客户文档提取：源库表与字段（可阅览）
 │   ├── PFT2.0_源库表与字段.xlsx   说明 / 表清单（83 张）/ 字段清单（1,184 个）/ 文档间差异 / 领域模型字段
 │   ├── source_tables.json         同一份数据的 JSON

@@ -252,6 +252,7 @@ td.lnk { width: 52px; }
 #wf-canvas svg .we.on.up { stroke: var(--dwd); }
 #wf-canvas svg .we.off { stroke-opacity: 0; }
 #wf-canvas svg .stepn { font-family: var(--mono); font-size: 11px; fill: var(--muted); }
+tr.grp-row td { background: var(--faint); font-size: 12px; color: var(--muted); font-weight: 600; padding: 4px 8px; }
 .rule { border: 1px solid var(--line); border-radius: 6px; padding: 6px 9px; margin-bottom: 6px; background: var(--surface); }
 .rule .h { display: flex; gap: 6px; align-items: baseline; flex-wrap: wrap; }
 .rule .lv { font-size: 10.5px; padding: 0 5px; border-radius: 3px; border: 1px solid; white-space: nowrap; }
@@ -367,6 +368,7 @@ h3.blk { font-size: 14px; margin: 22px 0 8px; }
     <a href="#ads" id="tab-ads">ADS 业务指标<span class="c" id="c-ads"></span></a>
     <a href="#base" id="tab-base">DWS 口径<span class="c" id="c-base"></span></a>
     <a href="#issues" id="tab-issues">待确认<span class="c" id="c-issues"></span></a>
+    <a href="#src" id="tab-src">源库表与字段<span class="c" id="c-src"></span></a>
   </nav>
 
   <!-- 血缘全景 -->
@@ -435,6 +437,20 @@ h3.blk { font-size: 14px; margin: 22px 0 8px; }
     </div>
   </section>
 
+  <section id="view-src" hidden>
+    <div class="toolbar">
+      <input type="search" id="s-q" placeholder="搜索源库表或字段：表名、字段名、中文注释，如 t_order、seller_tenant_id、退款" aria-label="搜索源库表与字段">
+      <div class="chips" id="s-mode" aria-label="视图"></div>
+      <select id="s-db" aria-label="业务库"></select>
+      <span class="count" id="s-n"></span>
+    </div>
+    <p class="small" id="s-info" style="margin:-4px 0 10px"></p>
+    <div class="layout" id="s-lay">
+      <div class="grid-wrap"><table id="s-table"><thead id="s-head"></thead><tbody id="s-body"></tbody></table></div>
+      <aside class="drawer" id="s-dr" aria-live="polite"></aside>
+    </div>
+  </section>
+
   <section id="view-ads" hidden>
     <div class="toolbar">
       <input type="search" id="a-q" placeholder="搜索业务指标，如 近7日OTA、退款率、pay_7d_amt" aria-label="搜索 ADS 指标">
@@ -493,7 +509,7 @@ const LAYERS = ["ODS", "DWD", "DIM", "DWS", "ADS"];
 
 let SCH = null, SCHP = null;
 function loadSchema() { return SCHP ||= fetch("schema.json").then(r => r.json()).then(d => (SCH = d)); }
-fetch("data.json").then(r => r.json()).then(d => { DATA = d; init(); loadSchema(); loadWF(); }).catch(() => {
+fetch("data.json").then(r => r.json()).then(d => { DATA = d; init(); loadSchema(); loadWF(); loadSrc(); }).catch(() => {
   $("#strip").innerHTML = `<div class="loading">模型数据载入失败，请刷新页面重试</div>`;
 });
 
@@ -520,13 +536,14 @@ function init() {
 }
 
 /* ================= 通用 ================= */
-const VIEWS = ["lineage", "workflow", "quality", "bus", "tables", "ads", "base", "issues"];
+const VIEWS = ["lineage", "workflow", "quality", "bus", "tables", "ads", "base", "issues", "src"];
 function go(v) { if (location.hash !== "#" + v) history.replaceState(null, "", "#" + v); show(v); }
 function show(v) {
   if (!VIEWS.includes(v)) v = "lineage";
   VIEWS.forEach(x => { $("#view-" + x).hidden = x !== v; $("#tab-" + x).setAttribute("aria-current", x === v ? "page" : "false"); });
   if (v === "lineage") requestAnimationFrame(() => { if (!window.__fit) { window.__fit = 1; VP.k = .62; focusSel(true); } });
   if (v === "workflow") { if (!WF || !$("#wvp")) renderWorkflow(); }
+  if (v === "src") renderSrc();
 }
 window.addEventListener("hashchange", () => show(location.hash.slice(1)));
 function chips(el, items, cur, set, cls = "") {
@@ -1127,6 +1144,96 @@ function linSuggest() {
   box.hidden = false;
   box.querySelectorAll("button").forEach(b => b.onclick = () => { box.hidden = true; linSelect(all[+b.dataset.i].sel); });
   return all;
+}
+
+/* ================= 源库表与字段（客户文档提取） ================= */
+let SRCD = null, SRCP = null;
+const sst = { mode: "tables", q: "", db: "", sel: null, tab: "cols", fq: "" };
+function loadSrc() { return SRCP ||= fetch("source.json").then(r => r.json()).then(d => { SRCD = d; SRCD.T = Object.fromEntries(d.tables.map(t => [t.name, t])); $("#c-src").textContent = d.tables.length; return d; }); }
+function renderSrc() {
+  if (!SRCD) { $("#s-body").innerHTML = `<tr><td class="empty">载入中…</td></tr>`; loadSrc().then(renderSrc); return; }
+  const nf = SRCD.tables.reduce((a, t) => a + t.n, 0);
+  chips($("#s-mode"), [["tables", `表 ${SRCD.tables.length}`], ["cols", `字段 ${nf}`], ["diff", `文档间差异 ${SRCD.diff.length}`], ["model", `领域模型 ${SRCD.model.filter(r => r.f !== "（实体）").length}`]], sst.mode, v => { sst.mode = v || "tables"; sst.sel = null; renderSrc(); });
+  const dbs = [...new Set(SRCD.tables.flatMap(t => t.db.split("、")))].sort();
+  const sel = $("#s-db");
+  sel.innerHTML = `<option value="">全部业务库（${dbs.length}）</option>` + dbs.map(d => `<option value="${d}" ${sst.db === d ? "selected" : ""}>${d}</option>`).join("");
+  sel.onchange = () => { sst.db = sel.value; renderSrc(); };
+  $("#s-info").textContent = "来自客户 6 份设计文档：「完整数据库设计」的建表语句为准；核心模型 / HLD 中重复给出的建表语句做了逐字段比对；领域模型取自文档里的模型树。";
+  const q = sst.q.trim().toLowerCase();
+  const inDb = t => !sst.db || t.db.split("、").includes(sst.db);
+  const H = $("#s-head"), B = $("#s-body");
+  let n = 0;
+  if (sst.mode === "tables") {
+    const rows = SRCD.tables.filter(t => inDb(t) && (!q || [t.name, t.cn, t.comment, t.dom, t.cols.map(c => c.n + " " + c.c).join(" ")].join(" ").toLowerCase().includes(q)));
+    n = rows.length;
+    H.innerHTML = `<tr><th>库</th><th>表名</th><th>中文名</th><th>字段</th><th>主键 / 唯一键</th><th>标记</th><th>数仓入仓</th></tr>`;
+    B.innerHTML = rows.map(t => `<tr class="click ${sst.sel === t.name ? "sel" : ""}" data-srow="${t.name}"><td class="mono small">${esc(t.db)}</td><td class="mono">${esc(t.name)}</td>
+      <td class="cn">${esc(t.cn)}</td><td class="num">${t.n}</td><td class="mono small">${esc(t.pk)}${t.uk ? "<br>" + esc(t.uk) : ""}</td>
+      <td class="small">${esc(t.flags || "")}${SRCD.diff.some(d => d.t === t.name) ? `<span class="fk k-主键" style="margin-left:4px">文档有差异</span>` : ""}</td>
+      <td>${t.ods.length ? t.ods.map(o => `<button class="link" data-lin="${o}"><span class="pill L-ODS">ODS</span>${esc(o)}</button>`).join("") : `<span class="small">${esc(t.status)}</span>`}</td></tr>`).join("") || `<tr><td colspan="7" class="empty">没有匹配的表</td></tr>`;
+  } else if (sst.mode === "cols") {
+    const rows = [];
+    SRCD.tables.forEach(t => { if (inDb(t)) t.cols.forEach((c, i) => { if (!q || [t.name, c.n, c.c, c.g, c.t].join(" ").toLowerCase().includes(q)) rows.push([t, c, i]); }); });
+    n = rows.length;
+    H.innerHTML = `<tr><th>表</th><th>#</th><th>字段名</th><th>类型</th><th>可空</th><th>默认值</th><th>所在键</th><th>注释</th></tr>`;
+    B.innerHTML = rows.slice(0, 600).map(([t, c, i]) => `<tr class="click" data-srow="${t.name}"><td class="mono small">${esc(t.name)}<br><span class="cn">${esc(t.cn)}</span></td><td class="num">${i + 1}</td>
+      <td class="mono">${esc(c.n)}</td><td class="mono small">${esc(c.t)}</td><td>${esc(c.nl)}</td><td class="mono small">${esc(c.df)}</td><td class="mono small">${esc(c.k)}</td><td>${esc(c.c)}</td></tr>`).join("")
+      + (rows.length > 600 ? `<tr><td colspan="8" class="empty">只显示前 600 个，请输入关键词缩小范围</td></tr>` : "") || `<tr><td colspan="8" class="empty">没有匹配的字段</td></tr>`;
+  } else if (sst.mode === "diff") {
+    const rows = SRCD.diff.filter(d => (!sst.db || inDb(SRCD.T[d.t] || { db: "" })) && (!q || [d.t, d.f, d.d, d.a, d.b].join(" ").toLowerCase().includes(q)));
+    n = rows.length;
+    H.innerHTML = `<tr><th>表名</th><th>对比文档</th><th>字段</th><th>差异</th><th>完整数据库设计</th><th>对比文档</th></tr>`;
+    B.innerHTML = rows.map(d => `<tr class="click" data-srow="${d.t}"><td class="mono">${esc(d.t)}</td><td class="small">${esc(d.doc)}</td><td class="mono">${esc(d.f)}</td>
+      <td><span class="fk ${d.k === "类型" ? "k-主键" : ""}">${esc(d.d)}</span></td><td class="small">${esc(d.a)}</td><td class="small">${esc(d.b)}</td></tr>`).join("") || `<tr><td colspan="6" class="empty">没有差异</td></tr>`;
+  } else {
+    const rows = SRCD.model.filter(r => (!q || [r.e, r.cn, r.f, r.d, r.t].join(" ").toLowerCase().includes(q)) && (!sst.db || inDb(SRCD.T[r.t] || { db: "" })));
+    n = rows.filter(r => r.f !== "（实体）").length;
+    H.innerHTML = `<tr><th>领域对象</th><th>字段</th><th>说明</th><th>对应物理表</th><th>物理表有同名字段</th><th>来源</th></tr>`;
+    B.innerHTML = rows.map(r => r.f === "（实体）"
+      ? `<tr class="grp-row"><td colspan="6"><b class="mono">${esc(r.e)}</b> <span class="cn">${esc(r.cn)}</span>${r.p ? `<span class="small"> · 隶属 ${esc(r.p)}</span>` : ""} → ${SRCD.T[r.t] ? `<button class="link" data-sopen="${r.t}">${esc(r.t)}</button>` : `<span class="fk k-主键">${esc(r.t)}</span>`}<span class="small"> · ${esc(r.doc)} / ${esc(r.sec)}</span></td></tr>`
+      : `<tr><td class="mono small">${esc(r.e)}</td><td class="mono">${esc(r.f)}</td><td class="small">${esc(r.d)}</td><td class="mono small">${esc(r.t)}</td><td class="small">${esc(r.has)}</td><td class="small">${esc(r.doc)}</td></tr>`).join("") || `<tr><td colspan="6" class="empty">没有匹配</td></tr>`;
+  }
+  $("#s-n").textContent = n + (sst.mode === "tables" ? " 张" : sst.mode === "diff" ? " 处" : " 个");
+  B.querySelectorAll("[data-srow]").forEach(r => r.onclick = e => { if (e.target.closest("button")) return; sst.sel = r.dataset.srow; sst.tab = "cols"; if (sst.mode === "tables") renderSrc(); else drawSrc(); });
+  B.querySelectorAll("[data-sopen]").forEach(b => b.onclick = () => { sst.sel = b.dataset.sopen; sst.tab = "cols"; drawSrc(); });
+  bindLinks(B);
+  drawSrc();
+}
+function drawSrc() {
+  const lay = $("#s-lay"), dr = $("#s-dr"), t = SRCD?.T[sst.sel];
+  if (!t) { lay.classList.remove("open", "wide"); dr.innerHTML = ""; return; }
+  lay.classList.add("open", "wide");
+  const diffs = SRCD.diff.filter(d => d.t === t.name), models = SRCD.model.filter(r => r.t === t.name && r.f !== "（实体）");
+  let body = "";
+  if (sst.tab === "cols") {
+    const fq = sst.fq.trim().toLowerCase();
+    let g = null;
+    const rows = t.cols.map((c, i) => [c, i]).filter(([c]) => !fq || (c.n + c.c + c.g).toLowerCase().includes(fq)).map(([c, i]) => {
+      const gh = c.g !== g ? (g = c.g, c.g ? `<tr class="grp-row"><td colspan="7">${esc(c.g)}</td></tr>` : "") : "";
+      return gh + `<tr><td class="num">${i + 1}</td><td class="mono">${esc(c.n)}</td><td class="mono small">${esc(c.t)}</td><td>${esc(c.nl)}</td><td class="mono small">${esc(c.df)}${c.au ? `<br><span class="small">${esc(c.au)}</span>` : ""}</td><td class="mono small">${esc(c.k)}</td><td>${esc(c.c)}</td></tr>`;
+    }).join("");
+    body = `<input class="fq" id="s-fq" placeholder="筛选字段名 / 注释" value="${esc(sst.fq)}">
+      <div class="grid-wrap" style="max-height:60vh"><table class="ftab"><thead><tr><th>#</th><th>字段名</th><th>类型</th><th>可空</th><th>默认值</th><th>所在键</th><th>注释</th></tr></thead><tbody>${rows}</tbody></table></div>
+      <div class="sec"><span>键与索引</span><span>${t.keys.length}</span></div>
+      <div class="links">${t.keys.map(k => `<span class="link" style="cursor:default"><b>${esc(k.kind)}</b>&nbsp;<span class="mono">${esc(k.name)} (${esc(k.cols.join(", "))})</span></span>`).join("")}</div>`;
+  } else if (sst.tab === "diff") {
+    body = `<p class="small">与「完整数据库设计」比对，以完整数据库设计为准。</p><div class="grid-wrap"><table class="ftab"><thead><tr><th>对比文档</th><th>字段</th><th>差异</th><th>完整数据库设计</th><th>对比文档</th></tr></thead><tbody>
+      ${diffs.map(d => `<tr><td class="small">${esc(d.doc)}</td><td class="mono">${esc(d.f)}</td><td>${esc(d.d)}</td><td class="small">${esc(d.a)}</td><td class="small">${esc(d.b)}</td></tr>`).join("")}</tbody></table></div>`;
+  } else {
+    body = `<div class="grid-wrap"><table class="ftab"><thead><tr><th>领域对象</th><th>字段</th><th>说明</th><th>物理表有同名字段</th></tr></thead><tbody>
+      ${models.map(r => `<tr><td class="mono small">${esc(r.e)}</td><td class="mono">${esc(r.f)}</td><td class="small">${esc(r.d)}</td><td class="small">${esc(r.has)}</td></tr>`).join("")}</tbody></table></div>`;
+  }
+  dr.innerHTML = `<div class="top"><span><span class="pill L-SRC">源库</span> <span class="mono small">${esc(t.db)}</span></span>
+      <span class="actions">${t.ods.map(o => `<button class="btn" data-lin="${o}">看 ${esc(o.endsWith("_rt") ? "实时 ODS" : "ODS")} 血缘</button>`).join("")}<button class="btn" data-copy="${t.name}">复制表名</button><button class="btn" id="s-x">关闭</button></span></div>
+    <h2>${esc(t.name)}</h2><p class="sub">${esc(t.cn)} · ${esc(t.dom)}${t.flags ? " · " + esc(t.flags) : ""}</p>
+    <p class="small" style="margin:0 0 6px">${esc(t.comment)}</p>
+    <dl><dt>定义来源</dt><dd>${esc(t.doc)}</dd><dt>数仓入仓</dt><dd>${t.ods.length ? t.ods.map(o => `<button class="link" data-t="${o}">${esc(T[o]?.name || o)}</button>`).join(" ") : esc(t.status)}</dd></dl>
+    ${ptabs(sst.tab, [["cols", "字段", t.n], ...(diffs.length ? [["diff", "文档间差异", diffs.length]] : []), ...(models.length ? [["model", "领域模型", models.length]] : [])], "data-stab")}
+    ${body}`;
+  $("#s-x").onclick = () => { sst.sel = null; sst.fq = ""; if (sst.mode === "tables") renderSrc(); else drawSrc(); };
+  dr.querySelectorAll("[data-stab]").forEach(b => b.onclick = () => { sst.tab = b.dataset.stab; drawSrc(); });
+  const fq = $("#s-fq"); if (fq) fq.oninput = e => { sst.fq = e.target.value; const pos = e.target.selectionStart; drawSrc(); const f2 = $("#s-fq"); f2.focus(); f2.setSelectionRange(pos, pos); };
+  bindLinks(dr);
 }
 
 /* ================= 调度工作流 ================= */
@@ -1753,6 +1860,7 @@ function bindStatic() {
   bindWfCanvas();
   document.addEventListener("fullscreenchange", () => { if (!document.fullscreenElement && st.lin.max) setMax(false); if (!document.fullscreenElement && wst.max) wMax(false); });
   $("#t-q").addEventListener("input", e => { st.t.q = e.target.value; renderTables(); });
+  $("#s-q").addEventListener("input", e => { sst.q = e.target.value; renderSrc(); });
   $("#a-q").addEventListener("input", e => { st.a.q = e.target.value; renderAds(); });
   $("#a-table").addEventListener("change", e => { st.a.table = e.target.value; st.a.period = null; renderAds(); });
   $("#b-q").addEventListener("input", e => { st.b.q = e.target.value; renderBase(); });
