@@ -41,7 +41,7 @@
 html, body { margin: 0; background: var(--bg); color: var(--ink); font-family: var(--body); font-size: 14px; line-height: 1.55; }
 button, input, select { font: inherit; color: inherit; }
 :focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
-.wrap { max-width: 1440px; margin: 0 auto; padding: 22px 20px 64px; }
+.wrap { max-width: none; width: 100%; box-sizing: border-box; margin: 0; padding: 18px clamp(12px, 1.6vw, 28px) 40px; }
 header { display: flex; flex-wrap: wrap; align-items: end; justify-content: space-between; gap: 12px; }
 header h1 { font-family: var(--display); font-size: 26px; margin: 0; letter-spacing: .02em; text-wrap: balance; }
 header p { margin: 2px 0 0; color: var(--muted); font-size: 13px; }
@@ -74,7 +74,7 @@ nav.tabs a .c { font-family: var(--mono); font-size: 11px; margin-left: 4px; col
 .sep { width: 1px; height: 20px; background: var(--line); }
 
 .panel { background: var(--surface); border: 1px solid var(--line); border-radius: 8px; }
-.grid-wrap { background: var(--surface); border: 1px solid var(--line); border-radius: 8px; overflow: auto; max-height: 76vh; }
+.grid-wrap { background: var(--surface); border: 1px solid var(--line); border-radius: 8px; overflow: auto; max-height: calc(100vh - 150px); }
 table { border-collapse: collapse; width: 100%; }
 th, td { text-align: left; padding: 7px 11px; border-bottom: 1px solid var(--line); vertical-align: top; }
 th { white-space: nowrap; font-size: 12px; color: var(--muted); font-weight: 500; position: sticky; top: 0; background: var(--surface); z-index: 1; }
@@ -89,7 +89,7 @@ td.cn { min-width: 9em; }
 .empty { padding: 28px; text-align: center; color: var(--muted); }
 
 .layout { display: grid; grid-template-columns: minmax(0, 1fr); gap: 14px; }
-.layout.open { grid-template-columns: minmax(0, 1fr) 440px; }
+.layout.open { grid-template-columns: minmax(0, 1fr) clamp(420px, 32vw, 640px); }
 .layout.open .col-hide { display: none; }
 aside.drawer { display: none; background: var(--surface); border: 1px solid var(--line); border-radius: 8px; padding: 16px 18px; align-self: start; position: sticky; top: 10px; max-height: calc(100vh - 20px); overflow: auto; }
 .layout.open aside.drawer { display: block; }
@@ -116,8 +116,8 @@ dd { margin: 0; word-break: break-word; }
 .chain .step b { font-family: var(--mono); font-size: 11px; color: var(--c); background: var(--cbg); border-radius: 3px; text-align: center; padding: 1px 0; }
 
 /* 血缘画布 */
-.lin-head { display: grid; grid-template-columns: minmax(0, 1fr) 360px; gap: 14px; }
-.canvas { position: relative; height: 78vh; min-height: 520px; overflow: hidden; border: 1px solid var(--line); border-radius: 8px; cursor: grab; touch-action: none; user-select: none;
+.lin-head { display: grid; grid-template-columns: minmax(0, 1fr) clamp(340px, 24vw, 460px); gap: 14px; }
+.canvas { position: relative; height: calc(100vh - 140px); min-height: 520px; overflow: hidden; border: 1px solid var(--line); border-radius: 8px; cursor: grab; touch-action: none; user-select: none;
   background-color: var(--surface); background-image: radial-gradient(var(--line) 1px, transparent 1.2px); }
 .canvas.panning { cursor: grabbing; }
 .canvas svg { display: block; width: 100%; height: 100%; }
@@ -173,7 +173,7 @@ svg .gedge.hot { stroke: var(--accent); stroke-opacity: .85; stroke-width: 2; }
 svg .node rect.bg { fill: color-mix(in srgb, var(--c) 7%, var(--surface)); stroke: transparent; }
 svg .colh { font-family: var(--mono); font-size: 15px; font-weight: 600; fill: var(--c); }
 svg .ph { font-size: 12.5px; fill: var(--muted); font-family: var(--body); }
-.lin-info { padding: 14px 16px; align-self: start; position: sticky; top: 10px; max-height: 78vh; overflow: auto; }
+.lin-info { padding: 14px 16px; align-self: start; position: sticky; top: 10px; max-height: calc(100vh - 140px); overflow: auto; }
 .lin-info h3 { margin: 0 0 4px; font-size: 14px; font-family: var(--mono); font-weight: 500; word-break: break-all; }
 .kpis { display: grid; grid-template-columns: repeat(3, 1fr); gap: 6px; margin: 10px 0; }
 .kpis div { background: var(--bg); border-radius: 6px; padding: 6px 8px; }
@@ -266,14 +266,14 @@ tr.grp-row td { background: var(--faint); font-size: 12px; color: var(--muted); 
 .wf-legend svg { width: 16px; height: 16px; }
 .crit { display: grid; gap: 3px; }
 .crit button { text-align: left; }
-.lin-head.wide { grid-template-columns: minmax(0, 1fr) 560px; }
-.layout.open.wide { grid-template-columns: minmax(0, 1fr) min(860px, 62vw); }
+.lin-head.wide { grid-template-columns: minmax(0, 1fr) clamp(480px, 36vw, 720px); }
+.layout.open.wide { grid-template-columns: minmax(0, 1fr) minmax(560px, 52%); }
 .ptabs { display: flex; gap: 2px; border-bottom: 1px solid var(--line); margin: 10px 0 8px; }
 .ptabs button { border: 0; background: none; padding: 5px 10px; font: inherit; font-size: 13px; color: var(--muted); border-bottom: 2px solid transparent; margin-bottom: -1px; cursor: pointer; }
 .ptabs button[aria-pressed="true"] { color: var(--ink); border-color: var(--accent); }
 .ptabs button .c { font-family: var(--mono); font-size: 11px; margin-left: 3px; }
 .fq { width: 100%; box-sizing: border-box; padding: 5px 9px; border: 1px solid var(--line); border-radius: 6px; background: var(--surface); margin-bottom: 6px; font: inherit; font-size: 13px; }
-.flist { display: grid; gap: 1px; max-height: 58vh; overflow: auto; border: 1px solid var(--line); border-radius: 6px; }
+.flist { display: grid; gap: 1px; max-height: calc(100vh - 360px); overflow: auto; border: 1px solid var(--line); border-radius: 6px; }
 .frow { display: grid; grid-template-columns: 26px minmax(0, 1fr) auto auto; column-gap: 8px; row-gap: 1px; align-items: baseline; text-align: left; border: 0; border-bottom: 1px solid var(--faint); background: var(--surface); padding: 5px 8px; cursor: pointer; font: inherit; color: inherit; }
 .frow:hover { background: var(--accent-soft); }
 .frow.on { background: var(--accent-soft); box-shadow: inset 3px 0 0 var(--accent); }
@@ -291,7 +291,7 @@ table.ftab td:nth-child(2), table.ftab td:nth-child(3), table.ftab td:nth-child(
 table.ftab td:nth-child(5) { min-width: 14em; }
 table.ftab td:nth-child(6) { min-width: 12em; }
 table.ftab tr.click { cursor: pointer; }
-pre.ddl { max-height: 62vh; overflow: auto; white-space: pre; font-size: 12px; }
+pre.ddl { max-height: calc(100vh - 300px); overflow: auto; white-space: pre; font-size: 12px; }
 .fchain { display: grid; gap: 6px; }
 .fchain .lay { display: grid; grid-template-columns: 44px minmax(0, 1fr); gap: 6px; align-items: start; }
 .fchain .lay > b { font-family: var(--mono); font-size: 11px; color: var(--c); background: var(--cbg); border-radius: 4px; text-align: center; padding: 1px 0; }
@@ -1025,7 +1025,7 @@ function fieldRows(sh, cur, q) {
 function fieldTable(sh, q) {
   const cols = SCH[sh].cols, ql = (q || "").trim().toLowerCase();
   const rows = cols.map((c, i) => [c, i]).filter(([c]) => !ql || (c.n + c.c + c.k + c.s).toLowerCase().includes(ql));
-  return `<div class="grid-wrap" style="max-height:62vh"><table class="ftab"><thead><tr><th>#</th><th>字段名</th><th>类型</th><th>类别</th><th>注释</th><th>加工 / 来源</th></tr></thead><tbody>
+  return `<div class="grid-wrap" style="max-height:calc(100vh - 320px)"><table class="ftab"><thead><tr><th>#</th><th>字段名</th><th>类型</th><th>类别</th><th>注释</th><th>加工 / 来源</th></tr></thead><tbody>
     ${rows.map(([c, i]) => `<tr class="click" data-linf="${sh}|${c.n}" title="点看字段血缘"><td class="num">${i + 1}</td><td class="mono">${esc(c.n)}</td><td class="mono small">${esc(c.t)}</td>
       <td><span class="fk k-${c.k}">${c.k}</span></td><td>${esc(c.c)}</td><td class="small">${esc(c.s)}</td></tr>`).join("") || `<tr><td colspan="6" class="empty">没有匹配的字段</td></tr>`}
   </tbody></table></div>`;
@@ -1213,7 +1213,7 @@ function drawSrc() {
       return gh + `<tr><td class="num">${i + 1}</td><td class="mono">${esc(c.n)}</td><td class="mono small">${esc(c.t)}</td><td>${esc(c.nl)}</td><td class="mono small">${esc(c.df)}${c.au ? `<br><span class="small">${esc(c.au)}</span>` : ""}</td><td class="mono small">${esc(c.k)}</td><td>${esc(c.c)}</td></tr>`;
     }).join("");
     body = `<input class="fq" id="s-fq" placeholder="筛选字段名 / 注释" value="${esc(sst.fq)}">
-      <div class="grid-wrap" style="max-height:60vh"><table class="ftab"><thead><tr><th>#</th><th>字段名</th><th>类型</th><th>可空</th><th>默认值</th><th>所在键</th><th>注释</th></tr></thead><tbody>${rows}</tbody></table></div>
+      <div class="grid-wrap" style="max-height:calc(100vh - 330px)"><table class="ftab"><thead><tr><th>#</th><th>字段名</th><th>类型</th><th>可空</th><th>默认值</th><th>所在键</th><th>注释</th></tr></thead><tbody>${rows}</tbody></table></div>
       <div class="sec"><span>键与索引</span><span>${t.keys.length}</span></div>
       <div class="links">${t.keys.map(k => `<span class="link" style="cursor:default"><b>${esc(k.kind)}</b>&nbsp;<span class="mono">${esc(k.name)} (${esc(k.cols.join(", "))})</span></span>`).join("")}</div>`;
   } else if (sst.tab === "diff") {
