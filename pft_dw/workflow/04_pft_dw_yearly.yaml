@@ -1,0 +1,88 @@
+# 由 generator/make_all.py 生成，请勿手改。调度器无关的工作流定义，可转 DolphinScheduler / Airflow / Azkaban
+workflow: pft_dw_yearly
+name: PFT 2.0 数仓 · 年调度
+schedule:
+  cron: 0 0 1 1 12 ?
+  timezone: Asia/Shanghai
+  description: 每年 12 月 1 日生成下一年日期维度（节假日公布后可手工重跑）
+  sla: —
+params:
+  bizdate: '${yyyyMMdd-1}  # 业务日期 T-1，格式 YYYYMMDD'
+  bizdate_begin: ${yyyy-MM-dd-1} 00:00:00
+  bizdate_end: ${yyyy-MM-dd} 00:00:00
+  bizdate_minus_7: ${yyyyMMdd-8}
+policy:
+  dq_strong_fail: 阻断：质检节点失败，下游不启动，电话 + 群告警
+  dq_weak_fail: 告警：质检节点成功，推送告警到数据群，24 小时内处理
+  task_retry: ODS 重试 3 次、其余 2 次，间隔 5 分钟
+  backfill: 补数按依赖顺序重跑，质检同样执行
+tasks:
+- name: start.yearly
+  type: CHECK
+  desc: 等待日调度完成：依赖日调度中以下质检节点在最近一次通过：无
+- name: dim_opr_date_f
+  type: SQL
+  desc: 日期维度
+  command: sql/dim/dim_opr_date_f.sql
+  depends_on:
+  - start.yearly
+  retries: 2
+  timeout_minutes: 40
+  priority: 中
+- name: dq.dim_opr_date_f
+  type: DATA_QUALITY
+  desc: 日期维度 质检
+  depends_on:
+  - dim_opr_date_f
+  on_fail: 阻断下游
+  rules:
+  - id: R0820
+    dimension: 完整性
+    name: 当日分区有数据
+    level: 弱
+    expect: cnt > 0
+    sql: SELECT COUNT(*) AS cnt FROM dim.dim_opr_date_f WHERE 1 = 1;
+  - id: R0821
+    dimension: 唯一性
+    name: 主键/粒度唯一（date_code）
+    level: 强
+    expect: dup_cnt = 0
+    sql: |-
+      SELECT COUNT(*) AS dup_cnt FROM (
+        SELECT date_code, COUNT(*) AS c FROM dim.dim_opr_date_f WHERE 1 = 1 GROUP BY date_code HAVING COUNT(*) > 1
+      ) x;
+  - id: R0822
+    dimension: 完整性
+    name: 主键/粒度键非空
+    level: 强
+    expect: null_cnt = 0
+    sql: SELECT COUNT(*) AS null_cnt FROM dim.dim_opr_date_f WHERE 1 = 1 AND (date_code IS NULL);
+  - id: R0823
+    dimension: 有效性
+    name: weekend_type 取值在枚举内
+    level: 弱
+    expect: 无返回行
+    sql: SELECT weekend_type, COUNT(*) AS cnt FROM dim.dim_opr_date_f WHERE 1 = 1 AND weekend_type NOT IN (0, 1) GROUP BY weekend_type;
+  - id: R0824
+    dimension: 有效性
+    name: holiday_type 取值在枚举内
+    level: 弱
+    expect: 无返回行
+    sql: SELECT holiday_type, COUNT(*) AS cnt FROM dim.dim_opr_date_f WHERE 1 = 1 AND holiday_type NOT IN (0, 1, 2, 3) GROUP BY holiday_type;
+  - id: R0825
+    dimension: 有效性
+    name: vacation_type 取值在枚举内
+    level: 弱
+    expect: 无返回行
+    sql: SELECT vacation_type, COUNT(*) AS cnt FROM dim.dim_opr_date_f WHERE 1 = 1 AND vacation_type NOT IN (0, 1, 2) GROUP BY vacation_type;
+  - id: R0826
+    dimension: 有效性
+    name: season_type 取值在枚举内
+    level: 弱
+    expect: 无返回行
+    sql: SELECT season_type, COUNT(*) AS cnt FROM dim.dim_opr_date_f WHERE 1 = 1 AND season_type NOT IN (1, 2, 3) GROUP BY season_type;
+- name: end.yearly
+  type: NOTIFY
+  desc: 数据就绪 · 发布：写就绪标记（_SUCCESS / 元数据就绪表），触发报表缓存刷新与下游订阅；任一强校验失败则不发布并电话告警
+  depends_on:
+  - dq.dim_opr_date_f

@@ -20,7 +20,12 @@ pft_dw/
 ├── web/                交互网页（静态，直接用任意 http 服务打开 index.html）
 │   ├── index.html      血缘画布 / 质量体检 / 总线矩阵 / 表清单 / ADS 指标 / DWS 口径 / 待确认
 │   ├── data.json       模型数据（由 generator 生成）
-│   └── schema.json     全表字段 + 字段级血缘 + DDL（网页按需加载）
+│   ├── schema.json     全表字段 + 字段级血缘 + DDL（网页按需加载）
+│   └── workflow.json   调度工作流与质检规则（网页「调度工作流」页）
+├── workflow/           调度工作流定义（调度器无关 YAML，可转 DolphinScheduler / Airflow）
+│   ├── 01_pft_dw_daily.yaml … 04_pft_dw_yearly.yaml   日 / 周 / 月 / 年调度：任务、依赖、重试、质检规则
+│   ├── 05_pft_dw_realtime.yaml                       实时：Flink CDC 源、写入表、监控项
+│   └── dq_rules.sql                                  全部数据质量规则的检测 SQL
 ├── ddl/                全部 242 张表的建表语句，按分层一个文件
 │   ├── 01_ods.sql … 05_ads.sql        离线：Hive ORC，PARTITIONED BY (travel_date)
 │   ├── 06_rt_ods.sql                  实时源：Flink CDC（mysql-cdc）源表，直读 binlog，不经 Kafka
@@ -38,6 +43,7 @@ pft_dw/
     ├── enums.py        枚举值中文含义（约 300 个），用于补全 _type/_status 字段注释
     ├── schema.py       字段规则：源字段规范化改名、DWD/DIM 扩展字段、DWS/ADS 粒度键、DDL 模板
     ├── build_schema.py 组装全部表字段、字段级上下游、DDL，并做自检
+    ├── workflow.py     由字段级血缘生成调度依赖、质检节点与规则
     └── make_all.py     入口：生成 web/data.json、web/schema.json、ddl/*.sql 与 output/*.xlsx
 ```
 
@@ -69,6 +75,15 @@ cd pft_dw/web && python3 -m http.server 8000
 - 每个字段都记录上游 `表.字段` 与加工说明，网页里点字段可看字段级全链路（ODS 字段追到业务库源字段）
 - 实时：**Flink CDC 直读 MySQL binlog，不经 Kafka**。实时 ODS 是 `mysql-cdc` 源表（先全量快照再增量，`binlog_time` 取 CDC 元数据 `op_ts`，敏感列不声明即不读取），同一作业内加工成 DWD 并写入 StarRocks；DWD/DWS/ADS 均为 StarRocks 主键模型，按 `travel_date` 分区。DWD 主键 = `travel_date` + 实体ID（变动类表再加 `change_time`），DWS/ADS 主键 = `travel_date` + 窗口 + 粒度键
 - 源库前提：`binlog_format=ROW`、`binlog_row_image=FULL`，CDC 账号需 REPLICATION SLAVE / REPLICATION CLIENT 等权限，每张源表独立 `server-id` 段；同库源表建议合并在一个作业里
+
+## 调度工作流与数据质量
+
+- **依赖来自字段级血缘**：一张表只等它真正读到的上游表（含维表），不按分层整批等待；`dwd_ord_ticket_di` 的首次核销时间回填读核销表上一周期分区，打断了同周期的互相依赖
+- **每个任务后紧跟一个质检节点**，下游依赖的是上游的质检节点：
+  - 强规则（失败阻断下游、电话告警）：核心交易表当日有数、主键/粒度唯一且非空、拉链区间不重叠且每个主键恰一条当前记录、核心 ODS 与业务库行数对账、同行勾稽（如 净成交 = 支付 − 退款）
+  - 弱规则（只告警）：外键能关联到维表、枚举取值合法、金额数量非负、比率值域、与近 7 日均值波动 ≤ 50%、DWS↔DWD 与 ADS↔DWS 合计对账、实时与离线对账
+- **流程**：日调度 00:30 处理 T-1（目标 ADS 07:30 前就绪）；周 / 月调度等日调度对应分区质检通过后启动；年调度生成日期维度；实时作业按 Flink 作业挂 CDC 延迟、Checkpoint、反压、数据新鲜度监控
+- 结束节点写就绪标记并通知下游；任一强规则失败则不发布
 
 ## 命名约定
 

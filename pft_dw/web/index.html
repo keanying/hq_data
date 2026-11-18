@@ -175,6 +175,55 @@ td.lnk { width: 52px; }
 #view-lineage.max .canvas { height: 100%; min-height: 0; }
 #view-lineage.max .lin-info { max-height: 100%; }
 .lin-head.nopanel { grid-template-columns: minmax(0, 1fr); }
+/* 调度工作流 */
+.wf-meta { display: flex; flex-wrap: wrap; gap: 6px 18px; align-items: baseline; margin: 0 0 10px; font-size: 13px; color: var(--muted); }
+.wf-meta b { color: var(--ink); font-weight: 600; font-variant-numeric: tabular-nums; }
+.wf-meta .cron { font-family: var(--mono); font-size: 12px; background: var(--faint); padding: 1px 7px; border-radius: 4px; color: var(--ink); }
+#view-workflow.max { position: fixed; inset: 0; z-index: 50; background: var(--bg); padding: 10px 14px; display: flex; flex-direction: column; }
+#view-workflow.max .toolbar, #view-workflow.max .wf-meta { flex: none; }
+#view-workflow.max .lin-head { flex: 1; min-height: 0; }
+#view-workflow.max .canvas { height: 100%; min-height: 0; }
+#view-workflow.max .lin-info { max-height: 100%; }
+#wf-canvas svg .wn { cursor: pointer; }
+#wf-canvas svg .wn rect.bg { fill: var(--cbg, var(--surface)); stroke: var(--line); }
+#wf-canvas svg .wn rect.bar { fill: var(--c); }
+#wf-canvas svg .wn text.n1 { font-family: var(--mono); font-size: 11.5px; fill: var(--ink); }
+#wf-canvas svg .wn text.n2 { font-size: 10.5px; fill: var(--muted); }
+#wf-canvas svg .wn.k-start rect.bg, #wf-canvas svg .wn.k-end rect.bg { fill: var(--ink); stroke: var(--ink); }
+#wf-canvas svg .wn.k-start text, #wf-canvas svg .wn.k-end text { fill: var(--bg); }
+#wf-canvas svg .wn path.dia { stroke-width: 1.5; }
+#wf-canvas svg .wn.blk path.dia { fill: var(--crit); stroke: var(--crit); }
+#wf-canvas svg .wn.wrn path.dia { fill: var(--surface); stroke: var(--warn); }
+#wf-canvas svg .wn.mon path.dia { fill: var(--surface); stroke: var(--info); }
+#wf-canvas svg .wn.rec path.dia { fill: var(--surface); stroke: var(--ads); }
+#wf-canvas svg .wn text.dq { font-size: 11px; fill: var(--ink); }
+#wf-canvas svg .wn text.dq tspan.s { fill: var(--crit); font-family: var(--mono); }
+#wf-canvas svg .wn text.dq tspan.w { fill: var(--warn); font-family: var(--mono); }
+#wf-canvas svg .wn:hover rect.bg { stroke: var(--accent); }
+#wf-canvas svg .wn.sel rect.bg, #wf-canvas svg .wn.sel rect.hl { stroke: var(--accent); stroke-width: 2.5; }
+#wf-canvas svg .wn rect.hl { fill: transparent; stroke: none; }
+#wf-canvas svg .wn.hit rect.bg, #wf-canvas svg .wn.hit rect.hl { stroke: var(--c, var(--accent)); stroke-width: 1.6; }
+#wf-canvas svg .wn.match rect.bg, #wf-canvas svg .wn.match rect.hl { stroke: var(--accent); stroke-dasharray: 4 3; stroke-width: 2; }
+#wf-canvas svg .wn.off { opacity: .22; }
+#wf-canvas svg .we { fill: none; stroke: var(--muted); stroke-opacity: .25; stroke-width: 1; }
+#wf-canvas svg .we.cut { stroke: var(--crit); stroke-dasharray: 5 4; stroke-opacity: .7; }
+#wf-canvas svg .we.on { stroke: var(--accent); stroke-opacity: .9; stroke-width: 1.7; }
+#wf-canvas svg .we.on.up { stroke: var(--dwd); }
+#wf-canvas svg .we.off { stroke-opacity: .05; }
+#wf-canvas svg .stepn { font-family: var(--mono); font-size: 11px; fill: var(--muted); }
+.rule { border: 1px solid var(--line); border-radius: 6px; padding: 6px 9px; margin-bottom: 6px; background: var(--surface); }
+.rule .h { display: flex; gap: 6px; align-items: baseline; flex-wrap: wrap; }
+.rule .lv { font-size: 10.5px; padding: 0 5px; border-radius: 3px; border: 1px solid; white-space: nowrap; }
+.rule .lv.s { color: var(--crit); border-color: var(--crit); } .rule .lv.w { color: var(--warn); border-color: var(--warn); }
+.rule .dm { font-size: 11px; color: var(--muted); }
+.rule .ex { font-size: 12px; color: var(--muted); margin-top: 2px; }
+.rule details summary { font-size: 12px; color: var(--accent); cursor: pointer; margin-top: 3px; }
+.rule pre.code { margin: 4px 0 0; font-size: 11.5px; white-space: pre-wrap; }
+.wf-legend { display: flex; flex-wrap: wrap; gap: 10px 14px; font-size: 12px; color: var(--muted); margin-top: 10px; }
+.wf-legend span { display: inline-flex; align-items: center; gap: 5px; }
+.wf-legend svg { width: 16px; height: 16px; }
+.crit { display: grid; gap: 3px; }
+.crit button { text-align: left; }
 .lin-head.wide { grid-template-columns: minmax(0, 1fr) 560px; }
 .layout.open.wide { grid-template-columns: minmax(0, 1fr) min(860px, 62vw); }
 .ptabs { display: flex; gap: 2px; border-bottom: 1px solid var(--line); margin: 10px 0 8px; }
@@ -270,6 +319,7 @@ h3.blk { font-size: 14px; margin: 22px 0 8px; }
 
   <nav class="tabs" aria-label="视图">
     <a href="#lineage" id="tab-lineage">血缘全景</a>
+    <a href="#workflow" id="tab-workflow">调度工作流<span class="c" id="c-wf"></span></a>
     <a href="#quality" id="tab-quality">质量体检</a>
     <a href="#bus" id="tab-bus">总线矩阵<span class="c" id="c-bus"></span></a>
     <a href="#tables" id="tab-tables">表清单<span class="c" id="c-tables"></span></a>
@@ -294,6 +344,23 @@ h3.blk { font-size: 14px; margin: 22px 0 8px; }
     <div class="lin-head">
       <div class="canvas" id="lin-canvas"></div>
       <aside class="panel lin-info" id="lin-info"></aside>
+    </div>
+  </section>
+
+  <!-- 调度工作流 -->
+  <section id="view-workflow" hidden>
+    <div class="toolbar">
+      <input type="search" id="wf-q" placeholder="找任务：表名或中文名，回车定位" aria-label="查找任务" autocomplete="off">
+      <div class="chips" id="wf-flow" aria-label="工作流"></div>
+      <span class="sep"></span>
+      <div class="chips" id="wf-opt"></div>
+      <span class="sep"></span>
+      <div class="chips" id="wf-dom" aria-label="业务域"></div>
+    </div>
+    <div class="wf-meta" id="wf-meta"></div>
+    <div class="lin-head" id="wf-head">
+      <div class="canvas" id="wf-canvas"></div>
+      <aside class="panel lin-info" id="wf-info"></aside>
     </div>
   </section>
 
@@ -385,7 +452,7 @@ const LAYERS = ["ODS", "DWD", "DIM", "DWS", "ADS"];
 
 let SCH = null, SCHP = null;
 function loadSchema() { return SCHP ||= fetch("schema.json").then(r => r.json()).then(d => (SCH = d)); }
-fetch("data.json").then(r => r.json()).then(d => { DATA = d; init(); loadSchema(); }).catch(() => {
+fetch("data.json").then(r => r.json()).then(d => { DATA = d; init(); loadSchema(); loadWF(); }).catch(() => {
   $("#strip").innerHTML = `<div class="loading">模型数据载入失败，请刷新页面重试</div>`;
 });
 
@@ -412,12 +479,13 @@ function init() {
 }
 
 /* ================= 通用 ================= */
-const VIEWS = ["lineage", "quality", "bus", "tables", "ads", "base", "issues"];
+const VIEWS = ["lineage", "workflow", "quality", "bus", "tables", "ads", "base", "issues"];
 function go(v) { if (location.hash !== "#" + v) history.replaceState(null, "", "#" + v); show(v); }
 function show(v) {
   if (!VIEWS.includes(v)) v = "lineage";
   VIEWS.forEach(x => { $("#view-" + x).hidden = x !== v; $("#tab-" + x).setAttribute("aria-current", x === v ? "page" : "false"); });
   if (v === "lineage") requestAnimationFrame(() => { if (!window.__fit) { window.__fit = 1; VP.k = .62; focusSel(true); } });
+  if (v === "workflow") { if (!WF || !$("#wvp")) renderWorkflow(); }
 }
 window.addEventListener("hashchange", () => show(location.hash.slice(1)));
 function chips(el, items, cur, set, cls = "") {
@@ -897,6 +965,272 @@ function linSuggest() {
   return all;
 }
 
+/* ================= 调度工作流 ================= */
+let WF = null, WFP = null;
+const wst = { flow: "daily", sel: null, dom: null, only: null, max: false, cut: true };
+const WVP = { k: .5, x: 20, y: 10 };
+let WL = null;
+const WLAY = ["ODS", "DIM", "DWD", "DWS", "ADS"];
+function loadWF() {
+  return WFP ||= fetch("workflow.json").then(r => r.json()).then(d => {
+    WF = d; WF.N = Object.fromEntries(d.nodes.map(n => [n.id, n])); WF.down = {};
+    d.nodes.forEach(n => n.deps.forEach(x => (WF.down[x] ||= []).push(n.id)));
+    WF.F = Object.fromEntries(d.flows.map(f => [f.id, f]));
+    $("#c-wf").textContent = d.flows.reduce((a, f) => a + f.tasks, 0);
+    return d;
+  });
+}
+const WSIZE = { task: [236, 36], dq: [158, 26], recon: [196, 26], start: [170, 36], end: [170, 36] };
+function wfLayout() {
+  const ns = WF.nodes.filter(n => n.flow === wst.flow);
+  const cols = {};
+  ns.forEach(n => (cols[n.level] ||= []).push(n));
+  const lv = Object.keys(cols).map(Number).sort((a, b) => a - b);
+  const pos = {}, GAPX = 64, TOPY = 44;
+  let x = 20, H = 0;
+  const lord = n => WLAY.indexOf(n.layer);
+  for (const l of lv) {
+    const col = cols[l];
+    col.forEach(n => {
+      const ys = n.deps.map(d => pos[d]).filter(Boolean).map(p => p.y + p.h / 2);
+      n._bary = ys.length ? ys.reduce((a, b) => a + b, 0) / ys.length : null;
+    });
+    col.sort((a, b) => (a._bary ?? -1) - (b._bary ?? -1) || lord(a) - lord(b) || (a.domain || "").localeCompare(b.domain || "") || a.id.localeCompare(b.id));
+    const w = Math.max(...col.map(n => WSIZE[n.kind][0]));
+    let y = TOPY;
+    col.forEach(n => {
+      const [nw, nh] = WSIZE[n.kind];
+      // 尽量和上游对齐，避免重叠
+      pos[n.id] = { x, y, w: nw, h: nh, n };
+      y += nh + (n.kind === "dq" ? 14 : 10);
+    });
+    H = Math.max(H, y);
+    pos["__col" + l] = { x, w };
+    x += w + GAPX;
+  }
+  const edges = [];
+  ns.forEach(n => {
+    n.deps.forEach(d => { if (pos[d]) edges.push({ u: d, v: n.id, k: "" }); });
+    if (wst.cut) (n.cut || []).forEach(d => { if (pos[d]) edges.push({ u: d, v: n.id, k: "cut" }); });
+  });
+  WL = { pos, edges, lv, W: x, H: H + 20 };
+}
+function wPath(e) {
+  const a = WL.pos[e.u], b = WL.pos[e.v];
+  const x1 = a.x + a.w, y1 = a.y + a.h / 2, x2 = b.x, y2 = b.y + b.h / 2;
+  if (e.k === "cut") { const dx = Math.max(80, Math.abs(x1 - x2) * .4); return `M${x1},${y1} C${x1 + dx},${y1 - 120} ${x2 - dx},${y2 - 120} ${x2},${y2}`; }
+  const dx = Math.max(30, (x2 - x1) * .5);
+  return `M${x1},${y1} C${x1 + dx},${y1} ${x2 - dx},${y2} ${x2},${y2}`;
+}
+const dia = (cx, cy, r) => `M${cx},${cy - r} L${cx + r},${cy} L${cx},${cy + r} L${cx - r},${cy} Z`;
+function wNode(p) {
+  const n = p.n, L = n.layer || "";
+  if (n.kind === "task") {
+    const t = T[n.table];
+    return `<g class="wn k-task L-${L}" data-w="${esc(n.id)}" transform="translate(${p.x},${p.y})"><rect class="bg" width="${p.w}" height="${p.h}" rx="5"/><rect class="bar" width="4" height="${p.h}" rx="2"/>
+      <text class="n1" x="10" y="15">${esc(t ? t.name : n.id)}</text><text class="n2" x="10" y="29">${esc(n.cn)}${n.cut?.length ? " · 含T-1依赖" : ""}</text></g>`;
+  }
+  if (n.kind === "start" || n.kind === "end") {
+    return `<g class="wn k-${n.kind}" data-w="${esc(n.id)}" transform="translate(${p.x},${p.y})"><rect class="bg" width="${p.w}" height="${p.h}" rx="18"/>
+      <text class="n1" x="${p.w / 2}" y="15" text-anchor="middle" style="font-family:var(--body);font-weight:600">${n.kind === "start" ? "▶ " : "■ "}${esc(n.cn)}</text>
+      <text class="n2" x="${p.w / 2}" y="29" text-anchor="middle">${esc(WF.F[n.flow].name)}</text></g>`;
+  }
+  const cls = n.kind === "recon" ? "rec" : n.monitor ? "mon" : n.block ? "blk" : "wrn";
+  const label = n.kind === "recon" ? "实时/离线对账" : n.monitor ? (n.job && !n.table ? "作业监控" : "监控") : "质检";
+  return `<g class="wn k-${n.kind} ${cls} L-${L}" data-w="${esc(n.id)}" transform="translate(${p.x},${p.y})"><rect class="hl" width="${p.w}" height="${p.h}" rx="13"/>
+    <path class="dia" d="${dia(13, p.h / 2, 9)}"/>
+    <text class="dq" x="28" y="${p.h / 2 + 4}">${label}${n.table && n.kind !== "recon" ? "" : ""} <tspan class="s">强${n.strong}</tspan> <tspan class="w">弱${n.weak}</tspan></text></g>`;
+}
+function renderWorkflow() {
+  if (!WF) { $("#wf-canvas").innerHTML = `<div class="loading" style="padding:20px">工作流载入中…</div>`; loadWF().then(renderWorkflow); return; }
+  chips($("#wf-flow"), WF.flows.map(f => [f.id, `${f.name} ${f.tasks}`]), wst.flow, v => { wst.flow = v || "daily"; wst.sel = null; WVP.k = .5; WVP.x = 20; WVP.y = 10; renderWorkflow(); });
+  chips($("#wf-opt"), [["strong", "只看阻断型质检"], ["cut", "显示 T-1 依赖"]], null, v => { if (v === "strong") wst.only = wst.only ? null : "strong"; if (v === "cut") wst.cut = !wst.cut; renderWorkflow(); });
+  $("#wf-opt").querySelectorAll(".chip").forEach(b => b.setAttribute("aria-pressed", b.dataset.v === "strong" ? !!wst.only : wst.cut));
+  chips($("#wf-dom"), domItems(), wst.dom, v => { wst.dom = v; paintWorkflow(); }, "mono");
+  const f = WF.F[wst.flow];
+  $("#wf-meta").innerHTML = `<span><span class="cron">${esc(f.cron)}</span> ${esc(f.when)}</span><span>SLA <b>${esc(f.sla)}</b></span>
+    <span>任务 <b>${f.tasks}</b></span><span>${wst.flow === "realtime" ? "监控节点" : "质检节点"} <b>${f.dq}</b></span><span>规则 <b>${f.rules}</b></span><span>串行步数 <b>${f.depth}</b></span>`;
+  wfLayout();
+  const out = [`<svg role="img" aria-label="调度工作流画布"><g id="wvp">`];
+  WL.lv.forEach((l, i) => { const c = WL.pos["__col" + l]; out.push(`<text class="stepn" x="${c.x}" y="26">步骤 ${i + 1}</text>`); });
+  out.push(`<g id="w-edges">` + WL.edges.map((e, i) => `<path class="we ${e.k}" data-i="${i}" d="${wPath(e)}"/>`).join("") + `</g>`);
+  out.push(Object.values(WL.pos).filter(p => p.n).map(wNode).join(""));
+  out.push(`</g></svg><div class="cv-tools"><button id="wz-in" title="放大">＋</button><span class="z" id="wz-v"></span><button id="wz-out" title="缩小">－</button>
+    <span class="sepv"></span><button id="wz-fit">适应全图</button><button id="wz-sel">回到选中</button><span class="sepv"></span><button id="wz-max">${wst.max ? "退出最大化" : "最大化"}</button></div>
+    <div class="cv-hint">拖动空白处平移 · 滚轮缩放 · 点任务看上下游与质检规则</div>`);
+  $("#wf-canvas").innerHTML = out.join("");
+  $("#wz-in").onclick = () => wZoom(1.25); $("#wz-out").onclick = () => wZoom(.8);
+  $("#wz-fit").onclick = wFit; $("#wz-sel").onclick = () => wFocus(true);
+  $("#wz-max").onclick = () => wMax(!wst.max);
+  applyWVP(); paintWorkflow();
+}
+function wClosure(id, key) {
+  const seen = new Set(), st2 = [id];
+  while (st2.length) { const x = st2.pop(); const nx = key === "up" ? (WF.N[x]?.deps || []) : (WF.down[x] || []); nx.forEach(y => { if (!seen.has(y) && WL.pos[y]) { seen.add(y); st2.push(y); } }); }
+  return seen;
+}
+function paintWorkflow() {
+  const s = wst.sel && WL.pos[wst.sel] ? wst.sel : null;
+  const up = s ? wClosure(s, "up") : null, down = s ? wClosure(s, "down") : null;
+  const q = ($("#wf-q").value || "").trim().toLowerCase();
+  document.querySelectorAll("#wf-canvas .wn").forEach(g => {
+    const id = g.dataset.w, n = WF.N[id];
+    const inS = s && (up.has(id) || down.has(id));
+    let off = s ? !(inS || id === s) : false;
+    if (!s && wst.dom && n.domain && n.domain !== wst.dom) off = true;
+    if (wst.only && n.kind === "dq" && !n.block) off = true;
+    g.classList.toggle("sel", id === s); g.classList.toggle("hit", !!inS); g.classList.toggle("off", off);
+    g.classList.toggle("match", !!q && q.length >= 2 && (id + " " + (n.cn || "")).toLowerCase().includes(q));
+  });
+  document.querySelectorAll("#wf-canvas .we").forEach(p => {
+    const e = WL.edges[+p.dataset.i];
+    let on = false, isUp = false;
+    if (s) {
+      const U = new Set([...up, s]), D = new Set([...down, s]);
+      if (U.has(e.u) && U.has(e.v)) { on = true; isUp = true; } else if (D.has(e.u) && D.has(e.v)) on = true;
+    }
+    p.classList.toggle("on", on); p.classList.toggle("up", isUp); p.classList.toggle("off", !!s && !on);
+  });
+  const g = $("#w-edges"); if (g) g.querySelectorAll(".we.on").forEach(p => g.appendChild(p));
+  renderWfInfo(s);
+}
+function wl(id) {
+  const n = WF.N[id]; if (!n) return `<span class="mono">${esc(id)}</span>`;
+  const t = n.table && T[n.table];
+  const tag = n.kind === "task" ? `<span class="pill L-${n.layer}">${n.layer}</span>` : n.kind === "dq" || n.kind === "recon" ? `<span class="fk ${n.block ? "k-主键" : ""}">${n.monitor ? "监控" : n.kind === "recon" ? "对账" : "质检"}</span>` : "";
+  return `<button class="link" data-wn="${esc(id)}">${tag}${esc(n.kind === "task" && t ? t.name : n.kind === "dq" || n.kind === "recon" ? (n.cn || id) : n.cn || id)}</button>`;
+}
+const wfLegend = `<div class="wf-legend">
+  <span><svg viewBox="0 0 16 16"><path d="${dia(8, 8, 6)}" fill="var(--crit)" stroke="var(--crit)"/></svg>阻断型质检（含强规则）</span>
+  <span><svg viewBox="0 0 16 16"><path d="${dia(8, 8, 6)}" fill="none" stroke="var(--warn)" stroke-width="1.5"/></svg>告警型质检</span>
+  <span><svg viewBox="0 0 16 16"><path d="${dia(8, 8, 6)}" fill="none" stroke="var(--ads)" stroke-width="1.5"/></svg>实时/离线对账</span>
+  <span><svg viewBox="0 0 16 16"><path d="${dia(8, 8, 6)}" fill="none" stroke="var(--info)" stroke-width="1.5"/></svg>实时监控</span>
+  <span><i style="display:inline-block;width:18px;border-top:2px dashed var(--crit)"></i>依赖上一周期（T-1）</span></div>`;
+function ruleHtml(r) {
+  return `<div class="rule"><div class="h"><span class="lv ${r.level === "强" ? "s" : "w"}">${r.level === "强" ? "强 · 阻断" : "弱 · 告警"}</span><b style="font-size:12.5px">${esc(r.name)}</b><span class="dm">${esc(r.code)} · ${r.id}</span></div>
+    <div class="ex">期望：${esc(r.expect)}${r.desc ? "；" + esc(r.desc) : ""}</div>
+    <details><summary>查看检测 SQL</summary><pre class="code">${esc(r.sql)}</pre><button class="btn" data-copy="${esc(r.sql)}" style="margin-top:4px">复制</button></details></div>`;
+}
+function renderWfInfo(s) {
+  const box = $("#wf-info"), f = WF.F[wst.flow];
+  if (!s) {
+    const rs = WF.nodes.filter(n => n.flow === wst.flow).flatMap(n => n.rules);
+    const by = {}; rs.forEach(r => { by[r.code] = (by[r.code] || 0) + 1; });
+    const cuts = WF.cut.filter(c => WF.N[c[0]]?.flow === wst.flow);
+    box.innerHTML = `<h3 style="font-family:var(--body);font-size:15px">${esc(f.name)}</h3>
+      <p class="small" style="margin:0">${esc(f.when)}</p>
+      <div class="kpis"><div><b>${f.tasks}</b><span>任务</span></div><div><b>${f.dq}</b><span>${wst.flow === "realtime" ? "监控节点" : "质检节点"}</span></div><div><b>${rs.length}</b><span>规则（强 ${rs.filter(r => r.level === "强").length}）</span></div></div>
+      ${wst.flow === "realtime" ? `<p class="small">Flink CDC 直读业务库 binlog，作业常驻运行；每个源表、每张 StarRocks 表、每个作业都挂监控。实时与离线的对账在日调度里做（紫色菱形）。</p>`
+        : `<p class="small">依赖来自字段级血缘：一张表只等它真正读到的上游。每个任务后紧跟质检节点，<b style="color:var(--crit)">强规则</b>失败则下游不启动，<b style="color:var(--warn)">弱规则</b>只告警。</p>`}
+      <div class="sec"><span>规则按维度</span></div><div class="links">${Object.entries(by).map(([k, v]) => `<span class="link" style="cursor:default">${esc(k)} ${v}</span>`).join("")}</div>
+      ${f.critical?.length ? `<div class="sec"><span>关键路径（最长依赖链）</span><span>${f.critical.length} 步</span></div><div class="crit">${f.critical.map(wl).join("")}</div>` : ""}
+      ${cuts.length ? `<div class="sec"><span>依赖上一周期（T-1）</span></div>${cuts.map(c => `<p class="small" style="margin:0 0 6px">${wl(c[0])} ← ${wl(c[1])}<br>${esc(c[2])}</p>`).join("")}` : ""}
+      ${wst.flow === "realtime" ? `<div class="sec"><span>Flink 作业</span><span>${WF.jobs.length}</span></div>${WF.jobs.map(j => `<p class="small" style="margin:0 0 6px">${wl("dq." + j.id)}<br>读：${j.sources.map(esc).join("、")}<br>写：${j.sinks.map(esc).join("、")}</p>`).join("")}` : ""}
+      ${wfLegend}`;
+    bindWf(box); return;
+  }
+  const n = WF.N[s], t = n.table && T[n.table];
+  const downs = (WF.down[s] || []);
+  const dq = WF.N["dq." + n.id];
+  let body = "";
+  if (n.kind === "task") {
+    body = `<dl style="margin-top:8px"><dt>阶段</dt><dd>${esc(n.stage)}</dd><dt>引擎</dt><dd>${esc(n.engine)}</dd>
+      <dt>执行</dt><dd class="mono" style="word-break:break-all">${esc(n.cmd)}</dd>
+      ${wst.flow === "realtime" ? `<dt>作业</dt><dd class="mono">${esc(n.job || "—")}</dd>` : `<dt>重试/超时</dt><dd>${n.retries} 次 / ${n.timeout_min} 分钟</dd><dt>优先级</dt><dd>${esc(n.priority)}</dd>`}</dl>
+      ${dq ? `<div class="sec"><span>本表质检</span><span>${dq.rules.length} 条</span></div><div class="links">${wl(dq.id)}</div>` : ""}`;
+  } else if (n.kind === "dq" || n.kind === "recon") {
+    body = `<p class="small" style="margin:6px 0">${n.monitor ? "实时监控：异常时告警，不阻断作业" : n.block ? "<b style='color:var(--crit)'>阻断型</b>：任一强规则失败，本节点失败，下游任务不启动" : "<b style='color:var(--warn)'>告警型</b>：规则失败只推送告警，下游照常运行"}</p>
+      ${n.desc ? `<p class="small">${esc(n.desc)}</p>` : ""}
+      <div class="sec"><span>检测规则</span><span>强 ${n.strong} · 弱 ${n.weak}</span></div>${n.rules.map(ruleHtml).join("")}`;
+  } else {
+    body = `<p class="small" style="margin:6px 0">${esc(n.desc || "")}</p>`;
+  }
+  box.innerHTML = `<div class="top"><span>${n.kind === "task" ? `<span class="pill L-${n.layer}">${n.layer}</span>` : `<span class="fk">${{ dq: n.monitor ? "监控" : "质检", recon: "对账", start: "开始", end: "结束" }[n.kind]}</span>`}</span>
+      <span class="actions">${t ? `<button class="btn" data-lin="${n.table}">看血缘</button><button class="btn" data-t="${n.table}">表详情</button>` : ""}<button class="btn" id="wf-clear">清除</button></span></div>
+    <h3>${esc(n.kind === "task" && t ? t.name : n.id)}</h3><p class="small" style="margin:0">${esc(n.cn || "")}</p>
+    ${body}
+    <div class="sec"><span>等待（上游）</span><span>${n.deps.length}</span></div><div class="links">${n.deps.map(wl).join("") || "<span class='none'>无，流程起点</span>"}</div>
+    ${n.cut?.length ? `<div class="sec"><span>依赖上一周期（T-1）</span></div><div class="links">${n.cut.map(wl).join("")}</div>` : ""}
+    ${n.cross?.length ? `<div class="sec"><span>跨流程依赖（等最近一次完成）</span></div><div class="links">${n.cross.map(x => `<span class="link" style="cursor:default">${esc(x)}</span>`).join("")}</div>` : ""}
+    <div class="sec"><span>触发（下游）</span><span>${downs.length}</span></div><div class="links">${downs.map(wl).join("") || "<span class='none'>无</span>"}</div>${wfLegend}`;
+  $("#wf-clear").onclick = () => { wst.sel = null; paintWorkflow(); };
+  bindWf(box);
+}
+function bindWf(root) {
+  bindLinks(root);
+  root.querySelectorAll("[data-wn]").forEach(x => x.onclick = e => { e.stopPropagation(); wSelect(x.dataset.wn); });
+}
+function wSelect(id) {
+  const n = WF.N[id]; if (!n) return;
+  if (n.flow !== wst.flow) { wst.flow = n.flow; wst.sel = id; renderWorkflow(); } else { wst.sel = id; paintWorkflow(); }
+  requestAnimationFrame(() => wFocus(false));
+}
+function applyWVP() {
+  const g = $("#wvp"); if (!g) return;
+  g.setAttribute("transform", `translate(${WVP.x},${WVP.y}) scale(${WVP.k})`);
+  const c = $("#wf-canvas");
+  c.style.backgroundSize = `${22 * WVP.k}px ${22 * WVP.k}px`; c.style.backgroundPosition = `${WVP.x}px ${WVP.y}px`;
+  const z = $("#wz-v"); if (z) z.textContent = Math.round(WVP.k * 100) + "%";
+}
+function wZoom(f, cx, cy) {
+  const r = $("#wf-canvas").getBoundingClientRect();
+  cx ??= r.width / 2; cy ??= r.height / 2;
+  const k2 = Math.min(2.2, Math.max(.06, WVP.k * f));
+  WVP.x = cx - (cx - WVP.x) * k2 / WVP.k; WVP.y = cy - (cy - WVP.y) * k2 / WVP.k; WVP.k = k2; applyWVP();
+}
+function wFit() {
+  const r = $("#wf-canvas").getBoundingClientRect(); if (!r.width) return;
+  const k = Math.min(r.width / (WL.W + 20), r.height / (WL.H + 20));
+  WVP.k = Math.max(.06, k); WVP.x = 10; WVP.y = 10; applyWVP();
+}
+function wFocus(force) {
+  const p = wst.sel && WL?.pos[wst.sel]; if (!p) return;
+  const r = $("#wf-canvas").getBoundingClientRect(); if (!r.width) return;
+  if (force || WVP.k < .45) WVP.k = Math.max(WVP.k, .6);
+  const sx = p.x * WVP.k + WVP.x, sy = p.y * WVP.k + WVP.y;
+  if (!force && sx > 40 && sx < r.width - 220 && sy > 40 && sy < r.height - 60) return;
+  WVP.x = r.width * .4 - (p.x + p.w / 2) * WVP.k; WVP.y = r.height * .45 - p.y * WVP.k; applyWVP();
+}
+function wMax(on) {
+  wst.max = on;
+  $("#view-workflow").classList.toggle("max", on); document.body.classList.toggle("locked", on);
+  const m = $("#wz-max"); if (m) m.textContent = on ? "退出最大化" : "最大化";
+  try {
+    if (on && !document.fullscreenElement && document.documentElement.requestFullscreen) document.documentElement.requestFullscreen().catch(() => {});
+    if (!on && document.fullscreenElement) document.exitFullscreen().catch(() => {});
+  } catch (e) {}
+}
+function bindWfCanvas() {
+  const c = $("#wf-canvas");
+  let drag = null;
+  c.addEventListener("wheel", e => { e.preventDefault(); const r = c.getBoundingClientRect(); wZoom(Math.exp(-e.deltaY * .0015), e.clientX - r.left, e.clientY - r.top); }, { passive: false });
+  c.addEventListener("pointerdown", e => {
+    if (e.target.closest(".cv-tools")) return;
+    const n = e.target.closest(".wn");
+    drag = { sx: e.clientX, sy: e.clientY, moved: false, node: n ? n.dataset.w : null, vx: WVP.x, vy: WVP.y };
+    c.setPointerCapture(e.pointerId);
+  });
+  c.addEventListener("pointermove", e => {
+    if (!drag) return;
+    const dx = e.clientX - drag.sx, dy = e.clientY - drag.sy;
+    if (!drag.moved && Math.hypot(dx, dy) < 4) return;
+    drag.moved = true; c.classList.add("panning"); WVP.x = drag.vx + dx; WVP.y = drag.vy + dy; applyWVP();
+  });
+  const end = () => {
+    if (drag && !drag.moved && drag.node) { wst.sel = wst.sel === drag.node ? null : drag.node; paintWorkflow(); }
+    drag = null; c.classList.remove("panning");
+  };
+  c.addEventListener("pointerup", end); c.addEventListener("pointercancel", end);
+  const q = $("#wf-q");
+  q.addEventListener("input", () => paintWorkflow());
+  q.addEventListener("keydown", e => {
+    if (e.key !== "Enter") return;
+    const v = q.value.trim().toLowerCase(); if (!v) return;
+    const hit = WF.nodes.find(n => n.kind === "task" && n.flow === wst.flow && (n.id + " " + n.cn).toLowerCase().includes(v)) || WF.nodes.find(n => n.kind === "task" && (n.id + " " + n.cn).toLowerCase().includes(v));
+    if (hit) wSelect(hit.id);
+  });
+}
+
 /* ================= 质量体检 ================= */
 function renderQuality() {
   const Q = DATA.quality;
@@ -1147,8 +1481,9 @@ function bindStatic() {
   });
   document.addEventListener("click", e => { if (!e.target.closest(".searchwrap")) $("#lin-sugg").hidden = true; });
   bindCanvas();
-  document.addEventListener("keydown", e => { if (e.key === "Escape" && st.lin.max) setMax(false); });
-  document.addEventListener("fullscreenchange", () => { if (!document.fullscreenElement && st.lin.max) setMax(false); });
+  document.addEventListener("keydown", e => { if (e.key === "Escape" && st.lin.max) setMax(false); if (e.key === "Escape" && wst.max) wMax(false); });
+  bindWfCanvas();
+  document.addEventListener("fullscreenchange", () => { if (!document.fullscreenElement && st.lin.max) setMax(false); if (!document.fullscreenElement && wst.max) wMax(false); });
   $("#t-q").addEventListener("input", e => { st.t.q = e.target.value; renderTables(); });
   $("#a-q").addEventListener("input", e => { st.a.q = e.target.value; renderAds(); });
   $("#a-table").addEventListener("change", e => { st.a.table = e.target.value; st.a.period = null; renderAds(); });

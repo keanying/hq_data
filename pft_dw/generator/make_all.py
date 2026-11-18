@@ -126,6 +126,8 @@ for t in tables:
     t["engine"] = SCH[t["short"]]["engine"]
 json.dump({k: dict(cols=v["cols"], ddl=v["ddl"], engine=v["engine"]) for k, v in SCH.items()},
           open(os.path.join(OUT, "web", "schema.json"), "w", encoding="utf-8"), ensure_ascii=False, separators=(",", ":"))
+exec(open(os.path.join(HERE, "workflow.py"), encoding="utf-8").read())
+json.dump(WF, open(os.path.join(OUT, "web", "workflow.json"), "w", encoding="utf-8"), ensure_ascii=False, separators=(",", ":"))
 DDL_DIR = os.path.join(OUT, "ddl")
 os.makedirs(DDL_DIR, exist_ok=True)
 for f in os.listdir(DDL_DIR):
@@ -246,6 +248,26 @@ sheet(w2, ["分层", "表名（库.表）", "表中文名", "序号", "字段名
 w2.auto_filter.ref = w2.dimensions
 wb2.save(os.path.join(OUT, "output", "pft_dw_fields.xlsx"))
 
+ws = wb.create_sheet("调度工作流")
+rows = []
+for n in sorted(WF["nodes"], key=lambda n: (list(FLOWS).index(n["flow"]), n["level"], n["id"])):
+    kind = {"task": "任务", "dq": "监控" if n.get("monitor") else "质检", "recon": "对账", "start": "开始", "end": "结束"}[n["kind"]]
+    rows.append([FLOWS[n["flow"]]["name"], n["level"] + 1, n["id"], kind, n.get("cn", ""), n.get("layer", ""),
+                 ("阻断" if n.get("block") else "告警") if n["kind"] in ("dq", "recon") else "",
+                 len(n["rules"]), "、".join(n["deps"]), "、".join(n.get("cut", [])), "、".join(n.get("cross", [])), n.get("cmd") or n.get("desc", "")])
+sheet(ws, ["工作流", "步骤", "节点", "类型", "说明", "分层", "失败处理", "规则数", "等待（上游）", "依赖上一周期（T-1）", "跨流程依赖", "执行 / 说明"], rows,
+      [10, 6, 40, 6, 28, 6, 8, 7, 60, 30, 30, 50], wrap=(9, 12))
+ws.auto_filter.ref = ws.dimensions
+ws = wb.create_sheet("质量规则")
+rows = []
+for n in WF["nodes"]:
+    for r in n["rules"]:
+        rows.append([r["id"], FLOWS[n["flow"]]["name"], n["id"], n.get("table") or "", r["code"], r["name"], r["level"],
+                     "阻断下游" if r["level"] == "强" and not n.get("monitor") else "告警", r["expect"], r["desc"], r["sql"]])
+sheet(ws, ["规则编号", "工作流", "质检节点", "表", "质量维度", "规则", "级别", "失败处理", "期望", "说明", "检测 SQL"], rows,
+      [9, 9, 36, 34, 10, 40, 6, 9, 30, 40, 80], wrap=(6, 9, 10, 11))
+ws.auto_filter.ref = ws.dimensions
+
 ws = wb.create_sheet("DWS口径")
 rows = [[b["code"], b["en"], b["cn"], b["type"], b["domain"], b["kou"], b["formula"], b["unit"], b["time_basis"], b["dtype"], b["precision"],
          b["src"], "、".join(b["dws"]), "、".join(b["ads"])] for b in bases]
@@ -278,6 +300,9 @@ sheet(ws, ["序号", "类别", "问题", "当前处理 / 建议", "影响"], row
 wb.save(os.path.join(OUT, "output", "pft_dw_v2.xlsx"))
 print(summary)
 print("data.json KB", round(len(json.dumps(data, ensure_ascii=False).encode()) / 1024))
+if os.environ.get("WF_DEBUG"):
+    for k, v in WF_CHECK.items():
+        print(k, v if not isinstance(v, list) else (len(v), v[:20]))
 if os.environ.get("SCHEMA_DEBUG"):
     for k, v in SCHEMA_CHECK.items():
         print(k, v if not isinstance(v, list) else (len(v), v[:60]))

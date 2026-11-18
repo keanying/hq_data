@@ -1,0 +1,98 @@
+# 由 generator/make_all.py 生成，请勿手改。调度器无关的工作流定义，可转 DolphinScheduler / Airflow / Azkaban
+workflow: pft_dw_weekly
+name: PFT 2.0 数仓 · 周调度
+schedule:
+  cron: 0 0 8 ? * MON
+  timezone: Asia/Shanghai
+  description: 每周一 08:00，等待日调度周日分区质检通过后启动
+  sla: 周一 09:00 前
+params:
+  bizdate: '${yyyyMMdd-1}  # 业务日期 T-1，格式 YYYYMMDD'
+  bizdate_begin: ${yyyy-MM-dd-1} 00:00:00
+  bizdate_end: ${yyyy-MM-dd} 00:00:00
+  bizdate_minus_7: ${yyyyMMdd-8}
+policy:
+  dq_strong_fail: 阻断：质检节点失败，下游不启动，电话 + 群告警
+  dq_weak_fail: 告警：质检节点成功，推送告警到数据群，24 小时内处理
+  task_retry: ODS 重试 3 次、其余 2 次，间隔 5 分钟
+  backfill: 补数按依赖顺序重跑，质检同样执行
+tasks:
+- name: start.weekly
+  type: CHECK
+  desc: 等待日调度完成：依赖日调度中以下质检节点在周日分区通过：dim_sup_tenant_zip、dws_sup_tenant_trade_di
+  depends_on_other_workflow:
+  - dq.dim_sup_tenant_zip
+  - dq.dws_sup_tenant_trade_di
+- name: ads_sup_tenant_trade_wk
+  type: SQL
+  desc: 商户经营周报
+  command: sql/ads/ads_sup_tenant_trade_wk.sql
+  depends_on:
+  - start.weekly
+  depends_on_other_workflow:
+  - dq.dim_opr_date_f
+  - dq.dim_sup_tenant_zip
+  - dq.dws_sup_tenant_trade_di
+  retries: 2
+  timeout_minutes: 40
+  priority: 高
+- name: dq.ads_sup_tenant_trade_wk
+  type: DATA_QUALITY
+  desc: 商户经营周报 质检
+  depends_on:
+  - ads_sup_tenant_trade_wk
+  on_fail: 阻断下游
+  rules:
+  - id: R1232
+    dimension: 完整性
+    name: 当日分区有数据
+    level: 强
+    expect: cnt > 0
+    sql: SELECT COUNT(*) AS cnt FROM ads.ads_sup_tenant_trade_wk WHERE travel_date = '${bizdate}';
+  - id: R1233
+    dimension: 唯一性
+    name: 主键/粒度唯一（stat_week_code + week_start_date + seller_tenant_id）
+    level: 强
+    expect: dup_cnt = 0
+    sql: |-
+      SELECT COUNT(*) AS dup_cnt FROM (
+        SELECT stat_week_code, week_start_date, seller_tenant_id, COUNT(*) AS c FROM ads.ads_sup_tenant_trade_wk WHERE travel_date = '${bizdate}' GROUP BY stat_week_code, week_start_date, seller_tenant_id HAVING COUNT(*) > 1
+      ) x;
+  - id: R1234
+    dimension: 完整性
+    name: 主键/粒度键非空
+    level: 强
+    expect: null_cnt = 0
+    sql: SELECT COUNT(*) AS null_cnt FROM ads.ads_sup_tenant_trade_wk WHERE travel_date = '${bizdate}' AND (stat_week_code IS NULL OR week_start_date IS NULL OR seller_tenant_id IS NULL);
+  - id: R1235
+    dimension: 有效性
+    name: 金额/数量非负（4 个字段）
+    level: 弱
+    expect: 全部为 0
+    sql: |-
+      SELECT
+        SUM(CASE WHEN pay_1w_amt < 0 THEN 1 ELSE 0 END) AS pay_1w_amt_neg,
+        SUM(CASE WHEN verify_ticket_1w_qty < 0 THEN 1 ELSE 0 END) AS verify_ticket_1w_qty_neg,
+        SUM(CASE WHEN refund_1w_amt < 0 THEN 1 ELSE 0 END) AS refund_1w_amt_neg,
+        SUM(CASE WHEN per_customer_1w_amt < 0 THEN 1 ELSE 0 END) AS per_customer_1w_amt_neg
+      FROM ads.ads_sup_tenant_trade_wk WHERE travel_date = '${bizdate}';
+  - id: R1236
+    dimension: 有效性
+    name: 比率值域（1 个字段）
+    level: 弱
+    expect: 全部为 0
+    sql: |-
+      SELECT
+        SUM(CASE WHEN refund_1w_rate < 0 THEN 1 ELSE 0 END) AS refund_1w_rate_bad
+      FROM ads.ads_sup_tenant_trade_wk WHERE travel_date = '${bizdate}';
+  - id: R1296
+    dimension: 一致性
+    name: 勾稽：net_pay_1w_amt = pay_1w_amt − refund_1w_amt
+    level: 强
+    expect: bad_cnt = 0
+    sql: SELECT COUNT(*) AS bad_cnt FROM ads.ads_sup_tenant_trade_wk WHERE travel_date = '${bizdate}' AND ABS(COALESCE(net_pay_1w_amt, 0) - (COALESCE(pay_1w_amt, 0) - COALESCE(refund_1w_amt, 0))) > 0.01;
+- name: end.weekly
+  type: NOTIFY
+  desc: 数据就绪 · 发布：写就绪标记（_SUCCESS / 元数据就绪表），触发报表缓存刷新与下游订阅；任一强校验失败则不发布并电话告警
+  depends_on:
+  - dq.ads_sup_tenant_trade_wk
