@@ -469,6 +469,82 @@ DIM_SRC_ADD = {"dim_sup_staff_zip": "dim_sup_org_df, dim_sup_position_df, dim_su
                "dim_opr_package_df": "dim_opr_app_df", "dim_prd_sku_zip": "dim_prd_spu_zip, dim_prd_sale_rule_df",
                "dim_prd_sku_attr_df": "dim_prd_ticket_meta_f"}
 
+def TOKEN_ALL(s):
+    return re.findall(r"[a-z][a-z0-9_]*", s or "")
+
+# ------------------------------------------------------------ v3 实时扩展（独立实时表，不与离线合并；同名口径与离线完全一致）
+RT_NEW = [
+    ["ODS", "ods_fin_account_rt", "账户 binlog 流", "t_account", []],
+    ["ODS", "ods_fin_frozen_record_rt", "冻结记录 binlog 流", "t_frozen_record", []],
+    ["ODS", "ods_trf_distribution_relation_rt", "分销关系 binlog 流", "t_distribution_relation", []],
+    ["ODS", "ods_cus_customer_rt", "游客账号 binlog 流", "t_customer", []],
+    ["ODS", "ods_opr_device_rt", "设备 binlog 流", "t_device", []],
+    ["ODS", "ods_opr_notify_record_rt", "通知记录 binlog 流", "t_notify_record", []],
+    ["ODS", "ods_opr_complaint_rt", "投诉工单 binlog 流", "t_complaint", []],
+    ["ODS", "ods_opr_code_pool_rt", "码池 binlog 流", "t_code_pool", []],
+    ["DWD", "dwd_fin_frozen_rt", "实时冻结/解冻明细", "ods_fin_frozen_record_rt", []],
+    ["DWD", "dwd_fin_account_balance_rt", "实时账户余额", "ods_fin_account_rt", []],
+    ["DWD", "dwd_trf_distribution_credit_rt", "实时分销授信", "ods_trf_distribution_relation_rt", []],
+    ["DWD", "dwd_cus_customer_register_rt", "实时游客注册", "ods_cus_customer_rt", []],
+    ["DWD", "dwd_opr_device_status_log_rt", "实时设备状态变更", "ods_opr_device_rt", []],
+    ["DWD", "dwd_opr_notify_rt", "实时通知发送", "ods_opr_notify_record_rt", []],
+    ["DWD", "dwd_opr_complaint_rt", "实时投诉工单", "ods_opr_complaint_rt", []],
+    ["DWD", "dwd_opr_code_pool_rt", "实时码池状态", "ods_opr_code_pool_rt", []],
+    ["DWS", "dws_ord_tenant_sku_verify_rt", "商户×SKU 实时核销", "dwd_ord_verify_rt",
+     ["verify_ticket_qty", "verify_amt", "verify_entitlement_qty", "verify_fail_qty"]],
+    ["DWS", "dws_fin_account_fund_rt", "账户实时资金", "dwd_fin_account_balance_rt + dwd_fin_frozen_rt",
+     ["available_balance_amt", "frozen_balance_amt", "freeze_amt", "unfreeze_verify_amt", "unfreeze_refund_amt"]],
+    ["DWS", "dws_trf_distributor_credit_rt", "分销授信实时", "dwd_trf_distribution_credit_rt", ["credit_limit_amt", "credit_used_amt"]],
+    ["DWS", "dws_cus_tenant_growth_rt", "游客实时增长", "dwd_cus_customer_register_rt", ["new_customer_qty"]],
+    ["DWS", "dws_opr_device_rt", "设备实时状态", "dwd_opr_device_status_log_rt", ["offline_times_qty", "device_total_qty"]],
+    ["DWS", "dws_opr_notify_rt", "通知实时发送", "dwd_opr_notify_rt", ["notify_send_qty", "notify_success_qty", "notify_fail_qty"]],
+    ["DWS", "dws_opr_complaint_rt", "投诉实时处理", "dwd_opr_complaint_rt", ["complaint_qty", "complaint_resolved_qty", "complaint_overdue_qty"]],
+    ["DWS", "dws_opr_code_pool_rt", "码池实时余量", "dwd_opr_code_pool_rt", ["code_capacity_qty", "code_allocated_qty", "code_recycled_qty"]],
+]
+for r in RT:
+    if r[1] == "dws_ord_tenant_sku_trade_rt":
+        r[4] = ["pay_amt", "pay_order_qty", "pay_ticket_qty", "pay_buyer_qty", "refund_amt", "refund_ticket_qty",
+                "order_qty", "order_ticket_qty", "order_amt", "cancel_order_qty", "staff_order_qty", "staff_pay_amt"]
+for r in RT_NEW:
+    idx = max(i for i, x in enumerate(RT) if x[0] == r[0]) + 1
+    RT.insert(idx, r)
+TD1 = [("today", "今日实时"), ("1h", "近1小时")]
+RT_ADS = [a for a in RT_ADS]
+for i, a in enumerate(RT_ADS):
+    if a[0] == "ads_ord_realtime_sales_rt":   # 渠道拆分改由渠道实时结构表承担，避免同一指标两处产出
+        RT_ADS[i] = (a[0], a[1], "seller_tenant_id × 窗口", a[3], a[4], [g for g in a[5] if g[2] != "CH"])
+RT_ADS += [
+    ("ads_ord_tenant_trade_overview_rt", "商户经营实时概览", "seller_tenant_id × 今日", "dws_ord_tenant_sku_trade_rt, dws_ord_tenant_sku_verify_rt", "商户后台", [
+        (["pay_amt", "net_pay_amt", "pay_order_qty", "pay_ticket_qty", "pay_buyer_qty", "order_qty", "refund_amt", "refund_ticket_qty",
+          "verify_ticket_qty", "verify_amt"], TODAY, None),
+        (["avg_ticket_price_amt", "per_customer_amt", "refund_rate", "pay_conversion_rate"], TODAY, None)]),
+    ("ads_ord_sku_sales_rank_rt", "SKU 实时销售排行", "seller_tenant_id × sku_id × 今日", "dws_ord_tenant_sku_trade_rt", "商户后台/大屏", [
+        (["pay_amt", "pay_ticket_qty", "refund_ticket_qty", "avg_ticket_price_amt"], TODAY, None)]),
+    ("ads_ord_channel_sales_rt", "渠道实时销售结构", "seller_tenant_id × 今日", "dws_ord_tenant_sku_trade_rt", "商户后台", [
+        (["pay_amt", "pay_order_qty", "pay_ticket_qty", "channel_pay_share_rate"], TODAY, "CH"),
+        (["staff_order_qty", "staff_pay_amt"], TODAY, None)]),
+    ("ads_fin_account_fund_rt", "账户资金实时", "account_no × 当前", "dws_fin_account_fund_rt", "商户后台/财务", [
+        (["available_balance_amt", "frozen_balance_amt"], NOW, None),
+        (["freeze_amt", "unfreeze_verify_amt", "unfreeze_refund_amt"], TODAY, None)]),
+    ("ads_trf_credit_alert_rt", "分销授信实时预警", "relation_no × 当前", "dws_trf_distributor_credit_rt", "供应商后台", [
+        (["credit_limit_amt", "credit_used_amt", "credit_usage_rate"], NOW, None)]),
+    ("ads_sup_platform_overview_rt", "平台实时大盘", "全平台 × 今日", "dws_ord_tenant_sku_trade_rt, dws_ord_tenant_sku_verify_rt, dws_cus_tenant_growth_rt", "平台大屏", [
+        (["pay_amt", "pay_order_qty", "pay_buyer_qty", "refund_amt", "verify_ticket_qty", "new_customer_qty"], TD1, None)]),
+    ("ads_opr_operation_monitor_rt", "运营实时监控", "tenant_id × 今日", "dws_opr_device_rt, dws_opr_notify_rt, dws_opr_complaint_rt, dws_opr_code_pool_rt", "平台后台", [
+        (["offline_times_qty", "notify_send_qty", "notify_fail_qty", "notify_success_rate", "complaint_qty", "complaint_overdue_qty", "complaint_sla_rate"], TODAY, None),
+        (["device_total_qty", "code_capacity_qty", "code_allocated_qty", "code_pool_usage_rate"], NOW, None)]),
+]
+# 实时 ADS 用到的原子口径必须落在它的来源实时 DWS 里（保证实时链路自洽）
+_rt_dws = {r[1]: set(r[4]) for r in RT if r[0] == "DWS"}
+for a in RT_ADS:
+    have = set().union(*[_rt_dws.get(x.strip(), set()) for x in a[3].split(",")])
+    for mets, _, _ in a[5]:
+        for m in mets:
+            b = BNAME[m]
+            deps = [m] if b[2] == A else [t for t in TOKEN_ALL(b[5]) if t in BNAME and BNAME[t][2] == A]
+            miss = [d for d in deps if d not in have]
+            assert not miss, (a[0], m, miss)
+
 # ------------------------------------------------------------ 生成 ADS 具体指标
 KEYS = ("_amt", "_qty", "_rate", "_date")
 def with_period(en, p):

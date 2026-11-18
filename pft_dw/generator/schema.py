@@ -191,7 +191,8 @@ def ods_cols(short, db, st, rt):
     base = short.rsplit("_", 1)[0] + "_di"
     drop, mask = SENS_DROP.get(short, set()), SENS_MASK.get(short, SENS_MASK.get(base, set()))
     if rt:  # 实时只声明需要的列：敏感列不声明即不读取
-        drop = drop | mask | {"contact_name"}
+        drop = drop | mask | {"contact_name", "name", "email", "wechat_unionid", "alipay_user_id", "avatar", "birthday", "phone",
+                              "notify_content", "complaint_content", "detail"}
         mask = set()
     uk = {u[0] for u in src.get("uks", []) if len(u) == 1}
     out = []
@@ -847,7 +848,12 @@ GDERIVE = {  # 无同名上游字段的粒度键：显式上游
                                     [["dws_sup_tenant_lifetime_df", "first_pay_date"], ["dws_sup_tenant_lifetime_df", "last_pay_date"], ["dws_sup_tenant_lifetime_df", "pay_30d_amt"]]),
     "device_type": ("按 device_id 关联设备维度", [["dim_opr_device_df", "device_type"]]),
 }
-RT_GRAIN = {"dws_ord_tenant_sku_trade_rt": "seller_tenant_id × sku_id × 窗口", "dws_ord_verify_point_flow_rt": "seller_tenant_id × verify_point_id × 窗口",
+RT_GRAIN = {"dws_ord_tenant_sku_trade_rt": "seller_tenant_id × sku_id × channel_id × operator_type × 窗口",
+            "dws_ord_tenant_sku_verify_rt": "seller_tenant_id × sku_id × 窗口", "dws_fin_account_fund_rt": "account_no",
+            "dws_trf_distributor_credit_rt": "relation_no", "dws_cus_tenant_growth_rt": "tenant_id × register_channel_id × 窗口",
+            "dws_opr_device_rt": "tenant_id × device_id", "dws_opr_notify_rt": "tenant_id × notify_channel × 窗口",
+            "dws_opr_complaint_rt": "tenant_id × complaint_type", "dws_opr_code_pool_rt": "tenant_id × code_pool_id",
+            "_old_trade": "seller_tenant_id × sku_id × 窗口", "dws_ord_verify_point_flow_rt": "seller_tenant_id × verify_point_id × 窗口",
             "dws_inv_sku_stock_rt": "sku_id × pool_no", "dws_opr_risk_rule_hit_rt": "rule_id × action × 窗口",
             "ads_ord_realtime_sales_rt": "seller_tenant_id × 窗口"}
 NAME_COL = {"seller_tenant_id": ("seller_tenant_name", "卖家租户名称", "dim_sup_tenant_zip", "tenant_name"),

@@ -6,12 +6,12 @@
 
 | 分层 | 离线表 | 实时表 | 内容 |
 |---|---|---|---|
-| ODS | 81 | 9 | 业务库 1:1 镜像（剔除员工密码表，密钥不落仓，证件号/手机号脱敏） |
-| DWD | 39 | 6 | 业务过程最细粒度，每张表写明度量字段与退化维度 |
+| ODS | 81 | 17 | 业务库 1:1 镜像（剔除员工密码表，密钥不落仓，证件号/手机号脱敏） |
+| DWD | 39 | 14 | 业务过程最细粒度，每张表写明度量字段与退化维度 |
 | DIM | 37 | — | 一致性维度：拉链 `_zip` / 全量 `_df` / 码表 `_f` |
-| DWS | 32 | 4 | 主题×粒度汇总，存 212 个统计口径（原子 145 / 派生 9 / 计算 58） |
-| ADS | 30 | 4 | 847 个业务指标（离线 801 / 实时 46），由「口径 × 统计周期 × 修饰词」生成 |
-| 合计 | 219 | 23 | 共 4,243 个字段，每张表都有 DDL |
+| DWS | 32 | 12 | 主题×粒度汇总，存 212 个统计口径（原子 145 / 派生 9 / 计算 58） |
+| ADS | 30 | 11 | 913 个业务指标（离线 801 / 实时 112），由「口径 × 统计周期 × 修饰词」生成 |
+| 合计 | 219 | 54 | 共 4,654 个字段，每张表都有 DDL |
 
 ## 目录
 
@@ -26,7 +26,7 @@ pft_dw/
 │   ├── 01_pft_dw_daily.yaml … 04_pft_dw_yearly.yaml   日 / 周 / 月 / 年调度：任务、依赖、重试、质检规则
 │   ├── 05_pft_dw_realtime.yaml                       实时：Flink CDC 源、写入表、监控项
 │   └── dq_rules.sql                                  全部数据质量规则的检测 SQL
-├── ddl/                全部 242 张表的建表语句，按分层一个文件
+├── ddl/                全部 273 张表的建表语句，按分层一个文件
 │   ├── 01_ods.sql … 05_ads.sql        离线：Hive ORC，PARTITIONED BY (travel_date)
 │   ├── 06_rt_ods.sql                  实时源：Flink CDC（mysql-cdc）源表，直读 binlog，不经 Kafka
 │   └── 07_rt_dwd.sql … 09_rt_ads.sql  实时明细 / 汇总：StarRocks 主键模型
@@ -74,6 +74,8 @@ cd pft_dw/web && python3 -m http.server 8000
 - 每个字段都有注释；`_type / _status` 字段逐值写明含义，如 `pay_status：UNPAID-未支付，PARTIAL_PAID-部分支付，PAID-已支付`
 - 每个字段都记录上游 `表.字段` 与加工说明，网页里点字段可看字段级全链路（ODS 字段追到业务库源字段）
 - 实时：**Flink CDC 直读 MySQL binlog，不经 Kafka**。实时 ODS 是 `mysql-cdc` 源表（先全量快照再增量，`binlog_time` 取 CDC 元数据 `op_ts`，敏感列不声明即不读取），同一作业内加工成 DWD 并写入 StarRocks；DWD/DWS/ADS 均为 StarRocks 主键模型，按 `travel_date` 分区。DWD 主键 = `travel_date` + 实体ID（变动类表再加 `change_time`），DWS/ADS 主键 = `travel_date` + 窗口 + 粒度键
+- **实时与离线分开建表，不合并**：实时表一律 `_rt`、落 StarRocks，离线表落 Hive；同一个指标两边都有时，共用同一个原子口径（口径编码相同、条件逐字一致，只差统计周期），日调度里对每个这样的口径做实时↔离线 T+1 对账，以离线为准。实时对离线的唯一依赖是 lookup 关联的维表（日调度产出）
+- 实时覆盖：交易（今日支付/下单/退款/核销、SKU 排行、渠道结构、员工代下单）、客流、库存、账户资金与冻结、分销授信预警、游客增长、平台大盘、运营监控（设备离线、通知失败、投诉超时、码池余量）、风控预警
 - 源库前提：`binlog_format=ROW`、`binlog_row_image=FULL`，CDC 账号需 REPLICATION SLAVE / REPLICATION CLIENT 等权限，每张源表独立 `server-id` 段；同库源表建议合并在一个作业里
 
 ## 调度工作流与数据质量

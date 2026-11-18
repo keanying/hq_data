@@ -1,4 +1,4 @@
--- PFT 2.0 数仓 DDL：RT_DWD（6 张表）
+-- PFT 2.0 数仓 DDL：RT_DWD（14 张表）
 -- 由 generator/make_all.py 生成，请勿手改
 
 -- ========== dwd.dwd_ord_order_rt  实时下单明细 ==========
@@ -201,7 +201,6 @@ CREATE TABLE IF NOT EXISTS dwd.dwd_opr_risk_event_rt (
     `dimension_value_desc`  VARCHAR(256)   NULL     COMMENT '触发维度值集合',
     `rule_id`               BIGINT         NULL     COMMENT '关联规则ID',
     `action_type`           VARCHAR(32)    NULL     COMMENT '执行动作：BLOCK-拦截，WARN-预警，FREEZE-冻结',
-    `detail_desc`           VARCHAR(256)   NULL     COMMENT '详细描述',
     `audit_log_id`          BIGINT         NULL     COMMENT '关联审计日志ID',
     `tenant_id`             BIGINT         NULL     COMMENT '租户ID',
     `create_time`           VARCHAR(32)    NULL     COMMENT '创建时间',
@@ -215,5 +214,219 @@ PRIMARY KEY (`travel_date`, `risk_event_id`)
 COMMENT '实时风控事件（1行=1个风控事件）'
 PARTITION BY (`travel_date`)
 DISTRIBUTED BY HASH(`risk_event_id`) BUCKETS 8
+PROPERTIES ("replication_num" = "3");
+
+-- ========== dwd.dwd_fin_frozen_rt  实时冻结/解冻明细 ==========
+-- StarRocks 主键模型（Flink 实时 upsert）
+CREATE TABLE IF NOT EXISTS dwd.dwd_fin_frozen_rt (
+    `travel_date`            VARCHAR(32)    NOT NULL COMMENT '数据日期，格式 YYYYMMDD；取创建时间日期，保证同一主键始终落在同一分区',
+    `frozen_id`              BIGINT         NOT NULL COMMENT '冻结记录ID（源表主键 id）',
+    `frozen_no`              VARCHAR(32)    NULL     COMMENT '冻结记录编号，由流水号生成器生成',
+    `account_no`             VARCHAR(32)    NULL     COMMENT '归属账户编号',
+    `ticket_no`              VARCHAR(32)    NULL     COMMENT '关联票号（票级冻结）',
+    `freeze_amt`             DECIMAL(18,2)  NULL     COMMENT '冻结金额（元）= 利润/采购款/全款；源字段单位为分，入仓 ÷100',
+    `freeze_type`            VARCHAR(32)    NULL     COMMENT '冻结类型:PROFIT-利润，SETTLEMENT-采购款，FULL-全款，供应商直销',
+    `frozen_status`          VARCHAR(32)    NULL     COMMENT '状态：FROZEN-冻结中，RELEASED-已释放',
+    `release_event_type`     VARCHAR(32)    NULL     COMMENT '冻结事件：VERIFY-核销，REFUND-退款',
+    `external_frozen_type`   INT            NULL     COMMENT '是否外部渠道冻结:1=第三方冻结(解冻调第三方API-API 接口),0=平台内部冻结',
+    `external_channel_code`  VARCHAR(32)    NULL     COMMENT '外部渠道(external_frozen=1时):YEEPAY-易宝，UNIONPAY-银联等',
+    `external_frozen_no`     VARCHAR(32)    NULL     COMMENT '外部冻结单号(第三方返回的冻结流水号,解冻时用)',
+    `tenant_id`              BIGINT         NULL     COMMENT '租户ID（分库维度）',
+    `create_time`            VARCHAR(32)    NULL     COMMENT '创建时间',
+    `update_time`            VARCHAR(32)    NULL     COMMENT '更新时间',
+    `account_type`           VARCHAR(32)    NULL     COMMENT '账户类型：MERCHANT-商户，DISTRIBUTOR-分销商，PLATFORM-平台',
+    `subject_id`             BIGINT         NULL     COMMENT '账户主体ID',
+    `sku_id`                 BIGINT         NULL     COMMENT 'SKU ID',
+    `freeze_time`            VARCHAR(32)    NULL     COMMENT '冻结时间',
+    `release_time`           VARCHAR(32)    NULL     COMMENT '解冻时间；未解冻为空',
+    `freeze_hour_qty`        DECIMAL(18,2)  NULL     COMMENT '冻结时长（小时）',
+    `event_time`             VARCHAR(32)    NULL     COMMENT '事件时间（binlog 时间），用于窗口计算与乱序处理，格式 yyyy-MM-dd HH:mm:ss'
+)
+PRIMARY KEY (`travel_date`, `frozen_id`)
+COMMENT '实时冻结/解冻明细（1行=1条冻结记录（frozen_no））'
+PARTITION BY (`travel_date`)
+DISTRIBUTED BY HASH(`frozen_id`) BUCKETS 8
+PROPERTIES ("replication_num" = "3");
+
+-- ========== dwd.dwd_fin_account_balance_rt  实时账户余额 ==========
+-- StarRocks 主键模型（Flink 实时 upsert）
+CREATE TABLE IF NOT EXISTS dwd.dwd_fin_account_balance_rt (
+    `travel_date`            VARCHAR(32)    NOT NULL COMMENT '数据日期，格式 YYYYMMDD；取状态更新时间日期，同一主键每天一行',
+    `account_id`             BIGINT         NOT NULL COMMENT '统一账户ID（源表主键 id）',
+    `account_no`             VARCHAR(32)    NULL     COMMENT '账户编号，由流水号生成器生成',
+    `subject_id`             BIGINT         NULL     COMMENT '主体ID（商户/分销商/平台）',
+    `account_type`           VARCHAR(32)    NULL     COMMENT '账户类型：MERCHANT-商户，DISTRIBUTOR-分销商，PLATFORM-平台',
+    `available_balance_amt`  DECIMAL(18,2)  NULL     COMMENT '可用余额（元）；源字段单位为分，入仓 ÷100',
+    `frozen_balance_amt`     DECIMAL(18,2)  NULL     COMMENT '冻结余额（元）；源字段单位为分，入仓 ÷100',
+    `tenant_id`              BIGINT         NULL     COMMENT '租户ID（分库维度）',
+    `create_time`            VARCHAR(32)    NULL     COMMENT '创建时间',
+    `update_time`            VARCHAR(32)    NULL     COMMENT '更新时间',
+    `total_balance_amt`      DECIMAL(18,2)  NULL     COMMENT '账户总余额（元）= 可用余额 + 冻结余额',
+    `event_time`             VARCHAR(32)    NULL     COMMENT '事件时间（binlog 时间），用于窗口计算与乱序处理，格式 yyyy-MM-dd HH:mm:ss'
+)
+PRIMARY KEY (`travel_date`, `account_id`)
+COMMENT '实时账户余额（1行=1个账户×1日）'
+PARTITION BY (`travel_date`)
+DISTRIBUTED BY HASH(`account_id`) BUCKETS 8
+PROPERTIES ("replication_num" = "3");
+
+-- ========== dwd.dwd_trf_distribution_credit_rt  实时分销授信 ==========
+-- StarRocks 主键模型（Flink 实时 upsert）
+CREATE TABLE IF NOT EXISTS dwd.dwd_trf_distribution_credit_rt (
+    `travel_date`             VARCHAR(32)    NOT NULL COMMENT '数据日期，格式 YYYYMMDD；取状态更新时间日期，同一主键每天一行',
+    `relation_id`             BIGINT         NOT NULL COMMENT '分销关系ID（源表主键 id）',
+    `relation_no`             VARCHAR(32)    NULL     COMMENT '分销关系编号，格式DR+yyyyMMdd+6位随机',
+    `supplier_tenant_id`      BIGINT         NULL     COMMENT '供应商租户ID',
+    `distributor_tenant_id`   BIGINT         NULL     COMMENT '分销商租户ID',
+    `parent_relation_id`      BIGINT         NULL     COMMENT '上级分销关系ID（4级采购链）',
+    `distribution_mode_type`  VARCHAR(32)    NULL     COMMENT '分销模式：PROFIT_SHARE-分润，PURCHASE-逐级采购',
+    `payment_mode_type`       VARCHAR(32)    NULL     COMMENT '支付模式：CREDIT-授信，BALANCE-余额',
+    `credit_limit_amt`        DECIMAL(18,2)  NULL     COMMENT '授信额度（元，payment_mode=CREDIT-授信时）；源字段单位为分，入仓 ÷100',
+    `credit_used_amt`         DECIMAL(18,2)  NULL     COMMENT '已用授信（元）；源字段单位为分，入仓 ÷100',
+    `relation_status`         VARCHAR(32)    NULL     COMMENT '状态：ACTIVE-有效，SUSPENDED-已暂停，TERMINATED-已终止',
+    `create_time`             VARCHAR(32)    NULL     COMMENT '创建时间',
+    `update_time`             VARCHAR(32)    NULL     COMMENT '更新时间',
+    `chain_level_no`          INT            NULL     COMMENT '本关系在采购链中的层级：1~4',
+    `level1_tenant_id`        BIGINT         NULL     COMMENT '1 级（源头供应商）租户ID',
+    `level2_tenant_id`        BIGINT         NULL     COMMENT '2 级分销商租户ID',
+    `level3_tenant_id`        BIGINT         NULL     COMMENT '3 级分销商租户ID',
+    `level4_tenant_id`        BIGINT         NULL     COMMENT '4 级分销商租户ID',
+    `credit_available_amt`    DECIMAL(18,2)  NULL     COMMENT '剩余授信额度（元）= 授信额度 - 已用授信',
+    `event_time`              VARCHAR(32)    NULL     COMMENT '事件时间（binlog 时间），用于窗口计算与乱序处理，格式 yyyy-MM-dd HH:mm:ss'
+)
+PRIMARY KEY (`travel_date`, `relation_id`)
+COMMENT '实时分销授信（1行=1条分销关系×1个有效区间）'
+PARTITION BY (`travel_date`)
+DISTRIBUTED BY HASH(`relation_id`) BUCKETS 8
+PROPERTIES ("replication_num" = "3");
+
+-- ========== dwd.dwd_cus_customer_register_rt  实时游客注册 ==========
+-- StarRocks 主键模型（Flink 实时 upsert）
+CREATE TABLE IF NOT EXISTS dwd.dwd_cus_customer_register_rt (
+    `travel_date`           VARCHAR(32)    NOT NULL COMMENT '数据日期，格式 YYYYMMDD；取创建时间日期，保证同一主键始终落在同一分区',
+    `customer_id`           BIGINT         NOT NULL COMMENT 'C端游客主账号ID（源表主键 id）',
+    `customer_no`           VARCHAR(32)    NULL     COMMENT '客户编号，格式CUS+yyyyMMdd+6位随机',
+    `customer_type`         VARCHAR(32)    NULL     COMMENT '账号类型：REAL-真人注册账号，TENANT_DEFAULT-业务租户代下单占位买家；PLATFORM-平台 租户下不设占位买家，故无 PLATFORM_DEFAULT 值',
+    `gender_type`           VARCHAR(32)    NULL     COMMENT '性别：MALE-男，FEMALE-女，UNKNOWN-未知',
+    `auth_status`           VARCHAR(32)    NULL     COMMENT '认证状态：UNAUTHENTICATED-未认证，PHONE_VERIFIED-手机已验证，PERSON_CERTIFIED-已实名认证',
+    `customer_status`       VARCHAR(32)    NULL     COMMENT '状态：ACTIVE-有效，BANNED-已封禁，CANCELLED-已取消',
+    `register_source_code`  VARCHAR(32)    NULL     COMMENT '注册来源渠道编码（channel_code）',
+    `register_tenant_id`    BIGINT         NULL     COMMENT '所属租户ID（self-tenant 隔离：该 customer 仅归属此租户，不跨租户复用；unionid/alipay 唯一键均带此列，phone 非唯一；证件号收敛改走 t_customer_credential 唯一键）',
+    `create_time`           VARCHAR(32)    NULL     COMMENT '创建时间',
+    `update_time`           VARCHAR(32)    NULL     COMMENT '更新时间',
+    `register_channel_id`   BIGINT         NULL     COMMENT '注册渠道ID',
+    `register_time`         VARCHAR(32)    NULL     COMMENT '注册时间',
+    `register_qty`          BIGINT         NULL     COMMENT '注册人数，固定为 1；剔除 TENANT_DEFAULT-租户代下单占位买家 占位买家',
+    `event_time`            VARCHAR(32)    NULL     COMMENT '事件时间（binlog 时间），用于窗口计算与乱序处理，格式 yyyy-MM-dd HH:mm:ss'
+)
+PRIMARY KEY (`travel_date`, `customer_id`)
+COMMENT '实时游客注册（1行=1个新注册游客）'
+PARTITION BY (`travel_date`)
+DISTRIBUTED BY HASH(`customer_id`) BUCKETS 8
+PROPERTIES ("replication_num" = "3");
+
+-- ========== dwd.dwd_opr_device_status_log_rt  实时设备状态变更 ==========
+-- StarRocks 主键模型（Flink 实时 upsert）
+CREATE TABLE IF NOT EXISTS dwd.dwd_opr_device_status_log_rt (
+    `travel_date`          VARCHAR(32)    NOT NULL COMMENT '数据日期，格式 YYYYMMDD；取变动时间日期，保证同一主键始终落在同一分区',
+    `device_id`            BIGINT         NOT NULL COMMENT '设备ID',
+    `change_time`          VARCHAR(32)    NOT NULL COMMENT '状态变更时间',
+    `device_no`            VARCHAR(32)    NULL     COMMENT '设备编号',
+    `tenant_id`            BIGINT         NULL     COMMENT '租户ID',
+    `device_type`          VARCHAR(32)    NULL     COMMENT '设备类型：GATE-闸机，POS-POS 机，HANDHELD-手持机，SELF_SERVICE-自助机，KIOSK-自助终端，FACE_RECOGNITION-人脸识别机',
+    `device_group_id`      BIGINT         NULL     COMMENT '设备分组ID',
+    `poi_id`               BIGINT         NULL     COMMENT '所属 POI ID',
+    `before_status`        VARCHAR(32)    NULL     COMMENT '变更前状态：ACTIVE-有效，OFFLINE-线下或离线，MAINTENANCE-维护中，INACTIVE-停用',
+    `after_status`         VARCHAR(32)    NULL     COMMENT '变更后状态：ACTIVE-有效，OFFLINE-线下或离线，MAINTENANCE-维护中，INACTIVE-停用',
+    `last_heartbeat_time`  VARCHAR(32)    NULL     COMMENT '最后心跳时间',
+    `status_minute_qty`    BIGINT         NULL     COMMENT '前一状态持续时长（分钟）',
+    `event_time`           VARCHAR(32)    NULL     COMMENT '事件时间（binlog 时间），用于窗口计算与乱序处理，格式 yyyy-MM-dd HH:mm:ss'
+)
+PRIMARY KEY (`travel_date`, `device_id`, `change_time`)
+COMMENT '实时设备状态变更（1行=1次设备状态/心跳变化）'
+PARTITION BY (`travel_date`)
+DISTRIBUTED BY HASH(`device_id`) BUCKETS 8
+PROPERTIES ("replication_num" = "3");
+
+-- ========== dwd.dwd_opr_notify_rt  实时通知发送 ==========
+-- StarRocks 主键模型（Flink 实时 upsert）
+CREATE TABLE IF NOT EXISTS dwd.dwd_opr_notify_rt (
+    `travel_date`          VARCHAR(32)    NOT NULL COMMENT '数据日期，格式 YYYYMMDD；取创建时间日期，保证同一主键始终落在同一分区',
+    `notify_id`            BIGINT         NOT NULL COMMENT '通知记录ID（源表主键 id）',
+    `notify_no`            VARCHAR(32)    NULL     COMMENT '通知记录号，格式NR+yyyyMMdd+6位随机',
+    `template_id`          BIGINT         NULL     COMMENT '模板ID',
+    `recipient_id`         BIGINT         NULL     COMMENT '接收人ID',
+    `recipient_type`       VARCHAR(32)    NULL     COMMENT '接收人类型：CUSTOMER-C端游客，TENANT_STAFF-B端员工，SYSTEM-系统',
+    `notify_channel_type`  VARCHAR(32)    NULL     COMMENT '实际发送渠道：SMS-短信，MINI_PROGRAM_MSG-小程序消息，EMAIL-邮件，WEBHOOK-Webhook，IN_APP-站内信',
+    `related_business_no`  VARCHAR(32)    NULL     COMMENT '关联业务号',
+    `send_status`          VARCHAR(32)    NULL     COMMENT '状态：PENDING-待处理，SUCCESS-成功，FAILED-失败',
+    `send_time`            VARCHAR(32)    NULL     COMMENT '发送时间',
+    `fail_reason_desc`     VARCHAR(256)   NULL     COMMENT '失败原因',
+    `tenant_id`            BIGINT         NULL     COMMENT '租户ID',
+    `create_time`          VARCHAR(32)    NULL     COMMENT '创建时间',
+    `update_time`          VARCHAR(32)    NULL     COMMENT '更新时间',
+    `template_code`        VARCHAR(32)    NULL     COMMENT '模板编码',
+    `send_success_type`    INT            NULL     COMMENT '是否发送成功：0-否，1-是',
+    `notify_qty`           BIGINT         NULL     COMMENT '发送次数，固定为 1',
+    `event_time`           VARCHAR(32)    NULL     COMMENT '事件时间（binlog 时间），用于窗口计算与乱序处理，格式 yyyy-MM-dd HH:mm:ss'
+)
+PRIMARY KEY (`travel_date`, `notify_id`)
+COMMENT '实时通知发送（1行=1次通知发送）'
+PARTITION BY (`travel_date`)
+DISTRIBUTED BY HASH(`notify_id`) BUCKETS 8
+PROPERTIES ("replication_num" = "3");
+
+-- ========== dwd.dwd_opr_complaint_rt  实时投诉工单 ==========
+-- StarRocks 主键模型（Flink 实时 upsert）
+CREATE TABLE IF NOT EXISTS dwd.dwd_opr_complaint_rt (
+    `travel_date`          VARCHAR(32)    NOT NULL COMMENT '数据日期，格式 YYYYMMDD；取创建时间日期，保证同一主键始终落在同一分区',
+    `complaint_id`         BIGINT         NOT NULL COMMENT '投诉工单ID（源表主键 id）',
+    `complaint_no`         VARCHAR(32)    NULL     COMMENT '工单编号，格式CMP+yyyyMMdd+6位随机',
+    `complainant_type`     VARCHAR(32)    NULL     COMMENT '投诉方：VISITOR-游客，MERCHANT-商户',
+    `complainant_id`       BIGINT         NULL     COMMENT '投诉方ID',
+    `order_group_no`       VARCHAR(32)    NULL     COMMENT '关联订单号（游客投诉时）',
+    `complaint_type`       VARCHAR(32)    NULL     COMMENT '类型：ORDER_ISSUE-订单问题，SERVICE_ISSUE-服务问题，BUG-系统缺陷，OTHER-其他',
+    `handler_id`           BIGINT         NULL     COMMENT '处理人ID',
+    `sla_deadline_time`    VARCHAR(32)    NULL     COMMENT 'SLA截止时间',
+    `complaint_status`     VARCHAR(32)    NULL     COMMENT '状态：PENDING-待处理，ASSIGNED-已分派，PROCESSING-处理中，RESOLVED-已解决，CLOSED-已关闭',
+    `tenant_id`            BIGINT         NULL     COMMENT '租户ID',
+    `create_time`          VARCHAR(32)    NULL     COMMENT '创建时间',
+    `update_time`          VARCHAR(32)    NULL     COMMENT '更新时间',
+    `seller_tenant_id`     BIGINT         NULL     COMMENT '被投诉的卖家租户ID',
+    `create_time_hour_no`  INT            NULL     COMMENT '投诉提交小时：0~23',
+    `resolve_time`         VARCHAR(32)    NULL     COMMENT '处理完成时间；未完成为空',
+    `resolve_hour_qty`     DECIMAL(18,2)  NULL     COMMENT '处理时长（小时）',
+    `sla_timeout_type`     INT            NULL     COMMENT '是否超 SLA：0-否，1-是',
+    `complaint_qty`        BIGINT         NULL     COMMENT '投诉数，固定为 1',
+    `event_time`           VARCHAR(32)    NULL     COMMENT '事件时间（binlog 时间），用于窗口计算与乱序处理，格式 yyyy-MM-dd HH:mm:ss'
+)
+PRIMARY KEY (`travel_date`, `complaint_id`)
+COMMENT '实时投诉工单（1行=1个投诉工单）'
+PARTITION BY (`travel_date`)
+DISTRIBUTED BY HASH(`complaint_id`) BUCKETS 8
+PROPERTIES ("replication_num" = "3");
+
+-- ========== dwd.dwd_opr_code_pool_rt  实时码池状态 ==========
+-- StarRocks 主键模型（Flink 实时 upsert）
+CREATE TABLE IF NOT EXISTS dwd.dwd_opr_code_pool_rt (
+    `travel_date`      VARCHAR(32)    NOT NULL COMMENT '数据日期，格式 YYYYMMDD；取状态更新时间日期，同一主键每天一行',
+    `code_pool_id`     BIGINT         NOT NULL COMMENT '码池ID（源表主键 id）',
+    `pool_no`          VARCHAR(32)    NULL     COMMENT '码池编号，格式CP+yyyyMMdd+6位随机',
+    `tenant_id`        BIGINT         NULL     COMMENT '归属商户ID',
+    `pool_type`        VARCHAR(32)    NULL     COMMENT '池类型：SINGLE_TICKET-单票池，COMBO_TICKET-套票池',
+    `credential_type`  VARCHAR(32)    NULL     COMMENT '凭证类型：QR_CODE-二维码，BAR_CODE-条形码',
+    `capacity_qty`     BIGINT         NULL     COMMENT '池容量（最大并发码数）',
+    `allocated_qty`    BIGINT         NULL     COMMENT '已分配码数',
+    `recycled_qty`     BIGINT         NULL     COMMENT '已回收复用码数',
+    `pool_status`      VARCHAR(32)    NULL     COMMENT '状态：ACTIVE-有效，INACTIVE-停用',
+    `create_time`      VARCHAR(32)    NULL     COMMENT '创建时间',
+    `update_time`      VARCHAR(32)    NULL     COMMENT '更新时间',
+    `remain_qty`       BIGINT         NULL     COMMENT '剩余可分配码数 = 容量 - 已分配 + 已回收',
+    `event_time`       VARCHAR(32)    NULL     COMMENT '事件时间（binlog 时间），用于窗口计算与乱序处理，格式 yyyy-MM-dd HH:mm:ss'
+)
+PRIMARY KEY (`travel_date`, `code_pool_id`)
+COMMENT '实时码池状态（1行=1个码池）'
+PARTITION BY (`travel_date`)
+DISTRIBUTED BY HASH(`code_pool_id`) BUCKETS 8
 PROPERTIES ("replication_num" = "3");
 

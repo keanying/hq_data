@@ -4,7 +4,11 @@ import re as _re
 
 DIMCN = {t["short"]: t["cn"] for t in tables if t["layer"] == "DIM"}
 RT_DIMS = {"dws_ord_tenant_sku_trade_rt": "tenant sku date", "dws_ord_verify_point_flow_rt": "tenant vp date",
-           "dws_inv_sku_stock_rt": "sku pool", "dwd_opr_risk_event_rt": "rule dict", "dws_opr_risk_rule_hit_rt": "rule date"}
+           "dws_inv_sku_stock_rt": "sku pool", "dwd_opr_risk_event_rt": "rule dict", "dws_opr_risk_rule_hit_rt": "rule date",
+           "dws_ord_tenant_sku_verify_rt": "tenant sku date", "dws_fin_account_fund_rt": "account date", "dws_trf_distributor_credit_rt": "relation date",
+           "dws_cus_tenant_growth_rt": "tenant channel date", "dws_opr_device_rt": "tenant device date", "dws_opr_notify_rt": "tenant template date dict",
+           "dws_opr_complaint_rt": "tenant dict date", "dws_opr_code_pool_rt": "tenant codepool date",
+           "dwd_fin_account_balance_rt": "account date", "dwd_trf_distribution_credit_rt": "relation tenant date", "dwd_opr_code_pool_rt": "codepool tenant date"}
 
 for t in tables:
     keys = []

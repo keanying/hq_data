@@ -7,18 +7,52 @@ schedule:
   description: Flink 作业 7×24 运行，监控项每分钟采集
   sla: 端到端延迟 ≤ 1 分钟
 tasks:
-- name: dq.flink_job_inv_realtime_stock
+- name: dq.flink_job_fin_account_fund
   type: MONITOR
-  desc: 作业 flink_job_inv_realtime_stock 运行监控：Flink 作业：读 ods_inv_inventory_pool_rt、ods_inv_inventory_unit_rt；写 ads_inv_realtime_stock_rt、dwd_inv_pool_change_rt、dws_inv_sku_stock_rt
+  desc: 作业 flink_job_fin_account_fund 运行监控：Flink 作业：读 ods_fin_account_rt、ods_fin_frozen_record_rt；写 ads_fin_account_fund_rt、dwd_fin_account_balance_rt、dwd_fin_frozen_rt、dws_fin_account_fund_rt
   on_fail: 告警
   rules:
-  - id: R1428
+  - id: R1526
     dimension: 及时性
     name: Checkpoint 成功
     level: 强
     expect: 连续 3 次失败或单次 > 5 分钟告警
     sql: Flink 指标：numberOfFailedCheckpoints、lastCheckpointDuration
-  - id: R1429
+  - id: R1527
+    dimension: 及时性
+    name: 无持续反压
+    level: 弱
+    expect: 任一算子 > 500 持续 5 分钟告警
+    sql: Flink 指标：backPressuredTimeMsPerSecond
+- name: dq.flink_job_inv_realtime_stock
+  type: MONITOR
+  desc: 作业 flink_job_inv_realtime_stock 运行监控：Flink 作业：读 ods_inv_inventory_pool_rt、ods_inv_inventory_unit_rt；写 ads_inv_realtime_stock_rt、dwd_inv_pool_change_rt、dws_inv_sku_stock_rt
+  on_fail: 告警
+  rules:
+  - id: R1528
+    dimension: 及时性
+    name: Checkpoint 成功
+    level: 强
+    expect: 连续 3 次失败或单次 > 5 分钟告警
+    sql: Flink 指标：numberOfFailedCheckpoints、lastCheckpointDuration
+  - id: R1529
+    dimension: 及时性
+    name: 无持续反压
+    level: 弱
+    expect: 任一算子 > 500 持续 5 分钟告警
+    sql: Flink 指标：backPressuredTimeMsPerSecond
+- name: dq.flink_job_opr_operation_monitor
+  type: MONITOR
+  desc: 作业 flink_job_opr_operation_monitor 运行监控：Flink 作业：读 ods_opr_code_pool_rt、ods_opr_complaint_rt、ods_opr_device_rt、ods_opr_notify_record_rt；写 ads_opr_operation_monitor_rt、dwd_opr_code_pool_rt、dwd_opr_complaint_rt、dwd_opr_device_status_log_rt、dwd_opr_notify_rt、dws_opr_code_pool_rt、dws_opr_complaint_rt、dws_opr_device_rt、dws_opr_notify_rt
+  on_fail: 告警
+  rules:
+  - id: R1530
+    dimension: 及时性
+    name: Checkpoint 成功
+    level: 强
+    expect: 连续 3 次失败或单次 > 5 分钟告警
+    sql: Flink 指标：numberOfFailedCheckpoints、lastCheckpointDuration
+  - id: R1531
     dimension: 及时性
     name: 无持续反压
     level: 弱
@@ -26,42 +60,79 @@ tasks:
     sql: Flink 指标：backPressuredTimeMsPerSecond
 - name: dq.flink_job_opr_risk_alert
   type: MONITOR
-  desc: 作业 flink_job_opr_risk_alert 运行监控：Flink 作业：读 ods_opr_risk_event_rt、ods_ord_entitlement_rt、ods_ord_verify_record_rt；写 ads_opr_risk_alert_rt、ads_ord_realtime_flow_rt、dwd_opr_risk_event_rt、dwd_ord_verify_rt、dws_opr_risk_rule_hit_rt、dws_ord_verify_point_flow_rt
+  desc: 作业 flink_job_opr_risk_alert 运行监控：Flink 作业：读 ods_cus_customer_rt、ods_fin_payment_record_rt、ods_opr_risk_event_rt、ods_ord_entitlement_rt、ods_ord_order_group_rt、ods_ord_order_rt、ods_ord_refund_order_rt、ods_ord_verify_record_rt；写
+    ads_opr_risk_alert_rt、ads_ord_channel_sales_rt、ads_ord_realtime_flow_rt、ads_ord_realtime_sales_rt、ads_ord_sku_sales_rank_rt、ads_ord_tenant_trade_overview_rt、ads_sup_platform_overview_rt、dwd_cus_customer_register_rt、dwd_fin_payment_rt、dwd_opr_risk_event_rt、dwd_ord_order_rt、dwd_ord_refund_rt、dwd_ord_verify_rt、dws_cus_tenant_growth_rt、dws_opr_risk_rule_hit_rt、dws_ord_tenant_sku_trade_rt、dws_ord_tenant_sku_verify_rt、dws_ord_verify_point_flow_rt
   on_fail: 告警
   rules:
-  - id: R1432
+  - id: R1532
     dimension: 及时性
     name: Checkpoint 成功
     level: 强
     expect: 连续 3 次失败或单次 > 5 分钟告警
     sql: Flink 指标：numberOfFailedCheckpoints、lastCheckpointDuration
-  - id: R1433
+  - id: R1533
     dimension: 及时性
     name: 无持续反压
     level: 弱
     expect: 任一算子 > 500 持续 5 分钟告警
     sql: Flink 指标：backPressuredTimeMsPerSecond
-- name: dq.flink_job_ord_realtime_sales
+- name: dq.flink_job_trf_credit_alert
   type: MONITOR
-  desc: 作业 flink_job_ord_realtime_sales 运行监控：Flink 作业：读 ods_fin_payment_record_rt、ods_ord_order_group_rt、ods_ord_order_rt、ods_ord_refund_order_rt；写 ads_ord_realtime_sales_rt、dwd_fin_payment_rt、dwd_ord_order_rt、dwd_ord_refund_rt、dws_ord_tenant_sku_trade_rt
+  desc: 作业 flink_job_trf_credit_alert 运行监控：Flink 作业：读 ods_trf_distribution_relation_rt；写 ads_trf_credit_alert_rt、dwd_trf_distribution_credit_rt、dws_trf_distributor_credit_rt
   on_fail: 告警
   rules:
-  - id: R1430
+  - id: R1534
     dimension: 及时性
     name: Checkpoint 成功
     level: 强
     expect: 连续 3 次失败或单次 > 5 分钟告警
     sql: Flink 指标：numberOfFailedCheckpoints、lastCheckpointDuration
-  - id: R1431
+  - id: R1535
     dimension: 及时性
     name: 无持续反压
     level: 弱
     expect: 任一算子 > 500 持续 5 分钟告警
     sql: Flink 指标：backPressuredTimeMsPerSecond
+- name: ext.dim_fin_account_df
+  type: EXTERNAL
+  desc: 账户维度：离线日调度产出（dq.dim_fin_account_df 通过后），Flink 作业按主键 lookup 关联，缓存 1 小时刷新
+- name: ext.dim_opr_device_df
+  type: EXTERNAL
+  desc: 设备维度：离线日调度产出（dq.dim_opr_device_df 通过后），Flink 作业按主键 lookup 关联，缓存 1 小时刷新
+- name: ext.dim_opr_notify_template_df
+  type: EXTERNAL
+  desc: 通知模板维度：离线日调度产出（dq.dim_opr_notify_template_df 通过后），Flink 作业按主键 lookup 关联，缓存 1 小时刷新
+- name: ext.dim_opr_risk_rule_df
+  type: EXTERNAL
+  desc: 风控规则维度：离线日调度产出（dq.dim_opr_risk_rule_df 通过后），Flink 作业按主键 lookup 关联，缓存 1 小时刷新
+- name: ext.dim_opr_verify_point_df
+  type: EXTERNAL
+  desc: 核销点维度：离线日调度产出（dq.dim_opr_verify_point_df 通过后），Flink 作业按主键 lookup 关联，缓存 1 小时刷新
+- name: ext.dim_prd_sku_zip
+  type: EXTERNAL
+  desc: SKU维度：离线日调度产出（dq.dim_prd_sku_zip 通过后），Flink 作业按主键 lookup 关联，缓存 1 小时刷新
+- name: ext.dim_sup_tenant_zip
+  type: EXTERNAL
+  desc: 租户（商户/供应商/分销商）维度：离线日调度产出（dq.dim_sup_tenant_zip 通过后），Flink 作业按主键 lookup 关联，缓存 1 小时刷新
+- name: ext.dim_trf_channel_df
+  type: EXTERNAL
+  desc: 渠道/接入端维度：离线日调度产出（dq.dim_trf_channel_df 通过后），Flink 作业按主键 lookup 关联，缓存 1 小时刷新
+- name: ods_cus_customer_rt
+  type: FLINK_CDC_SOURCE
+  desc: 游客账号 binlog 流
+  command: Flink CDC 源表，由作业 flink_job_opr_risk_alert 读取
+- name: ods_fin_account_rt
+  type: FLINK_CDC_SOURCE
+  desc: 账户 binlog 流
+  command: Flink CDC 源表，由作业 flink_job_fin_account_fund 读取
+- name: ods_fin_frozen_record_rt
+  type: FLINK_CDC_SOURCE
+  desc: 冻结记录 binlog 流
+  command: Flink CDC 源表，由作业 flink_job_fin_account_fund 读取
 - name: ods_fin_payment_record_rt
   type: FLINK_CDC_SOURCE
   desc: 支付记录 binlog 流
-  command: Flink CDC 源表，由作业 flink_job_ord_realtime_sales 读取
+  command: Flink CDC 源表，由作业 flink_job_opr_risk_alert 读取
 - name: ods_inv_inventory_pool_rt
   type: FLINK_CDC_SOURCE
   desc: 库存池 binlog 流
@@ -70,6 +141,22 @@ tasks:
   type: FLINK_CDC_SOURCE
   desc: 座位/房间 binlog 流
   command: Flink CDC 源表，由作业 flink_job_inv_realtime_stock 读取
+- name: ods_opr_code_pool_rt
+  type: FLINK_CDC_SOURCE
+  desc: 码池 binlog 流
+  command: Flink CDC 源表，由作业 flink_job_opr_operation_monitor 读取
+- name: ods_opr_complaint_rt
+  type: FLINK_CDC_SOURCE
+  desc: 投诉工单 binlog 流
+  command: Flink CDC 源表，由作业 flink_job_opr_operation_monitor 读取
+- name: ods_opr_device_rt
+  type: FLINK_CDC_SOURCE
+  desc: 设备 binlog 流
+  command: Flink CDC 源表，由作业 flink_job_opr_operation_monitor 读取
+- name: ods_opr_notify_record_rt
+  type: FLINK_CDC_SOURCE
+  desc: 通知记录 binlog 流
+  command: Flink CDC 源表，由作业 flink_job_opr_operation_monitor 读取
 - name: ods_opr_risk_event_rt
   type: FLINK_CDC_SOURCE
   desc: 风控事件 binlog 流
@@ -81,19 +168,80 @@ tasks:
 - name: ods_ord_order_group_rt
   type: FLINK_CDC_SOURCE
   desc: 聚合单 binlog 流
-  command: Flink CDC 源表，由作业 flink_job_ord_realtime_sales 读取
+  command: Flink CDC 源表，由作业 flink_job_opr_risk_alert 读取
 - name: ods_ord_order_rt
   type: FLINK_CDC_SOURCE
   desc: 子单 binlog 流
-  command: Flink CDC 源表，由作业 flink_job_ord_realtime_sales 读取
+  command: Flink CDC 源表，由作业 flink_job_opr_risk_alert 读取
 - name: ods_ord_refund_order_rt
   type: FLINK_CDC_SOURCE
   desc: 退款单 binlog 流
-  command: Flink CDC 源表，由作业 flink_job_ord_realtime_sales 读取
+  command: Flink CDC 源表，由作业 flink_job_opr_risk_alert 读取
 - name: ods_ord_verify_record_rt
   type: FLINK_CDC_SOURCE
   desc: 核销记录 binlog 流
   command: Flink CDC 源表，由作业 flink_job_opr_risk_alert 读取
+- name: ods_trf_distribution_relation_rt
+  type: FLINK_CDC_SOURCE
+  desc: 分销关系 binlog 流
+  command: Flink CDC 源表，由作业 flink_job_trf_credit_alert 读取
+- name: dq.ods_cus_customer_rt
+  type: MONITOR
+  desc: 游客账号 binlog 流 监控
+  depends_on:
+  - ods_cus_customer_rt
+  on_fail: 告警
+  rules:
+  - id: R1456
+    dimension: 及时性
+    name: CDC 采集延迟 ≤ 60 秒
+    level: 强
+    expect: 连续 3 分钟 > 60000 告警并电话通知
+    sql: Flink 指标：currentFetchEventTimeLag（毫秒），按作业 flink_job_opr_risk_alert 的源算子 ods_cus_customer_rt 采集
+  - id: R1457
+    dimension: 完整性
+    name: CDC 全量快照完成且进入增量
+    level: 强
+    expect: 启动后 30 分钟内进入增量阶段
+    sql: Flink 指标：isSnapshotSplitFinished / sourceIdleTime
+- name: dq.ods_fin_account_rt
+  type: MONITOR
+  desc: 账户 binlog 流 监控
+  depends_on:
+  - ods_fin_account_rt
+  on_fail: 告警
+  rules:
+  - id: R1450
+    dimension: 及时性
+    name: CDC 采集延迟 ≤ 60 秒
+    level: 强
+    expect: 连续 3 分钟 > 60000 告警并电话通知
+    sql: Flink 指标：currentFetchEventTimeLag（毫秒），按作业 flink_job_fin_account_fund 的源算子 ods_fin_account_rt 采集
+  - id: R1451
+    dimension: 完整性
+    name: CDC 全量快照完成且进入增量
+    level: 强
+    expect: 启动后 30 分钟内进入增量阶段
+    sql: Flink 指标：isSnapshotSplitFinished / sourceIdleTime
+- name: dq.ods_fin_frozen_record_rt
+  type: MONITOR
+  desc: 冻结记录 binlog 流 监控
+  depends_on:
+  - ods_fin_frozen_record_rt
+  on_fail: 告警
+  rules:
+  - id: R1452
+    dimension: 及时性
+    name: CDC 采集延迟 ≤ 60 秒
+    level: 强
+    expect: 连续 3 分钟 > 60000 告警并电话通知
+    sql: Flink 指标：currentFetchEventTimeLag（毫秒），按作业 flink_job_fin_account_fund 的源算子 ods_fin_frozen_record_rt 采集
+  - id: R1453
+    dimension: 完整性
+    name: CDC 全量快照完成且进入增量
+    level: 强
+    expect: 启动后 30 分钟内进入增量阶段
+    sql: Flink 指标：isSnapshotSplitFinished / sourceIdleTime
 - name: dq.ods_fin_payment_record_rt
   type: MONITOR
   desc: 支付记录 binlog 流 监控
@@ -101,13 +249,13 @@ tasks:
   - ods_fin_payment_record_rt
   on_fail: 告警
   rules:
-  - id: R1398
+  - id: R1442
     dimension: 及时性
     name: CDC 采集延迟 ≤ 60 秒
     level: 强
     expect: 连续 3 分钟 > 60000 告警并电话通知
-    sql: Flink 指标：currentFetchEventTimeLag（毫秒），按作业 flink_job_ord_realtime_sales 的源算子 ods_fin_payment_record_rt 采集
-  - id: R1399
+    sql: Flink 指标：currentFetchEventTimeLag（毫秒），按作业 flink_job_opr_risk_alert 的源算子 ods_fin_payment_record_rt 采集
+  - id: R1443
     dimension: 完整性
     name: CDC 全量快照完成且进入增量
     level: 强
@@ -120,13 +268,13 @@ tasks:
   - ods_inv_inventory_pool_rt
   on_fail: 告警
   rules:
-  - id: R1400
+  - id: R1444
     dimension: 及时性
     name: CDC 采集延迟 ≤ 60 秒
     level: 强
     expect: 连续 3 分钟 > 60000 告警并电话通知
     sql: Flink 指标：currentFetchEventTimeLag（毫秒），按作业 flink_job_inv_realtime_stock 的源算子 ods_inv_inventory_pool_rt 采集
-  - id: R1401
+  - id: R1445
     dimension: 完整性
     name: CDC 全量快照完成且进入增量
     level: 强
@@ -139,13 +287,89 @@ tasks:
   - ods_inv_inventory_unit_rt
   on_fail: 告警
   rules:
-  - id: R1402
+  - id: R1446
     dimension: 及时性
     name: CDC 采集延迟 ≤ 60 秒
     level: 强
     expect: 连续 3 分钟 > 60000 告警并电话通知
     sql: Flink 指标：currentFetchEventTimeLag（毫秒），按作业 flink_job_inv_realtime_stock 的源算子 ods_inv_inventory_unit_rt 采集
-  - id: R1403
+  - id: R1447
+    dimension: 完整性
+    name: CDC 全量快照完成且进入增量
+    level: 强
+    expect: 启动后 30 分钟内进入增量阶段
+    sql: Flink 指标：isSnapshotSplitFinished / sourceIdleTime
+- name: dq.ods_opr_code_pool_rt
+  type: MONITOR
+  desc: 码池 binlog 流 监控
+  depends_on:
+  - ods_opr_code_pool_rt
+  on_fail: 告警
+  rules:
+  - id: R1464
+    dimension: 及时性
+    name: CDC 采集延迟 ≤ 60 秒
+    level: 强
+    expect: 连续 3 分钟 > 60000 告警并电话通知
+    sql: Flink 指标：currentFetchEventTimeLag（毫秒），按作业 flink_job_opr_operation_monitor 的源算子 ods_opr_code_pool_rt 采集
+  - id: R1465
+    dimension: 完整性
+    name: CDC 全量快照完成且进入增量
+    level: 强
+    expect: 启动后 30 分钟内进入增量阶段
+    sql: Flink 指标：isSnapshotSplitFinished / sourceIdleTime
+- name: dq.ods_opr_complaint_rt
+  type: MONITOR
+  desc: 投诉工单 binlog 流 监控
+  depends_on:
+  - ods_opr_complaint_rt
+  on_fail: 告警
+  rules:
+  - id: R1462
+    dimension: 及时性
+    name: CDC 采集延迟 ≤ 60 秒
+    level: 强
+    expect: 连续 3 分钟 > 60000 告警并电话通知
+    sql: Flink 指标：currentFetchEventTimeLag（毫秒），按作业 flink_job_opr_operation_monitor 的源算子 ods_opr_complaint_rt 采集
+  - id: R1463
+    dimension: 完整性
+    name: CDC 全量快照完成且进入增量
+    level: 强
+    expect: 启动后 30 分钟内进入增量阶段
+    sql: Flink 指标：isSnapshotSplitFinished / sourceIdleTime
+- name: dq.ods_opr_device_rt
+  type: MONITOR
+  desc: 设备 binlog 流 监控
+  depends_on:
+  - ods_opr_device_rt
+  on_fail: 告警
+  rules:
+  - id: R1458
+    dimension: 及时性
+    name: CDC 采集延迟 ≤ 60 秒
+    level: 强
+    expect: 连续 3 分钟 > 60000 告警并电话通知
+    sql: Flink 指标：currentFetchEventTimeLag（毫秒），按作业 flink_job_opr_operation_monitor 的源算子 ods_opr_device_rt 采集
+  - id: R1459
+    dimension: 完整性
+    name: CDC 全量快照完成且进入增量
+    level: 强
+    expect: 启动后 30 分钟内进入增量阶段
+    sql: Flink 指标：isSnapshotSplitFinished / sourceIdleTime
+- name: dq.ods_opr_notify_record_rt
+  type: MONITOR
+  desc: 通知记录 binlog 流 监控
+  depends_on:
+  - ods_opr_notify_record_rt
+  on_fail: 告警
+  rules:
+  - id: R1460
+    dimension: 及时性
+    name: CDC 采集延迟 ≤ 60 秒
+    level: 强
+    expect: 连续 3 分钟 > 60000 告警并电话通知
+    sql: Flink 指标：currentFetchEventTimeLag（毫秒），按作业 flink_job_opr_operation_monitor 的源算子 ods_opr_notify_record_rt 采集
+  - id: R1461
     dimension: 完整性
     name: CDC 全量快照完成且进入增量
     level: 强
@@ -158,13 +382,13 @@ tasks:
   - ods_opr_risk_event_rt
   on_fail: 告警
   rules:
-  - id: R1404
+  - id: R1448
     dimension: 及时性
     name: CDC 采集延迟 ≤ 60 秒
     level: 强
     expect: 连续 3 分钟 > 60000 告警并电话通知
     sql: Flink 指标：currentFetchEventTimeLag（毫秒），按作业 flink_job_opr_risk_alert 的源算子 ods_opr_risk_event_rt 采集
-  - id: R1405
+  - id: R1449
     dimension: 完整性
     name: CDC 全量快照完成且进入增量
     level: 强
@@ -177,13 +401,13 @@ tasks:
   - ods_ord_entitlement_rt
   on_fail: 告警
   rules:
-  - id: R1392
+  - id: R1436
     dimension: 及时性
     name: CDC 采集延迟 ≤ 60 秒
     level: 强
     expect: 连续 3 分钟 > 60000 告警并电话通知
     sql: Flink 指标：currentFetchEventTimeLag（毫秒），按作业 flink_job_opr_risk_alert 的源算子 ods_ord_entitlement_rt 采集
-  - id: R1393
+  - id: R1437
     dimension: 完整性
     name: CDC 全量快照完成且进入增量
     level: 强
@@ -196,13 +420,13 @@ tasks:
   - ods_ord_order_group_rt
   on_fail: 告警
   rules:
-  - id: R1388
+  - id: R1432
     dimension: 及时性
     name: CDC 采集延迟 ≤ 60 秒
     level: 强
     expect: 连续 3 分钟 > 60000 告警并电话通知
-    sql: Flink 指标：currentFetchEventTimeLag（毫秒），按作业 flink_job_ord_realtime_sales 的源算子 ods_ord_order_group_rt 采集
-  - id: R1389
+    sql: Flink 指标：currentFetchEventTimeLag（毫秒），按作业 flink_job_opr_risk_alert 的源算子 ods_ord_order_group_rt 采集
+  - id: R1433
     dimension: 完整性
     name: CDC 全量快照完成且进入增量
     level: 强
@@ -215,13 +439,13 @@ tasks:
   - ods_ord_order_rt
   on_fail: 告警
   rules:
-  - id: R1390
+  - id: R1434
     dimension: 及时性
     name: CDC 采集延迟 ≤ 60 秒
     level: 强
     expect: 连续 3 分钟 > 60000 告警并电话通知
-    sql: Flink 指标：currentFetchEventTimeLag（毫秒），按作业 flink_job_ord_realtime_sales 的源算子 ods_ord_order_rt 采集
-  - id: R1391
+    sql: Flink 指标：currentFetchEventTimeLag（毫秒），按作业 flink_job_opr_risk_alert 的源算子 ods_ord_order_rt 采集
+  - id: R1435
     dimension: 完整性
     name: CDC 全量快照完成且进入增量
     level: 强
@@ -234,13 +458,13 @@ tasks:
   - ods_ord_refund_order_rt
   on_fail: 告警
   rules:
-  - id: R1396
+  - id: R1440
     dimension: 及时性
     name: CDC 采集延迟 ≤ 60 秒
     level: 强
     expect: 连续 3 分钟 > 60000 告警并电话通知
-    sql: Flink 指标：currentFetchEventTimeLag（毫秒），按作业 flink_job_ord_realtime_sales 的源算子 ods_ord_refund_order_rt 采集
-  - id: R1397
+    sql: Flink 指标：currentFetchEventTimeLag（毫秒），按作业 flink_job_opr_risk_alert 的源算子 ods_ord_refund_order_rt 采集
+  - id: R1441
     dimension: 完整性
     name: CDC 全量快照完成且进入增量
     level: 强
@@ -253,24 +477,64 @@ tasks:
   - ods_ord_verify_record_rt
   on_fail: 告警
   rules:
-  - id: R1394
+  - id: R1438
     dimension: 及时性
     name: CDC 采集延迟 ≤ 60 秒
     level: 强
     expect: 连续 3 分钟 > 60000 告警并电话通知
     sql: Flink 指标：currentFetchEventTimeLag（毫秒），按作业 flink_job_opr_risk_alert 的源算子 ods_ord_verify_record_rt 采集
-  - id: R1395
+  - id: R1439
     dimension: 完整性
     name: CDC 全量快照完成且进入增量
     level: 强
     expect: 启动后 30 分钟内进入增量阶段
     sql: Flink 指标：isSnapshotSplitFinished / sourceIdleTime
+- name: dq.ods_trf_distribution_relation_rt
+  type: MONITOR
+  desc: 分销关系 binlog 流 监控
+  depends_on:
+  - ods_trf_distribution_relation_rt
+  on_fail: 告警
+  rules:
+  - id: R1454
+    dimension: 及时性
+    name: CDC 采集延迟 ≤ 60 秒
+    level: 强
+    expect: 连续 3 分钟 > 60000 告警并电话通知
+    sql: Flink 指标：currentFetchEventTimeLag（毫秒），按作业 flink_job_trf_credit_alert 的源算子 ods_trf_distribution_relation_rt 采集
+  - id: R1455
+    dimension: 完整性
+    name: CDC 全量快照完成且进入增量
+    level: 强
+    expect: 启动后 30 分钟内进入增量阶段
+    sql: Flink 指标：isSnapshotSplitFinished / sourceIdleTime
+- name: dwd_cus_customer_register_rt
+  type: FLINK_SINK
+  desc: 实时游客注册
+  command: Flink 作业 flink_job_opr_risk_alert 写入 StarRocks
+  depends_on:
+  - dq.ods_cus_customer_rt
+  - ext.dim_trf_channel_df
+- name: dwd_fin_account_balance_rt
+  type: FLINK_SINK
+  desc: 实时账户余额
+  command: Flink 作业 flink_job_fin_account_fund 写入 StarRocks
+  depends_on:
+  - dq.ods_fin_account_rt
+- name: dwd_fin_frozen_rt
+  type: FLINK_SINK
+  desc: 实时冻结/解冻明细
+  command: Flink 作业 flink_job_fin_account_fund 写入 StarRocks
+  depends_on:
+  - dq.ods_fin_frozen_record_rt
+  - ext.dim_fin_account_df
 - name: dwd_fin_payment_rt
   type: FLINK_SINK
   desc: 实时支付明细
-  command: Flink 作业 flink_job_ord_realtime_sales 写入 StarRocks
+  command: Flink 作业 flink_job_opr_risk_alert 写入 StarRocks
   depends_on:
   - dq.ods_fin_payment_record_rt
+  - ext.dim_fin_account_df
 - name: dwd_inv_pool_change_rt
   type: FLINK_SINK
   desc: 实时库存变动
@@ -278,23 +542,51 @@ tasks:
   depends_on:
   - dq.ods_inv_inventory_pool_rt
   - dq.ods_inv_inventory_unit_rt
+- name: dwd_opr_code_pool_rt
+  type: FLINK_SINK
+  desc: 实时码池状态
+  command: Flink 作业 flink_job_opr_operation_monitor 写入 StarRocks
+  depends_on:
+  - dq.ods_opr_code_pool_rt
+- name: dwd_opr_complaint_rt
+  type: FLINK_SINK
+  desc: 实时投诉工单
+  command: Flink 作业 flink_job_opr_operation_monitor 写入 StarRocks
+  depends_on:
+  - dq.ods_opr_complaint_rt
+- name: dwd_opr_device_status_log_rt
+  type: FLINK_SINK
+  desc: 实时设备状态变更
+  command: Flink 作业 flink_job_opr_operation_monitor 写入 StarRocks
+  depends_on:
+  - dq.ods_opr_device_rt
+- name: dwd_opr_notify_rt
+  type: FLINK_SINK
+  desc: 实时通知发送
+  command: Flink 作业 flink_job_opr_operation_monitor 写入 StarRocks
+  depends_on:
+  - dq.ods_opr_notify_record_rt
+  - ext.dim_opr_notify_template_df
 - name: dwd_opr_risk_event_rt
   type: FLINK_SINK
   desc: 实时风控事件
   command: Flink 作业 flink_job_opr_risk_alert 写入 StarRocks
   depends_on:
   - dq.ods_opr_risk_event_rt
+  - ext.dim_opr_risk_rule_df
 - name: dwd_ord_order_rt
   type: FLINK_SINK
   desc: 实时下单明细
-  command: Flink 作业 flink_job_ord_realtime_sales 写入 StarRocks
+  command: Flink 作业 flink_job_opr_risk_alert 写入 StarRocks
   depends_on:
   - dq.ods_ord_order_group_rt
   - dq.ods_ord_order_rt
+  - ext.dim_prd_sku_zip
+  - ext.dim_trf_channel_df
 - name: dwd_ord_refund_rt
   type: FLINK_SINK
   desc: 实时退款明细
-  command: Flink 作业 flink_job_ord_realtime_sales 写入 StarRocks
+  command: Flink 作业 flink_job_opr_risk_alert 写入 StarRocks
   depends_on:
   - dq.ods_ord_refund_order_rt
 - name: dwd_ord_verify_rt
@@ -304,6 +596,53 @@ tasks:
   depends_on:
   - dq.ods_ord_entitlement_rt
   - dq.ods_ord_verify_record_rt
+  - ext.dim_opr_device_df
+  - ext.dim_opr_verify_point_df
+- name: dwd_trf_distribution_credit_rt
+  type: FLINK_SINK
+  desc: 实时分销授信
+  command: Flink 作业 flink_job_trf_credit_alert 写入 StarRocks
+  depends_on:
+  - dq.ods_trf_distribution_relation_rt
+- name: dq.dwd_cus_customer_register_rt
+  type: MONITOR
+  desc: 实时游客注册 监控
+  depends_on:
+  - dwd_cus_customer_register_rt
+  on_fail: 告警
+  rules:
+  - id: R1475
+    dimension: 及时性
+    name: 数据新鲜度 ≤ 5 分钟
+    level: 强
+    expect: lag_s ≤ 300（营业时间 08:00–22:00）
+    sql: SELECT TIMESTAMPDIFF(SECOND, MAX(event_time), NOW()) AS lag_s FROM dwd.dwd_cus_customer_register_rt WHERE travel_date = DATE_FORMAT(NOW(), '%Y%m%d');
+- name: dq.dwd_fin_account_balance_rt
+  type: MONITOR
+  desc: 实时账户余额 监控
+  depends_on:
+  - dwd_fin_account_balance_rt
+  on_fail: 告警
+  rules:
+  - id: R1473
+    dimension: 及时性
+    name: 数据新鲜度 ≤ 5 分钟
+    level: 强
+    expect: lag_s ≤ 300（营业时间 08:00–22:00）
+    sql: SELECT TIMESTAMPDIFF(SECOND, MAX(event_time), NOW()) AS lag_s FROM dwd.dwd_fin_account_balance_rt WHERE travel_date = DATE_FORMAT(NOW(), '%Y%m%d');
+- name: dq.dwd_fin_frozen_rt
+  type: MONITOR
+  desc: 实时冻结/解冻明细 监控
+  depends_on:
+  - dwd_fin_frozen_rt
+  on_fail: 告警
+  rules:
+  - id: R1472
+    dimension: 及时性
+    name: 数据新鲜度 ≤ 5 分钟
+    level: 强
+    expect: lag_s ≤ 300（营业时间 08:00–22:00）
+    sql: SELECT TIMESTAMPDIFF(SECOND, MAX(event_time), NOW()) AS lag_s FROM dwd.dwd_fin_frozen_rt WHERE travel_date = DATE_FORMAT(NOW(), '%Y%m%d');
 - name: dq.dwd_fin_payment_rt
   type: MONITOR
   desc: 实时支付明细 监控
@@ -311,7 +650,7 @@ tasks:
   - dwd_fin_payment_rt
   on_fail: 告警
   rules:
-  - id: R1407
+  - id: R1467
     dimension: 及时性
     name: 数据新鲜度 ≤ 5 分钟
     level: 强
@@ -324,12 +663,64 @@ tasks:
   - dwd_inv_pool_change_rt
   on_fail: 告警
   rules:
-  - id: R1410
+  - id: R1470
     dimension: 及时性
     name: 数据新鲜度 ≤ 5 分钟
     level: 强
     expect: lag_s ≤ 300（营业时间 08:00–22:00）
     sql: SELECT TIMESTAMPDIFF(SECOND, MAX(event_time), NOW()) AS lag_s FROM dwd.dwd_inv_pool_change_rt WHERE travel_date = DATE_FORMAT(NOW(), '%Y%m%d');
+- name: dq.dwd_opr_code_pool_rt
+  type: MONITOR
+  desc: 实时码池状态 监控
+  depends_on:
+  - dwd_opr_code_pool_rt
+  on_fail: 告警
+  rules:
+  - id: R1479
+    dimension: 及时性
+    name: 数据新鲜度 ≤ 5 分钟
+    level: 强
+    expect: lag_s ≤ 300（营业时间 08:00–22:00）
+    sql: SELECT TIMESTAMPDIFF(SECOND, MAX(event_time), NOW()) AS lag_s FROM dwd.dwd_opr_code_pool_rt WHERE travel_date = DATE_FORMAT(NOW(), '%Y%m%d');
+- name: dq.dwd_opr_complaint_rt
+  type: MONITOR
+  desc: 实时投诉工单 监控
+  depends_on:
+  - dwd_opr_complaint_rt
+  on_fail: 告警
+  rules:
+  - id: R1478
+    dimension: 及时性
+    name: 数据新鲜度 ≤ 5 分钟
+    level: 强
+    expect: lag_s ≤ 300（营业时间 08:00–22:00）
+    sql: SELECT TIMESTAMPDIFF(SECOND, MAX(event_time), NOW()) AS lag_s FROM dwd.dwd_opr_complaint_rt WHERE travel_date = DATE_FORMAT(NOW(), '%Y%m%d');
+- name: dq.dwd_opr_device_status_log_rt
+  type: MONITOR
+  desc: 实时设备状态变更 监控
+  depends_on:
+  - dwd_opr_device_status_log_rt
+  on_fail: 告警
+  rules:
+  - id: R1476
+    dimension: 及时性
+    name: 数据新鲜度 ≤ 5 分钟
+    level: 强
+    expect: lag_s ≤ 300（营业时间 08:00–22:00）
+    sql: SELECT TIMESTAMPDIFF(SECOND, MAX(event_time), NOW()) AS lag_s FROM dwd.dwd_opr_device_status_log_rt WHERE travel_date = DATE_FORMAT(NOW(), '%Y%m%d');
+- name: dq.dwd_opr_notify_rt
+  type: MONITOR
+  desc: 实时通知发送 监控
+  depends_on:
+  - dwd_opr_notify_rt
+  on_fail: 告警
+  rules:
+  - id: R1477
+    dimension: 及时性
+    name: 数据新鲜度 ≤ 5 分钟
+    level: 强
+    expect: lag_s ≤ 300（营业时间 08:00–22:00）
+    sql: SELECT TIMESTAMPDIFF(SECOND, MAX(event_time), NOW()) AS lag_s FROM dwd.dwd_opr_notify_rt WHERE travel_date = DATE_FORMAT(NOW(), '%Y%m%d');
 - name: dq.dwd_opr_risk_event_rt
   type: MONITOR
   desc: 实时风控事件 监控
@@ -337,7 +728,7 @@ tasks:
   - dwd_opr_risk_event_rt
   on_fail: 告警
   rules:
-  - id: R1411
+  - id: R1471
     dimension: 及时性
     name: 数据新鲜度 ≤ 5 分钟
     level: 强
@@ -350,7 +741,7 @@ tasks:
   - dwd_ord_order_rt
   on_fail: 告警
   rules:
-  - id: R1406
+  - id: R1466
     dimension: 及时性
     name: 数据新鲜度 ≤ 5 分钟
     level: 强
@@ -363,7 +754,7 @@ tasks:
   - dwd_ord_refund_rt
   on_fail: 告警
   rules:
-  - id: R1409
+  - id: R1469
     dimension: 及时性
     name: 数据新鲜度 ≤ 5 分钟
     level: 强
@@ -376,18 +767,68 @@ tasks:
   - dwd_ord_verify_rt
   on_fail: 告警
   rules:
-  - id: R1408
+  - id: R1468
     dimension: 及时性
     name: 数据新鲜度 ≤ 5 分钟
     level: 强
     expect: lag_s ≤ 300（营业时间 08:00–22:00）
     sql: SELECT TIMESTAMPDIFF(SECOND, MAX(event_time), NOW()) AS lag_s FROM dwd.dwd_ord_verify_rt WHERE travel_date = DATE_FORMAT(NOW(), '%Y%m%d');
+- name: dq.dwd_trf_distribution_credit_rt
+  type: MONITOR
+  desc: 实时分销授信 监控
+  depends_on:
+  - dwd_trf_distribution_credit_rt
+  on_fail: 告警
+  rules:
+  - id: R1474
+    dimension: 及时性
+    name: 数据新鲜度 ≤ 5 分钟
+    level: 强
+    expect: lag_s ≤ 300（营业时间 08:00–22:00）
+    sql: SELECT TIMESTAMPDIFF(SECOND, MAX(event_time), NOW()) AS lag_s FROM dwd.dwd_trf_distribution_credit_rt WHERE travel_date = DATE_FORMAT(NOW(), '%Y%m%d');
+- name: dws_cus_tenant_growth_rt
+  type: FLINK_SINK
+  desc: 游客实时增长
+  command: Flink 作业 flink_job_opr_risk_alert 写入 StarRocks
+  depends_on:
+  - dq.dwd_cus_customer_register_rt
+- name: dws_fin_account_fund_rt
+  type: FLINK_SINK
+  desc: 账户实时资金
+  command: Flink 作业 flink_job_fin_account_fund 写入 StarRocks
+  depends_on:
+  - dq.dwd_fin_account_balance_rt
+  - dq.dwd_fin_frozen_rt
 - name: dws_inv_sku_stock_rt
   type: FLINK_SINK
   desc: SKU 实时库存
   command: Flink 作业 flink_job_inv_realtime_stock 写入 StarRocks
   depends_on:
   - dq.dwd_inv_pool_change_rt
+- name: dws_opr_code_pool_rt
+  type: FLINK_SINK
+  desc: 码池实时余量
+  command: Flink 作业 flink_job_opr_operation_monitor 写入 StarRocks
+  depends_on:
+  - dq.dwd_opr_code_pool_rt
+- name: dws_opr_complaint_rt
+  type: FLINK_SINK
+  desc: 投诉实时处理
+  command: Flink 作业 flink_job_opr_operation_monitor 写入 StarRocks
+  depends_on:
+  - dq.dwd_opr_complaint_rt
+- name: dws_opr_device_rt
+  type: FLINK_SINK
+  desc: 设备实时状态
+  command: Flink 作业 flink_job_opr_operation_monitor 写入 StarRocks
+  depends_on:
+  - dq.dwd_opr_device_status_log_rt
+- name: dws_opr_notify_rt
+  type: FLINK_SINK
+  desc: 通知实时发送
+  command: Flink 作业 flink_job_opr_operation_monitor 写入 StarRocks
+  depends_on:
+  - dq.dwd_opr_notify_rt
 - name: dws_opr_risk_rule_hit_rt
   type: FLINK_SINK
   desc: 风控规则 分钟级命中
@@ -397,17 +838,68 @@ tasks:
 - name: dws_ord_tenant_sku_trade_rt
   type: FLINK_SINK
   desc: 商户×SKU 分钟级交易
-  command: Flink 作业 flink_job_ord_realtime_sales 写入 StarRocks
+  command: Flink 作业 flink_job_opr_risk_alert 写入 StarRocks
   depends_on:
   - dq.dwd_fin_payment_rt
   - dq.dwd_ord_order_rt
   - dq.dwd_ord_refund_rt
+- name: dws_ord_tenant_sku_verify_rt
+  type: FLINK_SINK
+  desc: 商户×SKU 实时核销
+  command: Flink 作业 flink_job_opr_risk_alert 写入 StarRocks
+  depends_on:
+  - dq.dwd_ord_verify_rt
 - name: dws_ord_verify_point_flow_rt
   type: FLINK_SINK
   desc: 核销点 分钟级客流
   command: Flink 作业 flink_job_opr_risk_alert 写入 StarRocks
   depends_on:
   - dq.dwd_ord_verify_rt
+- name: dws_trf_distributor_credit_rt
+  type: FLINK_SINK
+  desc: 分销授信实时
+  command: Flink 作业 flink_job_trf_credit_alert 写入 StarRocks
+  depends_on:
+  - dq.dwd_trf_distribution_credit_rt
+- name: dq.dws_cus_tenant_growth_rt
+  type: MONITOR
+  desc: 游客实时增长 监控
+  depends_on:
+  - dws_cus_tenant_growth_rt
+  on_fail: 告警
+  rules:
+  - id: R1494
+    dimension: 及时性
+    name: 数据新鲜度 ≤ 5 分钟
+    level: 强
+    expect: lag_s ≤ 300（营业时间 08:00–22:00）
+    sql: SELECT TIMESTAMPDIFF(SECOND, MAX(update_time), NOW()) AS lag_s FROM dws.dws_cus_tenant_growth_rt WHERE travel_date = DATE_FORMAT(NOW(), '%Y%m%d');
+  - id: R1495
+    dimension: 有效性
+    name: 金额/数量非负
+    level: 弱
+    expect: '0'
+    sql: SELECT COUNT(*) FROM dws.dws_cus_tenant_growth_rt WHERE travel_date = DATE_FORMAT(NOW(), '%Y%m%d') AND (new_customer_qty < 0);
+- name: dq.dws_fin_account_fund_rt
+  type: MONITOR
+  desc: 账户实时资金 监控
+  depends_on:
+  - dws_fin_account_fund_rt
+  on_fail: 告警
+  rules:
+  - id: R1490
+    dimension: 及时性
+    name: 数据新鲜度 ≤ 5 分钟
+    level: 强
+    expect: lag_s ≤ 300（营业时间 08:00–22:00）
+    sql: SELECT TIMESTAMPDIFF(SECOND, MAX(update_time), NOW()) AS lag_s FROM dws.dws_fin_account_fund_rt WHERE travel_date = DATE_FORMAT(NOW(), '%Y%m%d');
+  - id: R1491
+    dimension: 有效性
+    name: 金额/数量非负
+    level: 弱
+    expect: '0'
+    sql: SELECT COUNT(*) FROM dws.dws_fin_account_fund_rt WHERE travel_date = DATE_FORMAT(NOW(), '%Y%m%d') AND (available_balance_amt < 0 OR frozen_balance_amt < 0 OR freeze_amt < 0 OR unfreeze_verify_amt
+      < 0 OR unfreeze_refund_amt < 0);
 - name: dq.dws_inv_sku_stock_rt
   type: MONITOR
   desc: SKU 实时库存 监控
@@ -415,19 +907,95 @@ tasks:
   - dws_inv_sku_stock_rt
   on_fail: 告警
   rules:
-  - id: R1416
+  - id: R1484
     dimension: 及时性
     name: 数据新鲜度 ≤ 5 分钟
     level: 强
     expect: lag_s ≤ 300（营业时间 08:00–22:00）
     sql: SELECT TIMESTAMPDIFF(SECOND, MAX(update_time), NOW()) AS lag_s FROM dws.dws_inv_sku_stock_rt WHERE travel_date = DATE_FORMAT(NOW(), '%Y%m%d');
-  - id: R1417
+  - id: R1485
     dimension: 有效性
     name: 金额/数量非负
     level: 弱
     expect: '0'
     sql: SELECT COUNT(*) FROM dws.dws_inv_sku_stock_rt WHERE travel_date = DATE_FORMAT(NOW(), '%Y%m%d') AND (stock_total_qty < 0 OR stock_available_qty < 0 OR stock_frozen_qty < 0 OR stock_sold_qty < 0
       OR sellout_pool_qty < 0 OR prededuct_qty < 0 OR prededuct_release_qty < 0);
+- name: dq.dws_opr_code_pool_rt
+  type: MONITOR
+  desc: 码池实时余量 监控
+  depends_on:
+  - dws_opr_code_pool_rt
+  on_fail: 告警
+  rules:
+  - id: R1502
+    dimension: 及时性
+    name: 数据新鲜度 ≤ 5 分钟
+    level: 强
+    expect: lag_s ≤ 300（营业时间 08:00–22:00）
+    sql: SELECT TIMESTAMPDIFF(SECOND, MAX(update_time), NOW()) AS lag_s FROM dws.dws_opr_code_pool_rt WHERE travel_date = DATE_FORMAT(NOW(), '%Y%m%d');
+  - id: R1503
+    dimension: 有效性
+    name: 金额/数量非负
+    level: 弱
+    expect: '0'
+    sql: SELECT COUNT(*) FROM dws.dws_opr_code_pool_rt WHERE travel_date = DATE_FORMAT(NOW(), '%Y%m%d') AND (code_capacity_qty < 0 OR code_allocated_qty < 0 OR code_recycled_qty < 0);
+- name: dq.dws_opr_complaint_rt
+  type: MONITOR
+  desc: 投诉实时处理 监控
+  depends_on:
+  - dws_opr_complaint_rt
+  on_fail: 告警
+  rules:
+  - id: R1500
+    dimension: 及时性
+    name: 数据新鲜度 ≤ 5 分钟
+    level: 强
+    expect: lag_s ≤ 300（营业时间 08:00–22:00）
+    sql: SELECT TIMESTAMPDIFF(SECOND, MAX(update_time), NOW()) AS lag_s FROM dws.dws_opr_complaint_rt WHERE travel_date = DATE_FORMAT(NOW(), '%Y%m%d');
+  - id: R1501
+    dimension: 有效性
+    name: 金额/数量非负
+    level: 弱
+    expect: '0'
+    sql: SELECT COUNT(*) FROM dws.dws_opr_complaint_rt WHERE travel_date = DATE_FORMAT(NOW(), '%Y%m%d') AND (complaint_qty < 0 OR complaint_resolved_qty < 0 OR complaint_overdue_qty < 0);
+- name: dq.dws_opr_device_rt
+  type: MONITOR
+  desc: 设备实时状态 监控
+  depends_on:
+  - dws_opr_device_rt
+  on_fail: 告警
+  rules:
+  - id: R1496
+    dimension: 及时性
+    name: 数据新鲜度 ≤ 5 分钟
+    level: 强
+    expect: lag_s ≤ 300（营业时间 08:00–22:00）
+    sql: SELECT TIMESTAMPDIFF(SECOND, MAX(update_time), NOW()) AS lag_s FROM dws.dws_opr_device_rt WHERE travel_date = DATE_FORMAT(NOW(), '%Y%m%d');
+  - id: R1497
+    dimension: 有效性
+    name: 金额/数量非负
+    level: 弱
+    expect: '0'
+    sql: SELECT COUNT(*) FROM dws.dws_opr_device_rt WHERE travel_date = DATE_FORMAT(NOW(), '%Y%m%d') AND (offline_times_qty < 0 OR device_total_qty < 0);
+- name: dq.dws_opr_notify_rt
+  type: MONITOR
+  desc: 通知实时发送 监控
+  depends_on:
+  - dws_opr_notify_rt
+  on_fail: 告警
+  rules:
+  - id: R1498
+    dimension: 及时性
+    name: 数据新鲜度 ≤ 5 分钟
+    level: 强
+    expect: lag_s ≤ 300（营业时间 08:00–22:00）
+    sql: SELECT TIMESTAMPDIFF(SECOND, MAX(update_time), NOW()) AS lag_s FROM dws.dws_opr_notify_rt WHERE travel_date = DATE_FORMAT(NOW(), '%Y%m%d');
+  - id: R1499
+    dimension: 有效性
+    name: 金额/数量非负
+    level: 弱
+    expect: '0'
+    sql: SELECT COUNT(*) FROM dws.dws_opr_notify_rt WHERE travel_date = DATE_FORMAT(NOW(), '%Y%m%d') AND (notify_send_qty < 0 OR notify_success_qty < 0 OR notify_fail_qty < 0);
 - name: dq.dws_opr_risk_rule_hit_rt
   type: MONITOR
   desc: 风控规则 分钟级命中 监控
@@ -435,13 +1003,13 @@ tasks:
   - dws_opr_risk_rule_hit_rt
   on_fail: 告警
   rules:
-  - id: R1418
+  - id: R1486
     dimension: 及时性
     name: 数据新鲜度 ≤ 5 分钟
     level: 强
     expect: lag_s ≤ 300（营业时间 08:00–22:00）
     sql: SELECT TIMESTAMPDIFF(SECOND, MAX(update_time), NOW()) AS lag_s FROM dws.dws_opr_risk_rule_hit_rt WHERE travel_date = DATE_FORMAT(NOW(), '%Y%m%d');
-  - id: R1419
+  - id: R1487
     dimension: 有效性
     name: 金额/数量非负
     level: 弱
@@ -454,18 +1022,38 @@ tasks:
   - dws_ord_tenant_sku_trade_rt
   on_fail: 告警
   rules:
-  - id: R1412
+  - id: R1480
     dimension: 及时性
     name: 数据新鲜度 ≤ 5 分钟
     level: 强
     expect: lag_s ≤ 300（营业时间 08:00–22:00）
     sql: SELECT TIMESTAMPDIFF(SECOND, MAX(update_time), NOW()) AS lag_s FROM dws.dws_ord_tenant_sku_trade_rt WHERE travel_date = DATE_FORMAT(NOW(), '%Y%m%d');
-  - id: R1413
+  - id: R1481
     dimension: 有效性
     name: 金额/数量非负
     level: 弱
     expect: '0'
     sql: SELECT COUNT(*) FROM dws.dws_ord_tenant_sku_trade_rt WHERE travel_date = DATE_FORMAT(NOW(), '%Y%m%d') AND (pay_amt < 0 OR pay_order_qty < 0 OR pay_ticket_qty < 0 OR pay_buyer_qty < 0 OR refund_amt
+      < 0 OR refund_ticket_qty < 0 OR order_qty < 0 OR order_ticket_qty < 0 OR order_amt < 0 OR cancel_order_qty < 0 OR staff_order_qty < 0 OR staff_pay_amt < 0);
+- name: dq.dws_ord_tenant_sku_verify_rt
+  type: MONITOR
+  desc: 商户×SKU 实时核销 监控
+  depends_on:
+  - dws_ord_tenant_sku_verify_rt
+  on_fail: 告警
+  rules:
+  - id: R1488
+    dimension: 及时性
+    name: 数据新鲜度 ≤ 5 分钟
+    level: 强
+    expect: lag_s ≤ 300（营业时间 08:00–22:00）
+    sql: SELECT TIMESTAMPDIFF(SECOND, MAX(update_time), NOW()) AS lag_s FROM dws.dws_ord_tenant_sku_verify_rt WHERE travel_date = DATE_FORMAT(NOW(), '%Y%m%d');
+  - id: R1489
+    dimension: 有效性
+    name: 金额/数量非负
+    level: 弱
+    expect: '0'
+    sql: SELECT COUNT(*) FROM dws.dws_ord_tenant_sku_verify_rt WHERE travel_date = DATE_FORMAT(NOW(), '%Y%m%d') AND (verify_ticket_qty < 0 OR verify_amt < 0 OR verify_entitlement_qty < 0 OR verify_fail_qty
       < 0);
 - name: dq.dws_ord_verify_point_flow_rt
   type: MONITOR
@@ -474,25 +1062,61 @@ tasks:
   - dws_ord_verify_point_flow_rt
   on_fail: 告警
   rules:
-  - id: R1414
+  - id: R1482
     dimension: 及时性
     name: 数据新鲜度 ≤ 5 分钟
     level: 强
     expect: lag_s ≤ 300（营业时间 08:00–22:00）
     sql: SELECT TIMESTAMPDIFF(SECOND, MAX(update_time), NOW()) AS lag_s FROM dws.dws_ord_verify_point_flow_rt WHERE travel_date = DATE_FORMAT(NOW(), '%Y%m%d');
-  - id: R1415
+  - id: R1483
     dimension: 有效性
     name: 金额/数量非负
     level: 弱
     expect: '0'
     sql: SELECT COUNT(*) FROM dws.dws_ord_verify_point_flow_rt WHERE travel_date = DATE_FORMAT(NOW(), '%Y%m%d') AND (verify_person_qty < 0 OR verify_fail_qty < 0 OR verify_entitlement_qty < 0 OR duplicate_verify_qty
       < 0 OR offline_conflict_qty < 0);
+- name: dq.dws_trf_distributor_credit_rt
+  type: MONITOR
+  desc: 分销授信实时 监控
+  depends_on:
+  - dws_trf_distributor_credit_rt
+  on_fail: 告警
+  rules:
+  - id: R1492
+    dimension: 及时性
+    name: 数据新鲜度 ≤ 5 分钟
+    level: 强
+    expect: lag_s ≤ 300（营业时间 08:00–22:00）
+    sql: SELECT TIMESTAMPDIFF(SECOND, MAX(update_time), NOW()) AS lag_s FROM dws.dws_trf_distributor_credit_rt WHERE travel_date = DATE_FORMAT(NOW(), '%Y%m%d');
+  - id: R1493
+    dimension: 有效性
+    name: 金额/数量非负
+    level: 弱
+    expect: '0'
+    sql: SELECT COUNT(*) FROM dws.dws_trf_distributor_credit_rt WHERE travel_date = DATE_FORMAT(NOW(), '%Y%m%d') AND (credit_limit_amt < 0 OR credit_used_amt < 0);
+- name: ads_fin_account_fund_rt
+  type: FLINK_SINK
+  desc: 账户资金实时
+  command: Flink 作业 flink_job_fin_account_fund 写入 StarRocks
+  depends_on:
+  - dq.dws_fin_account_fund_rt
 - name: ads_inv_realtime_stock_rt
   type: FLINK_SINK
   desc: 实时库存看板（对应 DP09）
   command: Flink 作业 flink_job_inv_realtime_stock 写入 StarRocks
   depends_on:
   - dq.dws_inv_sku_stock_rt
+  - ext.dim_prd_sku_zip
+- name: ads_opr_operation_monitor_rt
+  type: FLINK_SINK
+  desc: 运营实时监控
+  command: Flink 作业 flink_job_opr_operation_monitor 写入 StarRocks
+  depends_on:
+  - dq.dws_opr_code_pool_rt
+  - dq.dws_opr_complaint_rt
+  - dq.dws_opr_device_rt
+  - dq.dws_opr_notify_rt
+  - ext.dim_sup_tenant_zip
 - name: ads_opr_risk_alert_rt
   type: FLINK_SINK
   desc: 实时风控预警
@@ -500,18 +1124,79 @@ tasks:
   depends_on:
   - dq.dws_opr_risk_rule_hit_rt
   - dq.dws_ord_verify_point_flow_rt
+  - ext.dim_opr_risk_rule_df
+- name: ads_ord_channel_sales_rt
+  type: FLINK_SINK
+  desc: 渠道实时销售结构
+  command: Flink 作业 flink_job_opr_risk_alert 写入 StarRocks
+  depends_on:
+  - dq.dws_ord_tenant_sku_trade_rt
+  - ext.dim_sup_tenant_zip
 - name: ads_ord_realtime_flow_rt
   type: FLINK_SINK
   desc: 实时客流大屏
   command: Flink 作业 flink_job_opr_risk_alert 写入 StarRocks
   depends_on:
   - dq.dws_ord_verify_point_flow_rt
+  - ext.dim_opr_verify_point_df
+  - ext.dim_sup_tenant_zip
 - name: ads_ord_realtime_sales_rt
   type: FLINK_SINK
   desc: 实时销售看板（对应 DP08）
-  command: Flink 作业 flink_job_ord_realtime_sales 写入 StarRocks
+  command: Flink 作业 flink_job_opr_risk_alert 写入 StarRocks
   depends_on:
   - dq.dws_ord_tenant_sku_trade_rt
+  - ext.dim_sup_tenant_zip
+- name: ads_ord_sku_sales_rank_rt
+  type: FLINK_SINK
+  desc: SKU 实时销售排行
+  command: Flink 作业 flink_job_opr_risk_alert 写入 StarRocks
+  depends_on:
+  - dq.dws_ord_tenant_sku_trade_rt
+  - ext.dim_prd_sku_zip
+  - ext.dim_sup_tenant_zip
+- name: ads_ord_tenant_trade_overview_rt
+  type: FLINK_SINK
+  desc: 商户经营实时概览
+  command: Flink 作业 flink_job_opr_risk_alert 写入 StarRocks
+  depends_on:
+  - dq.dws_ord_tenant_sku_trade_rt
+  - dq.dws_ord_tenant_sku_verify_rt
+  - ext.dim_sup_tenant_zip
+- name: ads_sup_platform_overview_rt
+  type: FLINK_SINK
+  desc: 平台实时大盘
+  command: Flink 作业 flink_job_opr_risk_alert 写入 StarRocks
+  depends_on:
+  - dq.dws_cus_tenant_growth_rt
+  - dq.dws_ord_tenant_sku_trade_rt
+  - dq.dws_ord_tenant_sku_verify_rt
+- name: ads_trf_credit_alert_rt
+  type: FLINK_SINK
+  desc: 分销授信实时预警
+  command: Flink 作业 flink_job_trf_credit_alert 写入 StarRocks
+  depends_on:
+  - dq.dws_trf_distributor_credit_rt
+- name: dq.ads_fin_account_fund_rt
+  type: MONITOR
+  desc: 账户资金实时 监控
+  depends_on:
+  - ads_fin_account_fund_rt
+  on_fail: 告警
+  rules:
+  - id: R1518
+    dimension: 及时性
+    name: 数据新鲜度 ≤ 5 分钟
+    level: 强
+    expect: lag_s ≤ 300（营业时间 08:00–22:00）
+    sql: SELECT TIMESTAMPDIFF(SECOND, MAX(update_time), NOW()) AS lag_s FROM ads.ads_fin_account_fund_rt WHERE travel_date = DATE_FORMAT(NOW(), '%Y%m%d');
+  - id: R1519
+    dimension: 有效性
+    name: 金额/数量非负
+    level: 弱
+    expect: '0'
+    sql: SELECT COUNT(*) FROM ads.ads_fin_account_fund_rt WHERE travel_date = DATE_FORMAT(NOW(), '%Y%m%d') AND (available_balance_now_amt < 0 OR frozen_balance_now_amt < 0 OR freeze_today_amt < 0 OR unfreeze_verify_today_amt
+      < 0 OR unfreeze_refund_today_amt < 0);
 - name: dq.ads_inv_realtime_stock_rt
   type: MONITOR
   desc: 实时库存看板（对应 DP09） 监控
@@ -519,19 +1204,39 @@ tasks:
   - ads_inv_realtime_stock_rt
   on_fail: 告警
   rules:
-  - id: R1422
+  - id: R1506
     dimension: 及时性
     name: 数据新鲜度 ≤ 5 分钟
     level: 强
     expect: lag_s ≤ 300（营业时间 08:00–22:00）
     sql: SELECT TIMESTAMPDIFF(SECOND, MAX(update_time), NOW()) AS lag_s FROM ads.ads_inv_realtime_stock_rt WHERE travel_date = DATE_FORMAT(NOW(), '%Y%m%d');
-  - id: R1423
+  - id: R1507
     dimension: 有效性
     name: 金额/数量非负
     level: 弱
     expect: '0'
     sql: SELECT COUNT(*) FROM ads.ads_inv_realtime_stock_rt WHERE travel_date = DATE_FORMAT(NOW(), '%Y%m%d') AND (stock_available_now_qty < 0 OR stock_frozen_now_qty < 0 OR sellout_pool_now_qty < 0 OR prededuct_5m_qty
       < 0 OR prededuct_release_5m_qty < 0);
+- name: dq.ads_opr_operation_monitor_rt
+  type: MONITOR
+  desc: 运营实时监控 监控
+  depends_on:
+  - ads_opr_operation_monitor_rt
+  on_fail: 告警
+  rules:
+  - id: R1524
+    dimension: 及时性
+    name: 数据新鲜度 ≤ 5 分钟
+    level: 强
+    expect: lag_s ≤ 300（营业时间 08:00–22:00）
+    sql: SELECT TIMESTAMPDIFF(SECOND, MAX(update_time), NOW()) AS lag_s FROM ads.ads_opr_operation_monitor_rt WHERE travel_date = DATE_FORMAT(NOW(), '%Y%m%d');
+  - id: R1525
+    dimension: 有效性
+    name: 金额/数量非负
+    level: 弱
+    expect: '0'
+    sql: SELECT COUNT(*) FROM ads.ads_opr_operation_monitor_rt WHERE travel_date = DATE_FORMAT(NOW(), '%Y%m%d') AND (offline_times_today_qty < 0 OR notify_send_today_qty < 0 OR notify_fail_today_qty < 0
+      OR complaint_today_qty < 0 OR complaint_overdue_today_qty < 0 OR device_total_now_qty < 0 OR code_capacity_now_qty < 0 OR code_allocated_now_qty < 0);
 - name: dq.ads_opr_risk_alert_rt
   type: MONITOR
   desc: 实时风控预警 监控
@@ -539,19 +1244,40 @@ tasks:
   - ads_opr_risk_alert_rt
   on_fail: 告警
   rules:
-  - id: R1426
+  - id: R1510
     dimension: 及时性
     name: 数据新鲜度 ≤ 5 分钟
     level: 强
     expect: lag_s ≤ 300（营业时间 08:00–22:00）
     sql: SELECT TIMESTAMPDIFF(SECOND, MAX(update_time), NOW()) AS lag_s FROM ads.ads_opr_risk_alert_rt WHERE travel_date = DATE_FORMAT(NOW(), '%Y%m%d');
-  - id: R1427
+  - id: R1511
     dimension: 有效性
     name: 金额/数量非负
     level: 弱
     expect: '0'
     sql: SELECT COUNT(*) FROM ads.ads_opr_risk_alert_rt WHERE travel_date = DATE_FORMAT(NOW(), '%Y%m%d') AND (risk_hit_5m_qty < 0 OR risk_hit_today_qty < 0 OR risk_block_5m_qty < 0 OR risk_block_today_qty
       < 0 OR duplicate_verify_5m_qty < 0 OR duplicate_verify_today_qty < 0 OR offline_conflict_5m_qty < 0 OR offline_conflict_today_qty < 0);
+- name: dq.ads_ord_channel_sales_rt
+  type: MONITOR
+  desc: 渠道实时销售结构 监控
+  depends_on:
+  - ads_ord_channel_sales_rt
+  on_fail: 告警
+  rules:
+  - id: R1516
+    dimension: 及时性
+    name: 数据新鲜度 ≤ 5 分钟
+    level: 强
+    expect: lag_s ≤ 300（营业时间 08:00–22:00）
+    sql: SELECT TIMESTAMPDIFF(SECOND, MAX(update_time), NOW()) AS lag_s FROM ads.ads_ord_channel_sales_rt WHERE travel_date = DATE_FORMAT(NOW(), '%Y%m%d');
+  - id: R1517
+    dimension: 有效性
+    name: 金额/数量非负
+    level: 弱
+    expect: '0'
+    sql: SELECT COUNT(*) FROM ads.ads_ord_channel_sales_rt WHERE travel_date = DATE_FORMAT(NOW(), '%Y%m%d') AND (mp_pay_today_amt < 0 OR h5_pay_today_amt < 0 OR pc_pay_today_amt < 0 OR offline_pay_today_amt
+      < 0 OR api_pay_today_amt < 0 OR mp_pay_order_today_qty < 0 OR h5_pay_order_today_qty < 0 OR pc_pay_order_today_qty < 0 OR offline_pay_order_today_qty < 0 OR api_pay_order_today_qty < 0 OR mp_pay_ticket_today_qty
+      < 0 OR h5_pay_ticket_today_qty < 0 OR pc_pay_ticket_today_qty < 0 OR offline_pay_ticket_today_qty < 0 OR api_pay_ticket_today_qty < 0 OR staff_order_today_qty < 0 OR staff_pay_today_amt < 0);
 - name: dq.ads_ord_realtime_flow_rt
   type: MONITOR
   desc: 实时客流大屏 监控
@@ -559,13 +1285,13 @@ tasks:
   - ads_ord_realtime_flow_rt
   on_fail: 告警
   rules:
-  - id: R1424
+  - id: R1508
     dimension: 及时性
     name: 数据新鲜度 ≤ 5 分钟
     level: 强
     expect: lag_s ≤ 300（营业时间 08:00–22:00）
     sql: SELECT TIMESTAMPDIFF(SECOND, MAX(update_time), NOW()) AS lag_s FROM ads.ads_ord_realtime_flow_rt WHERE travel_date = DATE_FORMAT(NOW(), '%Y%m%d');
-  - id: R1425
+  - id: R1509
     dimension: 有效性
     name: 金额/数量非负
     level: 弱
@@ -579,18 +1305,98 @@ tasks:
   - ads_ord_realtime_sales_rt
   on_fail: 告警
   rules:
-  - id: R1420
+  - id: R1504
     dimension: 及时性
     name: 数据新鲜度 ≤ 5 分钟
     level: 强
     expect: lag_s ≤ 300（营业时间 08:00–22:00）
     sql: SELECT TIMESTAMPDIFF(SECOND, MAX(update_time), NOW()) AS lag_s FROM ads.ads_ord_realtime_sales_rt WHERE travel_date = DATE_FORMAT(NOW(), '%Y%m%d');
-  - id: R1421
+  - id: R1505
     dimension: 有效性
     name: 金额/数量非负
     level: 弱
     expect: '0'
     sql: SELECT COUNT(*) FROM ads.ads_ord_realtime_sales_rt WHERE travel_date = DATE_FORMAT(NOW(), '%Y%m%d') AND (pay_today_amt < 0 OR pay_1h_amt < 0 OR pay_5m_amt < 0 OR pay_order_today_qty < 0 OR pay_order_1h_qty
       < 0 OR pay_order_5m_qty < 0 OR pay_ticket_today_qty < 0 OR pay_ticket_1h_qty < 0 OR pay_ticket_5m_qty < 0 OR pay_buyer_today_qty < 0 OR pay_buyer_1h_qty < 0 OR pay_buyer_5m_qty < 0 OR refund_today_amt
-      < 0 OR refund_1h_amt < 0 OR refund_5m_amt < 0 OR avg_ticket_price_today_amt < 0 OR avg_ticket_price_1h_amt < 0 OR avg_ticket_price_5m_amt < 0 OR mp_pay_today_amt < 0 OR h5_pay_today_amt < 0 OR pc_pay_today_amt
-      < 0 OR offline_pay_today_amt < 0 OR api_pay_today_amt < 0);
+      < 0 OR refund_1h_amt < 0 OR refund_5m_amt < 0 OR avg_ticket_price_today_amt < 0 OR avg_ticket_price_1h_amt < 0 OR avg_ticket_price_5m_amt < 0);
+- name: dq.ads_ord_sku_sales_rank_rt
+  type: MONITOR
+  desc: SKU 实时销售排行 监控
+  depends_on:
+  - ads_ord_sku_sales_rank_rt
+  on_fail: 告警
+  rules:
+  - id: R1514
+    dimension: 及时性
+    name: 数据新鲜度 ≤ 5 分钟
+    level: 强
+    expect: lag_s ≤ 300（营业时间 08:00–22:00）
+    sql: SELECT TIMESTAMPDIFF(SECOND, MAX(update_time), NOW()) AS lag_s FROM ads.ads_ord_sku_sales_rank_rt WHERE travel_date = DATE_FORMAT(NOW(), '%Y%m%d');
+  - id: R1515
+    dimension: 有效性
+    name: 金额/数量非负
+    level: 弱
+    expect: '0'
+    sql: SELECT COUNT(*) FROM ads.ads_ord_sku_sales_rank_rt WHERE travel_date = DATE_FORMAT(NOW(), '%Y%m%d') AND (pay_today_amt < 0 OR pay_ticket_today_qty < 0 OR refund_ticket_today_qty < 0 OR avg_ticket_price_today_amt
+      < 0);
+- name: dq.ads_ord_tenant_trade_overview_rt
+  type: MONITOR
+  desc: 商户经营实时概览 监控
+  depends_on:
+  - ads_ord_tenant_trade_overview_rt
+  on_fail: 告警
+  rules:
+  - id: R1512
+    dimension: 及时性
+    name: 数据新鲜度 ≤ 5 分钟
+    level: 强
+    expect: lag_s ≤ 300（营业时间 08:00–22:00）
+    sql: SELECT TIMESTAMPDIFF(SECOND, MAX(update_time), NOW()) AS lag_s FROM ads.ads_ord_tenant_trade_overview_rt WHERE travel_date = DATE_FORMAT(NOW(), '%Y%m%d');
+  - id: R1513
+    dimension: 有效性
+    name: 金额/数量非负
+    level: 弱
+    expect: '0'
+    sql: SELECT COUNT(*) FROM ads.ads_ord_tenant_trade_overview_rt WHERE travel_date = DATE_FORMAT(NOW(), '%Y%m%d') AND (pay_today_amt < 0 OR pay_order_today_qty < 0 OR pay_ticket_today_qty < 0 OR pay_buyer_today_qty
+      < 0 OR order_today_qty < 0 OR refund_today_amt < 0 OR refund_ticket_today_qty < 0 OR verify_ticket_today_qty < 0 OR verify_today_amt < 0 OR avg_ticket_price_today_amt < 0 OR per_customer_today_amt
+      < 0);
+- name: dq.ads_sup_platform_overview_rt
+  type: MONITOR
+  desc: 平台实时大盘 监控
+  depends_on:
+  - ads_sup_platform_overview_rt
+  on_fail: 告警
+  rules:
+  - id: R1522
+    dimension: 及时性
+    name: 数据新鲜度 ≤ 5 分钟
+    level: 强
+    expect: lag_s ≤ 300（营业时间 08:00–22:00）
+    sql: SELECT TIMESTAMPDIFF(SECOND, MAX(update_time), NOW()) AS lag_s FROM ads.ads_sup_platform_overview_rt WHERE travel_date = DATE_FORMAT(NOW(), '%Y%m%d');
+  - id: R1523
+    dimension: 有效性
+    name: 金额/数量非负
+    level: 弱
+    expect: '0'
+    sql: SELECT COUNT(*) FROM ads.ads_sup_platform_overview_rt WHERE travel_date = DATE_FORMAT(NOW(), '%Y%m%d') AND (pay_today_amt < 0 OR pay_1h_amt < 0 OR pay_order_today_qty < 0 OR pay_order_1h_qty <
+      0 OR pay_buyer_today_qty < 0 OR pay_buyer_1h_qty < 0 OR refund_today_amt < 0 OR refund_1h_amt < 0 OR verify_ticket_today_qty < 0 OR verify_ticket_1h_qty < 0 OR new_customer_today_qty < 0 OR new_customer_1h_qty
+      < 0);
+- name: dq.ads_trf_credit_alert_rt
+  type: MONITOR
+  desc: 分销授信实时预警 监控
+  depends_on:
+  - ads_trf_credit_alert_rt
+  on_fail: 告警
+  rules:
+  - id: R1520
+    dimension: 及时性
+    name: 数据新鲜度 ≤ 5 分钟
+    level: 强
+    expect: lag_s ≤ 300（营业时间 08:00–22:00）
+    sql: SELECT TIMESTAMPDIFF(SECOND, MAX(update_time), NOW()) AS lag_s FROM ads.ads_trf_credit_alert_rt WHERE travel_date = DATE_FORMAT(NOW(), '%Y%m%d');
+  - id: R1521
+    dimension: 有效性
+    name: 金额/数量非负
+    level: 弱
+    expect: '0'
+    sql: SELECT COUNT(*) FROM ads.ads_trf_credit_alert_rt WHERE travel_date = DATE_FORMAT(NOW(), '%Y%m%d') AND (credit_limit_now_amt < 0 OR credit_used_now_amt < 0);

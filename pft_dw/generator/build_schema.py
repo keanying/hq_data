@@ -50,12 +50,18 @@ finish("dim_opr_date_f", S.lines(S.DATE_DIM) + S.ETL())
 
 # ------------------------------------------------ 实时 DWD：复用离线同名明细字段，上游改指 _rt
 RT_DWD = {"dwd_ord_order_rt": "dwd_ord_order_di", "dwd_fin_payment_rt": "dwd_fin_payment_di", "dwd_ord_verify_rt": "dwd_ord_verify_di",
-          "dwd_ord_refund_rt": "dwd_ord_refund_di", "dwd_inv_pool_change_rt": "dwd_inv_pool_change_di", "dwd_opr_risk_event_rt": "dwd_opr_risk_event_di"}
+          "dwd_ord_refund_rt": "dwd_ord_refund_di", "dwd_inv_pool_change_rt": "dwd_inv_pool_change_di", "dwd_opr_risk_event_rt": "dwd_opr_risk_event_di",
+          "dwd_fin_frozen_rt": "dwd_fin_frozen_di", "dwd_fin_account_balance_rt": "dwd_fin_account_balance_df",
+          "dwd_trf_distribution_credit_rt": "dim_trf_distribution_relation_zip", "dwd_cus_customer_register_rt": "dwd_cus_customer_register_di",
+          "dwd_opr_device_status_log_rt": "dwd_opr_device_status_log_di", "dwd_opr_notify_rt": "dwd_opr_notify_di",
+          "dwd_opr_complaint_rt": "dwd_opr_complaint_di", "dwd_opr_code_pool_rt": "dim_opr_code_pool_df"}
+RT_STATE = {"dwd_fin_account_balance_rt", "dwd_trf_distribution_credit_rt", "dwd_opr_code_pool_rt"}   # 状态类：每天每主键一行
+RT_EVENT = {"dwd_inv_pool_change_rt": "pool_id", "dwd_opr_device_status_log_rt": "device_id"}           # 变动类：主键 + 变动时间
 for rt, off in RT_DWD.items():
     up = set(TB[rt]["up"])
     cols = []
     for c in SCH[off]["cols"]:
-        if c["k"] == "ETL":
+        if c["k"] in ("ETL", "拉链"):
             continue
         r2 = []
         for a, b in c["r"]:
@@ -67,18 +73,27 @@ for rt, off in RT_DWD.items():
         s = re.sub(r"\bods_([a-z_]+?)_d[if]\b", lambda m: "ods_%s_rt" % m.group(1) if "ods_%s_rt" % m.group(1) in ODS else m.group(0), c["s"])
         cols.append(dict(c, r=r2, s=s))
     main_ods = next(u for u in TB[rt]["up"] if u in ODS)
-    for c in cols:  # 实时源表未声明的列（敏感列）不再引用
+    keep = []
+    for c in cols:  # 实时源表未声明的列（敏感列）不再引用；完全依赖这些列的字段在实时明细里不保留
+        had = bool(c["r"])
         c["r"] = [[a, b] for a, b in c["r"] if a not in ODS or any(x["n"] == b for x in ODS[a]["cols"])]
-    ent = S.DWD[off]["entity"]
-    is_event = "change" in rt
-    dt_src = "change_time" if is_event else "create_time"
-    cols.insert(0, S.col("travel_date", "STRING", "数据日期，格式 YYYYMMDD；取%s日期，保证同一主键始终落在同一分区" % ("变动时间" if is_event else "创建时间"),
-                         "分区", "%s.%s 取日期" % (main_ods, "binlog_time" if is_event else "create_time"),
-                         [[main_ods, "binlog_time" if is_event else "create_time"]]))
+        if had and not c["r"]:
+            continue
+        keep.append(c)
+    cols = keep
+    ent = (S.DWD.get(off) or S.DIM.get(off))["entity"]
+    is_event, is_state = rt in RT_EVENT, rt in RT_STATE
+    use_binlog = is_event or is_state
+    cols.insert(0, S.col("travel_date", "STRING", ("数据日期，格式 YYYYMMDD；取%s日期" % ("变动时间" if is_event else "状态更新时间" if is_state else "创建时间"))
+                         + ("，同一主键每天一行" if is_state else "，保证同一主键始终落在同一分区"),
+                         "分区", "%s.%s 取日期" % (main_ods, "binlog_time" if use_binlog else "create_time"),
+                         [[main_ods, "binlog_time" if use_binlog else "create_time"]]))
     cols.append(S.col("event_time", "STRING", "事件时间（binlog 时间），用于窗口计算与乱序处理，格式 yyyy-MM-dd HH:mm:ss", "ETL",
                       "%s.binlog_time" % main_ods, [[main_ods, "binlog_time"]]))
     finish(rt, cols)
-    SCH[rt]["keys"] = ["travel_date", ent + "_id"] + (["change_time"] if is_event else [])
+    SCH[rt]["keys"] = ["travel_date", RT_EVENT.get(rt, ent + "_id")] + (["change_time"] if is_event else [])
+
+RT_OF = {off: rt for rt, off in RT_DWD.items()}
 
 # ------------------------------------------------ DWS / ADS
 def find_src(up_tables, name):
@@ -106,8 +121,48 @@ def unit_txt(b, en=""):
 def metric_col(en, dtype, cn, kou, unit, refs, how):
     return S.col(en, dtype, "%s：%s%s" % (cn, (kou or "").rstrip("。；; "), unit), "指标", how, refs)
 
+def measure_col(u, en):
+    suf = "_amt" if en.endswith("_amt") else "_qty"
+    return next((c["n"] for c in SCH[u]["cols"] if c["k"] == "度量" and c["n"].endswith(suf)), "")
+
+def rt_fields(b, u):
+    """在实时明细 u 中找口径 b 的取数字段：同名度量 → 去掉前缀的同名度量 → 口径引用字段（含 *_status / xxx_time 这类改名后的字段）"""
+    cols = [c["n"] for c in SCH.get(u, {}).get("cols", [])]
+    en = b["en"]
+    if en in cols:
+        return [en]
+    short_en = en.split("_", 1)[1] if "_" in en else en
+    if short_en in cols and short_en.endswith(("_qty", "_amt")):
+        return [short_en]
+    out = []
+    for tk in IDENT.findall(b["calc"] or ""):
+        if tk in ("sum", "count", "distinct", "where", "and", "or", "in", "by", "of", "case", "when", "then", "else", "end"):
+            continue
+        hit = tk if tk in cols else next((c for c in cols if c.endswith("_" + tk) or c.startswith(tk + "_")), None)
+        if hit and hit not in out:
+            out.append(hit)
+    if out and en.endswith("_amt") and not any(f.endswith("_amt") for f in out):
+        m = measure_col(u, en)
+        if m:
+            out.insert(0, m)
+    return out
+
 def dws_metric_refs(short, b):
     up = TB[short]["up"]
+    if TB[short]["rt"] and b["type"] == "原子指标":
+        # 实时汇总：口径与离线同一个（同一原子口径），取数改从实时明细
+        src = RT_OF.get(b["src"])
+        first = [src] if src in up else []
+        etk = set(b["en"].split("_")) - {"qty", "amt", "rate"}
+        others = sorted([u for u in up if u != src], key=lambda u: -len(etk & set(u.split("_"))))
+        note = "（与离线同一口径 %s）" % b["code"]
+        for group in (first, others):
+            for u in group:
+                fs = rt_fields(b, u)
+                if fs:
+                    return [[u, f] for f in fs], "%s：%s%s" % (u, b["calc"], note)
+        u = (first or others)[0]
+        return [[u, measure_col(u, b["en"])]], "%s：%s%s" % (u, b["calc"], note)
     if b["type"] == "原子指标":
         if b["src"] in up or b["src"] not in TB:
             src = b["src"]

@@ -1,4 +1,4 @@
--- PFT 2.0 数仓数据质量规则（1433 条：强 504 / 弱 929）
+-- PFT 2.0 数仓数据质量规则（1535 条：强 545 / 弱 990）
 -- 强：失败阻断下游；弱：只告警。${bizdate} 为 T-1，格式 YYYYMMDD
 
 -- ==================== dq.ods_ord_order_group_di  聚合单 质检 ====================
@@ -7443,37 +7443,310 @@ SELECT COUNT(*) AS bad_cnt FROM ads.ads_opr_code_pool_usage_df WHERE travel_date
   AND ABS(code_recycle_td_rate - ROUND(code_recycled_td_qty * 100 / code_allocated_td_qty, 6)) > 0.000001;
 
 -- ==================== dq.recon.dws_ord_tenant_sku_trade_rt  实时/离线对账：商户×SKU 分钟级交易 ====================
--- R1383 [弱][一致性] 实时 dws_ord_tenant_sku_trade_rt.pay_amt 与离线 dws_sup_tenant_trade_di.pay_amt 对账；期望：|实时 − 离线| / 离线 ≤ 0.5%
+-- R1383 [弱][一致性] 实时 dws_ord_tenant_sku_trade_rt.pay_amt 与离线 dws_ord_tenant_sku_channel_trade_di.pay_amt 对账；期望：|实时 − 离线| / 离线 ≤ 0.5%
 -- StarRocks 实时
 SELECT SUM(pay_amt) FROM dws.dws_ord_tenant_sku_trade_rt WHERE travel_date = '${bizdate}';
 -- Hive 离线
-SELECT SUM(pay_amt) FROM dws.dws_sup_tenant_trade_di WHERE travel_date = '${bizdate}';
+SELECT SUM(pay_amt) FROM dws.dws_ord_tenant_sku_channel_trade_di WHERE travel_date = '${bizdate}';
 
--- R1384 [弱][一致性] 实时 dws_ord_tenant_sku_trade_rt.pay_order_qty 与离线 dws_sup_tenant_trade_di.pay_order_qty 对账；期望：|实时 − 离线| / 离线 ≤ 0.5%
+-- R1384 [弱][一致性] 实时 dws_ord_tenant_sku_trade_rt.pay_order_qty 与离线 dws_ord_tenant_sku_channel_trade_di.pay_order_qty 对账；期望：|实时 − 离线| / 离线 ≤ 0.5%
 -- StarRocks 实时
 SELECT SUM(pay_order_qty) FROM dws.dws_ord_tenant_sku_trade_rt WHERE travel_date = '${bizdate}';
 -- Hive 离线
-SELECT SUM(pay_order_qty) FROM dws.dws_sup_tenant_trade_di WHERE travel_date = '${bizdate}';
+SELECT SUM(pay_order_qty) FROM dws.dws_ord_tenant_sku_channel_trade_di WHERE travel_date = '${bizdate}';
 
--- R1385 [弱][一致性] 实时 dws_ord_tenant_sku_trade_rt.refund_amt 与离线 dws_sup_tenant_trade_di.refund_amt 对账；期望：|实时 − 离线| / 离线 ≤ 0.5%
+-- R1385 [弱][一致性] 实时 dws_ord_tenant_sku_trade_rt.pay_ticket_qty 与离线 dws_ord_tenant_sku_channel_trade_di.pay_ticket_qty 对账；期望：|实时 − 离线| / 离线 ≤ 0.5%
+-- StarRocks 实时
+SELECT SUM(pay_ticket_qty) FROM dws.dws_ord_tenant_sku_trade_rt WHERE travel_date = '${bizdate}';
+-- Hive 离线
+SELECT SUM(pay_ticket_qty) FROM dws.dws_ord_tenant_sku_channel_trade_di WHERE travel_date = '${bizdate}';
+
+-- R1386 [弱][一致性] 实时 dws_ord_tenant_sku_trade_rt.pay_buyer_qty 与离线 dws_ord_tenant_sku_channel_trade_di.pay_buyer_qty 对账；期望：|实时 − 离线| / 离线 ≤ 0.5%
+-- StarRocks 实时
+SELECT SUM(pay_buyer_qty) FROM dws.dws_ord_tenant_sku_trade_rt WHERE travel_date = '${bizdate}';
+-- Hive 离线
+SELECT SUM(pay_buyer_qty) FROM dws.dws_ord_tenant_sku_channel_trade_di WHERE travel_date = '${bizdate}';
+
+-- R1387 [弱][一致性] 实时 dws_ord_tenant_sku_trade_rt.refund_amt 与离线 dws_sup_tenant_trade_di.refund_amt 对账；期望：|实时 − 离线| / 离线 ≤ 0.5%
 -- StarRocks 实时
 SELECT SUM(refund_amt) FROM dws.dws_ord_tenant_sku_trade_rt WHERE travel_date = '${bizdate}';
 -- Hive 离线
 SELECT SUM(refund_amt) FROM dws.dws_sup_tenant_trade_di WHERE travel_date = '${bizdate}';
 
+-- R1388 [弱][一致性] 实时 dws_ord_tenant_sku_trade_rt.refund_ticket_qty 与离线 dws_sup_tenant_trade_di.refund_ticket_qty 对账；期望：|实时 − 离线| / 离线 ≤ 0.5%
+-- StarRocks 实时
+SELECT SUM(refund_ticket_qty) FROM dws.dws_ord_tenant_sku_trade_rt WHERE travel_date = '${bizdate}';
+-- Hive 离线
+SELECT SUM(refund_ticket_qty) FROM dws.dws_sup_tenant_trade_di WHERE travel_date = '${bizdate}';
+
+-- R1389 [弱][一致性] 实时 dws_ord_tenant_sku_trade_rt.order_qty 与离线 dws_ord_tenant_sku_channel_trade_di.order_qty 对账；期望：|实时 − 离线| / 离线 ≤ 0.5%
+-- StarRocks 实时
+SELECT SUM(order_qty) FROM dws.dws_ord_tenant_sku_trade_rt WHERE travel_date = '${bizdate}';
+-- Hive 离线
+SELECT SUM(order_qty) FROM dws.dws_ord_tenant_sku_channel_trade_di WHERE travel_date = '${bizdate}';
+
+-- R1390 [弱][一致性] 实时 dws_ord_tenant_sku_trade_rt.order_ticket_qty 与离线 dws_ord_tenant_sku_channel_trade_di.order_ticket_qty 对账；期望：|实时 − 离线| / 离线 ≤ 0.5%
+-- StarRocks 实时
+SELECT SUM(order_ticket_qty) FROM dws.dws_ord_tenant_sku_trade_rt WHERE travel_date = '${bizdate}';
+-- Hive 离线
+SELECT SUM(order_ticket_qty) FROM dws.dws_ord_tenant_sku_channel_trade_di WHERE travel_date = '${bizdate}';
+
+-- R1391 [弱][一致性] 实时 dws_ord_tenant_sku_trade_rt.order_amt 与离线 dws_ord_tenant_sku_channel_trade_di.order_amt 对账；期望：|实时 − 离线| / 离线 ≤ 0.5%
+-- StarRocks 实时
+SELECT SUM(order_amt) FROM dws.dws_ord_tenant_sku_trade_rt WHERE travel_date = '${bizdate}';
+-- Hive 离线
+SELECT SUM(order_amt) FROM dws.dws_ord_tenant_sku_channel_trade_di WHERE travel_date = '${bizdate}';
+
+-- R1392 [弱][一致性] 实时 dws_ord_tenant_sku_trade_rt.cancel_order_qty 与离线 dws_ord_tenant_sku_channel_trade_di.cancel_order_qty 对账；期望：|实时 − 离线| / 离线 ≤ 0.5%
+-- StarRocks 实时
+SELECT SUM(cancel_order_qty) FROM dws.dws_ord_tenant_sku_trade_rt WHERE travel_date = '${bizdate}';
+-- Hive 离线
+SELECT SUM(cancel_order_qty) FROM dws.dws_ord_tenant_sku_channel_trade_di WHERE travel_date = '${bizdate}';
+
+-- R1393 [弱][一致性] 实时 dws_ord_tenant_sku_trade_rt.staff_order_qty 与离线 dws_ord_tenant_sku_channel_trade_di.staff_order_qty 对账；期望：|实时 − 离线| / 离线 ≤ 0.5%
+-- StarRocks 实时
+SELECT SUM(staff_order_qty) FROM dws.dws_ord_tenant_sku_trade_rt WHERE travel_date = '${bizdate}';
+-- Hive 离线
+SELECT SUM(staff_order_qty) FROM dws.dws_ord_tenant_sku_channel_trade_di WHERE travel_date = '${bizdate}';
+
+-- R1394 [弱][一致性] 实时 dws_ord_tenant_sku_trade_rt.staff_pay_amt 与离线 dws_sup_staff_operate_di.staff_pay_amt 对账；期望：|实时 − 离线| / 离线 ≤ 0.5%
+-- StarRocks 实时
+SELECT SUM(staff_pay_amt) FROM dws.dws_ord_tenant_sku_trade_rt WHERE travel_date = '${bizdate}';
+-- Hive 离线
+SELECT SUM(staff_pay_amt) FROM dws.dws_sup_staff_operate_di WHERE travel_date = '${bizdate}';
+
 -- ==================== dq.recon.dws_ord_verify_point_flow_rt  实时/离线对账：核销点 分钟级客流 ====================
--- R1386 [弱][一致性] 实时 dws_ord_verify_point_flow_rt.verify_person_qty 与离线 dws_ord_verify_point_flow_hrs.verify_person_qty 对账；期望：|实时 − 离线| / 离线 ≤ 0.5%
+-- R1395 [弱][一致性] 实时 dws_ord_verify_point_flow_rt.verify_person_qty 与离线 dws_ord_tenant_sku_verify_di.verify_person_qty 对账；期望：|实时 − 离线| / 离线 ≤ 0.5%
 -- StarRocks 实时
 SELECT SUM(verify_person_qty) FROM dws.dws_ord_verify_point_flow_rt WHERE travel_date = '${bizdate}';
 -- Hive 离线
-SELECT SUM(verify_person_qty) FROM dws.dws_ord_verify_point_flow_hrs WHERE travel_date = '${bizdate}';
+SELECT SUM(verify_person_qty) FROM dws.dws_ord_tenant_sku_verify_di WHERE travel_date = '${bizdate}';
+
+-- R1396 [弱][一致性] 实时 dws_ord_verify_point_flow_rt.verify_fail_qty 与离线 dws_ord_tenant_sku_verify_di.verify_fail_qty 对账；期望：|实时 − 离线| / 离线 ≤ 0.5%
+-- StarRocks 实时
+SELECT SUM(verify_fail_qty) FROM dws.dws_ord_verify_point_flow_rt WHERE travel_date = '${bizdate}';
+-- Hive 离线
+SELECT SUM(verify_fail_qty) FROM dws.dws_ord_tenant_sku_verify_di WHERE travel_date = '${bizdate}';
+
+-- R1397 [弱][一致性] 实时 dws_ord_verify_point_flow_rt.verify_entitlement_qty 与离线 dws_ord_tenant_sku_verify_di.verify_entitlement_qty 对账；期望：|实时 − 离线| / 离线 ≤ 0.5%
+-- StarRocks 实时
+SELECT SUM(verify_entitlement_qty) FROM dws.dws_ord_verify_point_flow_rt WHERE travel_date = '${bizdate}';
+-- Hive 离线
+SELECT SUM(verify_entitlement_qty) FROM dws.dws_ord_tenant_sku_verify_di WHERE travel_date = '${bizdate}';
+
+-- R1398 [弱][一致性] 实时 dws_ord_verify_point_flow_rt.duplicate_verify_qty 与离线 dws_ord_tenant_sku_verify_di.duplicate_verify_qty 对账；期望：|实时 − 离线| / 离线 ≤ 0.5%
+-- StarRocks 实时
+SELECT SUM(duplicate_verify_qty) FROM dws.dws_ord_verify_point_flow_rt WHERE travel_date = '${bizdate}';
+-- Hive 离线
+SELECT SUM(duplicate_verify_qty) FROM dws.dws_ord_tenant_sku_verify_di WHERE travel_date = '${bizdate}';
+
+-- R1399 [弱][一致性] 实时 dws_ord_verify_point_flow_rt.offline_conflict_qty 与离线 dws_ord_tenant_sku_verify_di.offline_conflict_qty 对账；期望：|实时 − 离线| / 离线 ≤ 0.5%
+-- StarRocks 实时
+SELECT SUM(offline_conflict_qty) FROM dws.dws_ord_verify_point_flow_rt WHERE travel_date = '${bizdate}';
+-- Hive 离线
+SELECT SUM(offline_conflict_qty) FROM dws.dws_ord_tenant_sku_verify_di WHERE travel_date = '${bizdate}';
+
+-- ==================== dq.recon.dws_inv_sku_stock_rt  实时/离线对账：SKU 实时库存 ====================
+-- R1400 [弱][一致性] 实时 dws_inv_sku_stock_rt.stock_total_qty 与离线 dws_inv_sku_stock_df.stock_total_qty 对账；期望：|实时 − 离线| / 离线 ≤ 0.5%
+-- StarRocks 实时
+SELECT SUM(stock_total_qty) FROM dws.dws_inv_sku_stock_rt WHERE travel_date = '${bizdate}';
+-- Hive 离线
+SELECT SUM(stock_total_qty) FROM dws.dws_inv_sku_stock_df WHERE travel_date = '${bizdate}';
+
+-- R1401 [弱][一致性] 实时 dws_inv_sku_stock_rt.stock_available_qty 与离线 dws_inv_sku_stock_df.stock_available_qty 对账；期望：|实时 − 离线| / 离线 ≤ 0.5%
+-- StarRocks 实时
+SELECT SUM(stock_available_qty) FROM dws.dws_inv_sku_stock_rt WHERE travel_date = '${bizdate}';
+-- Hive 离线
+SELECT SUM(stock_available_qty) FROM dws.dws_inv_sku_stock_df WHERE travel_date = '${bizdate}';
+
+-- R1402 [弱][一致性] 实时 dws_inv_sku_stock_rt.stock_frozen_qty 与离线 dws_inv_sku_stock_df.stock_frozen_qty 对账；期望：|实时 − 离线| / 离线 ≤ 0.5%
+-- StarRocks 实时
+SELECT SUM(stock_frozen_qty) FROM dws.dws_inv_sku_stock_rt WHERE travel_date = '${bizdate}';
+-- Hive 离线
+SELECT SUM(stock_frozen_qty) FROM dws.dws_inv_sku_stock_df WHERE travel_date = '${bizdate}';
+
+-- R1403 [弱][一致性] 实时 dws_inv_sku_stock_rt.stock_sold_qty 与离线 dws_inv_sku_stock_df.stock_sold_qty 对账；期望：|实时 − 离线| / 离线 ≤ 0.5%
+-- StarRocks 实时
+SELECT SUM(stock_sold_qty) FROM dws.dws_inv_sku_stock_rt WHERE travel_date = '${bizdate}';
+-- Hive 离线
+SELECT SUM(stock_sold_qty) FROM dws.dws_inv_sku_stock_df WHERE travel_date = '${bizdate}';
+
+-- R1404 [弱][一致性] 实时 dws_inv_sku_stock_rt.sellout_pool_qty 与离线 dws_inv_sku_stock_df.sellout_pool_qty 对账；期望：|实时 − 离线| / 离线 ≤ 0.5%
+-- StarRocks 实时
+SELECT SUM(sellout_pool_qty) FROM dws.dws_inv_sku_stock_rt WHERE travel_date = '${bizdate}';
+-- Hive 离线
+SELECT SUM(sellout_pool_qty) FROM dws.dws_inv_sku_stock_df WHERE travel_date = '${bizdate}';
+
+-- R1405 [弱][一致性] 实时 dws_inv_sku_stock_rt.prededuct_qty 与离线 dws_inv_sku_stock_df.prededuct_qty 对账；期望：|实时 − 离线| / 离线 ≤ 0.5%
+-- StarRocks 实时
+SELECT SUM(prededuct_qty) FROM dws.dws_inv_sku_stock_rt WHERE travel_date = '${bizdate}';
+-- Hive 离线
+SELECT SUM(prededuct_qty) FROM dws.dws_inv_sku_stock_df WHERE travel_date = '${bizdate}';
+
+-- R1406 [弱][一致性] 实时 dws_inv_sku_stock_rt.prededuct_release_qty 与离线 dws_inv_sku_stock_df.prededuct_release_qty 对账；期望：|实时 − 离线| / 离线 ≤ 0.5%
+-- StarRocks 实时
+SELECT SUM(prededuct_release_qty) FROM dws.dws_inv_sku_stock_rt WHERE travel_date = '${bizdate}';
+-- Hive 离线
+SELECT SUM(prededuct_release_qty) FROM dws.dws_inv_sku_stock_df WHERE travel_date = '${bizdate}';
 
 -- ==================== dq.recon.dws_opr_risk_rule_hit_rt  实时/离线对账：风控规则 分钟级命中 ====================
--- R1387 [弱][一致性] 实时 dws_opr_risk_rule_hit_rt.risk_hit_qty 与离线 dws_opr_risk_rule_hit_di.risk_hit_qty 对账；期望：|实时 − 离线| / 离线 ≤ 0.5%
+-- R1407 [弱][一致性] 实时 dws_opr_risk_rule_hit_rt.risk_hit_qty 与离线 dws_opr_risk_rule_hit_di.risk_hit_qty 对账；期望：|实时 − 离线| / 离线 ≤ 0.5%
 -- StarRocks 实时
 SELECT SUM(risk_hit_qty) FROM dws.dws_opr_risk_rule_hit_rt WHERE travel_date = '${bizdate}';
 -- Hive 离线
 SELECT SUM(risk_hit_qty) FROM dws.dws_opr_risk_rule_hit_di WHERE travel_date = '${bizdate}';
+
+-- R1408 [弱][一致性] 实时 dws_opr_risk_rule_hit_rt.risk_block_qty 与离线 dws_opr_risk_rule_hit_di.risk_block_qty 对账；期望：|实时 − 离线| / 离线 ≤ 0.5%
+-- StarRocks 实时
+SELECT SUM(risk_block_qty) FROM dws.dws_opr_risk_rule_hit_rt WHERE travel_date = '${bizdate}';
+-- Hive 离线
+SELECT SUM(risk_block_qty) FROM dws.dws_opr_risk_rule_hit_di WHERE travel_date = '${bizdate}';
+
+-- ==================== dq.recon.dws_ord_tenant_sku_verify_rt  实时/离线对账：商户×SKU 实时核销 ====================
+-- R1409 [弱][一致性] 实时 dws_ord_tenant_sku_verify_rt.verify_ticket_qty 与离线 dws_ord_tenant_sku_verify_di.verify_ticket_qty 对账；期望：|实时 − 离线| / 离线 ≤ 0.5%
+-- StarRocks 实时
+SELECT SUM(verify_ticket_qty) FROM dws.dws_ord_tenant_sku_verify_rt WHERE travel_date = '${bizdate}';
+-- Hive 离线
+SELECT SUM(verify_ticket_qty) FROM dws.dws_ord_tenant_sku_verify_di WHERE travel_date = '${bizdate}';
+
+-- R1410 [弱][一致性] 实时 dws_ord_tenant_sku_verify_rt.verify_amt 与离线 dws_ord_tenant_sku_verify_di.verify_amt 对账；期望：|实时 − 离线| / 离线 ≤ 0.5%
+-- StarRocks 实时
+SELECT SUM(verify_amt) FROM dws.dws_ord_tenant_sku_verify_rt WHERE travel_date = '${bizdate}';
+-- Hive 离线
+SELECT SUM(verify_amt) FROM dws.dws_ord_tenant_sku_verify_di WHERE travel_date = '${bizdate}';
+
+-- R1411 [弱][一致性] 实时 dws_ord_tenant_sku_verify_rt.verify_entitlement_qty 与离线 dws_ord_tenant_sku_verify_di.verify_entitlement_qty 对账；期望：|实时 − 离线| / 离线 ≤ 0.5%
+-- StarRocks 实时
+SELECT SUM(verify_entitlement_qty) FROM dws.dws_ord_tenant_sku_verify_rt WHERE travel_date = '${bizdate}';
+-- Hive 离线
+SELECT SUM(verify_entitlement_qty) FROM dws.dws_ord_tenant_sku_verify_di WHERE travel_date = '${bizdate}';
+
+-- R1412 [弱][一致性] 实时 dws_ord_tenant_sku_verify_rt.verify_fail_qty 与离线 dws_ord_tenant_sku_verify_di.verify_fail_qty 对账；期望：|实时 − 离线| / 离线 ≤ 0.5%
+-- StarRocks 实时
+SELECT SUM(verify_fail_qty) FROM dws.dws_ord_tenant_sku_verify_rt WHERE travel_date = '${bizdate}';
+-- Hive 离线
+SELECT SUM(verify_fail_qty) FROM dws.dws_ord_tenant_sku_verify_di WHERE travel_date = '${bizdate}';
+
+-- ==================== dq.recon.dws_fin_account_fund_rt  实时/离线对账：账户实时资金 ====================
+-- R1413 [弱][一致性] 实时 dws_fin_account_fund_rt.available_balance_amt 与离线 dws_fin_account_balance_df.available_balance_amt 对账；期望：|实时 − 离线| / 离线 ≤ 0.5%
+-- StarRocks 实时
+SELECT SUM(available_balance_amt) FROM dws.dws_fin_account_fund_rt WHERE travel_date = '${bizdate}';
+-- Hive 离线
+SELECT SUM(available_balance_amt) FROM dws.dws_fin_account_balance_df WHERE travel_date = '${bizdate}';
+
+-- R1414 [弱][一致性] 实时 dws_fin_account_fund_rt.frozen_balance_amt 与离线 dws_fin_account_balance_df.frozen_balance_amt 对账；期望：|实时 − 离线| / 离线 ≤ 0.5%
+-- StarRocks 实时
+SELECT SUM(frozen_balance_amt) FROM dws.dws_fin_account_fund_rt WHERE travel_date = '${bizdate}';
+-- Hive 离线
+SELECT SUM(frozen_balance_amt) FROM dws.dws_fin_account_balance_df WHERE travel_date = '${bizdate}';
+
+-- R1415 [弱][一致性] 实时 dws_fin_account_fund_rt.freeze_amt 与离线 dws_fin_account_frozen_di.freeze_amt 对账；期望：|实时 − 离线| / 离线 ≤ 0.5%
+-- StarRocks 实时
+SELECT SUM(freeze_amt) FROM dws.dws_fin_account_fund_rt WHERE travel_date = '${bizdate}';
+-- Hive 离线
+SELECT SUM(freeze_amt) FROM dws.dws_fin_account_frozen_di WHERE travel_date = '${bizdate}';
+
+-- R1416 [弱][一致性] 实时 dws_fin_account_fund_rt.unfreeze_verify_amt 与离线 dws_fin_account_frozen_di.unfreeze_verify_amt 对账；期望：|实时 − 离线| / 离线 ≤ 0.5%
+-- StarRocks 实时
+SELECT SUM(unfreeze_verify_amt) FROM dws.dws_fin_account_fund_rt WHERE travel_date = '${bizdate}';
+-- Hive 离线
+SELECT SUM(unfreeze_verify_amt) FROM dws.dws_fin_account_frozen_di WHERE travel_date = '${bizdate}';
+
+-- R1417 [弱][一致性] 实时 dws_fin_account_fund_rt.unfreeze_refund_amt 与离线 dws_fin_account_frozen_di.unfreeze_refund_amt 对账；期望：|实时 − 离线| / 离线 ≤ 0.5%
+-- StarRocks 实时
+SELECT SUM(unfreeze_refund_amt) FROM dws.dws_fin_account_fund_rt WHERE travel_date = '${bizdate}';
+-- Hive 离线
+SELECT SUM(unfreeze_refund_amt) FROM dws.dws_fin_account_frozen_di WHERE travel_date = '${bizdate}';
+
+-- ==================== dq.recon.dws_trf_distributor_credit_rt  实时/离线对账：分销授信实时 ====================
+-- R1418 [弱][一致性] 实时 dws_trf_distributor_credit_rt.credit_limit_amt 与离线 dws_trf_distributor_credit_df.credit_limit_amt 对账；期望：|实时 − 离线| / 离线 ≤ 0.5%
+-- StarRocks 实时
+SELECT SUM(credit_limit_amt) FROM dws.dws_trf_distributor_credit_rt WHERE travel_date = '${bizdate}';
+-- Hive 离线
+SELECT SUM(credit_limit_amt) FROM dws.dws_trf_distributor_credit_df WHERE travel_date = '${bizdate}';
+
+-- R1419 [弱][一致性] 实时 dws_trf_distributor_credit_rt.credit_used_amt 与离线 dws_trf_distributor_credit_df.credit_used_amt 对账；期望：|实时 − 离线| / 离线 ≤ 0.5%
+-- StarRocks 实时
+SELECT SUM(credit_used_amt) FROM dws.dws_trf_distributor_credit_rt WHERE travel_date = '${bizdate}';
+-- Hive 离线
+SELECT SUM(credit_used_amt) FROM dws.dws_trf_distributor_credit_df WHERE travel_date = '${bizdate}';
+
+-- ==================== dq.recon.dws_cus_tenant_growth_rt  实时/离线对账：游客实时增长 ====================
+-- R1420 [弱][一致性] 实时 dws_cus_tenant_growth_rt.new_customer_qty 与离线 dws_cus_tenant_growth_di.new_customer_qty 对账；期望：|实时 − 离线| / 离线 ≤ 0.5%
+-- StarRocks 实时
+SELECT SUM(new_customer_qty) FROM dws.dws_cus_tenant_growth_rt WHERE travel_date = '${bizdate}';
+-- Hive 离线
+SELECT SUM(new_customer_qty) FROM dws.dws_cus_tenant_growth_di WHERE travel_date = '${bizdate}';
+
+-- ==================== dq.recon.dws_opr_device_rt  实时/离线对账：设备实时状态 ====================
+-- R1421 [弱][一致性] 实时 dws_opr_device_rt.offline_times_qty 与离线 dws_opr_device_di.offline_times_qty 对账；期望：|实时 − 离线| / 离线 ≤ 0.5%
+-- StarRocks 实时
+SELECT SUM(offline_times_qty) FROM dws.dws_opr_device_rt WHERE travel_date = '${bizdate}';
+-- Hive 离线
+SELECT SUM(offline_times_qty) FROM dws.dws_opr_device_di WHERE travel_date = '${bizdate}';
+
+-- R1422 [弱][一致性] 实时 dws_opr_device_rt.device_total_qty 与离线 dws_opr_device_di.device_total_qty 对账；期望：|实时 − 离线| / 离线 ≤ 0.5%
+-- StarRocks 实时
+SELECT SUM(device_total_qty) FROM dws.dws_opr_device_rt WHERE travel_date = '${bizdate}';
+-- Hive 离线
+SELECT SUM(device_total_qty) FROM dws.dws_opr_device_di WHERE travel_date = '${bizdate}';
+
+-- ==================== dq.recon.dws_opr_notify_rt  实时/离线对账：通知实时发送 ====================
+-- R1423 [弱][一致性] 实时 dws_opr_notify_rt.notify_send_qty 与离线 dws_opr_notify_di.notify_send_qty 对账；期望：|实时 − 离线| / 离线 ≤ 0.5%
+-- StarRocks 实时
+SELECT SUM(notify_send_qty) FROM dws.dws_opr_notify_rt WHERE travel_date = '${bizdate}';
+-- Hive 离线
+SELECT SUM(notify_send_qty) FROM dws.dws_opr_notify_di WHERE travel_date = '${bizdate}';
+
+-- R1424 [弱][一致性] 实时 dws_opr_notify_rt.notify_success_qty 与离线 dws_opr_notify_di.notify_success_qty 对账；期望：|实时 − 离线| / 离线 ≤ 0.5%
+-- StarRocks 实时
+SELECT SUM(notify_success_qty) FROM dws.dws_opr_notify_rt WHERE travel_date = '${bizdate}';
+-- Hive 离线
+SELECT SUM(notify_success_qty) FROM dws.dws_opr_notify_di WHERE travel_date = '${bizdate}';
+
+-- R1425 [弱][一致性] 实时 dws_opr_notify_rt.notify_fail_qty 与离线 dws_opr_notify_di.notify_fail_qty 对账；期望：|实时 − 离线| / 离线 ≤ 0.5%
+-- StarRocks 实时
+SELECT SUM(notify_fail_qty) FROM dws.dws_opr_notify_rt WHERE travel_date = '${bizdate}';
+-- Hive 离线
+SELECT SUM(notify_fail_qty) FROM dws.dws_opr_notify_di WHERE travel_date = '${bizdate}';
+
+-- ==================== dq.recon.dws_opr_complaint_rt  实时/离线对账：投诉实时处理 ====================
+-- R1426 [弱][一致性] 实时 dws_opr_complaint_rt.complaint_qty 与离线 dws_opr_complaint_di.complaint_qty 对账；期望：|实时 − 离线| / 离线 ≤ 0.5%
+-- StarRocks 实时
+SELECT SUM(complaint_qty) FROM dws.dws_opr_complaint_rt WHERE travel_date = '${bizdate}';
+-- Hive 离线
+SELECT SUM(complaint_qty) FROM dws.dws_opr_complaint_di WHERE travel_date = '${bizdate}';
+
+-- R1427 [弱][一致性] 实时 dws_opr_complaint_rt.complaint_resolved_qty 与离线 dws_opr_complaint_di.complaint_resolved_qty 对账；期望：|实时 − 离线| / 离线 ≤ 0.5%
+-- StarRocks 实时
+SELECT SUM(complaint_resolved_qty) FROM dws.dws_opr_complaint_rt WHERE travel_date = '${bizdate}';
+-- Hive 离线
+SELECT SUM(complaint_resolved_qty) FROM dws.dws_opr_complaint_di WHERE travel_date = '${bizdate}';
+
+-- R1428 [弱][一致性] 实时 dws_opr_complaint_rt.complaint_overdue_qty 与离线 dws_opr_complaint_di.complaint_overdue_qty 对账；期望：|实时 − 离线| / 离线 ≤ 0.5%
+-- StarRocks 实时
+SELECT SUM(complaint_overdue_qty) FROM dws.dws_opr_complaint_rt WHERE travel_date = '${bizdate}';
+-- Hive 离线
+SELECT SUM(complaint_overdue_qty) FROM dws.dws_opr_complaint_di WHERE travel_date = '${bizdate}';
+
+-- ==================== dq.recon.dws_opr_code_pool_rt  实时/离线对账：码池实时余量 ====================
+-- R1429 [弱][一致性] 实时 dws_opr_code_pool_rt.code_capacity_qty 与离线 dws_opr_code_pool_df.code_capacity_qty 对账；期望：|实时 − 离线| / 离线 ≤ 0.5%
+-- StarRocks 实时
+SELECT SUM(code_capacity_qty) FROM dws.dws_opr_code_pool_rt WHERE travel_date = '${bizdate}';
+-- Hive 离线
+SELECT SUM(code_capacity_qty) FROM dws.dws_opr_code_pool_df WHERE travel_date = '${bizdate}';
+
+-- R1430 [弱][一致性] 实时 dws_opr_code_pool_rt.code_allocated_qty 与离线 dws_opr_code_pool_df.code_allocated_qty 对账；期望：|实时 − 离线| / 离线 ≤ 0.5%
+-- StarRocks 实时
+SELECT SUM(code_allocated_qty) FROM dws.dws_opr_code_pool_rt WHERE travel_date = '${bizdate}';
+-- Hive 离线
+SELECT SUM(code_allocated_qty) FROM dws.dws_opr_code_pool_df WHERE travel_date = '${bizdate}';
+
+-- R1431 [弱][一致性] 实时 dws_opr_code_pool_rt.code_recycled_qty 与离线 dws_opr_code_pool_df.code_recycled_qty 对账；期望：|实时 − 离线| / 离线 ≤ 0.5%
+-- StarRocks 实时
+SELECT SUM(code_recycled_qty) FROM dws.dws_opr_code_pool_rt WHERE travel_date = '${bizdate}';
+-- Hive 离线
+SELECT SUM(code_recycled_qty) FROM dws.dws_opr_code_pool_df WHERE travel_date = '${bizdate}';
 
 -- ==================== dq.ads_sup_tenant_trade_wk  商户经营周报 质检 ====================
 -- R1232 [强][完整性] 当日分区有数据；期望：cnt > 0
@@ -7582,166 +7855,373 @@ SELECT vacation_type, COUNT(*) AS cnt FROM dim.dim_opr_date_f WHERE 1 = 1 AND va
 SELECT season_type, COUNT(*) AS cnt FROM dim.dim_opr_date_f WHERE 1 = 1 AND season_type NOT IN (1, 2, 3) GROUP BY season_type;
 
 -- ==================== dq.ods_ord_order_group_rt  聚合单 binlog 流 监控 ====================
--- R1388 [强][及时性] CDC 采集延迟 ≤ 60 秒；期望：连续 3 分钟 > 60000 告警并电话通知
-Flink 指标：currentFetchEventTimeLag（毫秒），按作业 flink_job_ord_realtime_sales 的源算子 ods_ord_order_group_rt 采集
+-- R1432 [强][及时性] CDC 采集延迟 ≤ 60 秒；期望：连续 3 分钟 > 60000 告警并电话通知
+Flink 指标：currentFetchEventTimeLag（毫秒），按作业 flink_job_opr_risk_alert 的源算子 ods_ord_order_group_rt 采集
 
--- R1389 [强][完整性] CDC 全量快照完成且进入增量；期望：启动后 30 分钟内进入增量阶段
+-- R1433 [强][完整性] CDC 全量快照完成且进入增量；期望：启动后 30 分钟内进入增量阶段
 Flink 指标：isSnapshotSplitFinished / sourceIdleTime
 
 -- ==================== dq.ods_ord_order_rt  子单 binlog 流 监控 ====================
--- R1390 [强][及时性] CDC 采集延迟 ≤ 60 秒；期望：连续 3 分钟 > 60000 告警并电话通知
-Flink 指标：currentFetchEventTimeLag（毫秒），按作业 flink_job_ord_realtime_sales 的源算子 ods_ord_order_rt 采集
+-- R1434 [强][及时性] CDC 采集延迟 ≤ 60 秒；期望：连续 3 分钟 > 60000 告警并电话通知
+Flink 指标：currentFetchEventTimeLag（毫秒），按作业 flink_job_opr_risk_alert 的源算子 ods_ord_order_rt 采集
 
--- R1391 [强][完整性] CDC 全量快照完成且进入增量；期望：启动后 30 分钟内进入增量阶段
+-- R1435 [强][完整性] CDC 全量快照完成且进入增量；期望：启动后 30 分钟内进入增量阶段
 Flink 指标：isSnapshotSplitFinished / sourceIdleTime
 
 -- ==================== dq.ods_ord_entitlement_rt  权益 binlog 流 监控 ====================
--- R1392 [强][及时性] CDC 采集延迟 ≤ 60 秒；期望：连续 3 分钟 > 60000 告警并电话通知
+-- R1436 [强][及时性] CDC 采集延迟 ≤ 60 秒；期望：连续 3 分钟 > 60000 告警并电话通知
 Flink 指标：currentFetchEventTimeLag（毫秒），按作业 flink_job_opr_risk_alert 的源算子 ods_ord_entitlement_rt 采集
 
--- R1393 [强][完整性] CDC 全量快照完成且进入增量；期望：启动后 30 分钟内进入增量阶段
+-- R1437 [强][完整性] CDC 全量快照完成且进入增量；期望：启动后 30 分钟内进入增量阶段
 Flink 指标：isSnapshotSplitFinished / sourceIdleTime
 
 -- ==================== dq.ods_ord_verify_record_rt  核销记录 binlog 流 监控 ====================
--- R1394 [强][及时性] CDC 采集延迟 ≤ 60 秒；期望：连续 3 分钟 > 60000 告警并电话通知
+-- R1438 [强][及时性] CDC 采集延迟 ≤ 60 秒；期望：连续 3 分钟 > 60000 告警并电话通知
 Flink 指标：currentFetchEventTimeLag（毫秒），按作业 flink_job_opr_risk_alert 的源算子 ods_ord_verify_record_rt 采集
 
--- R1395 [强][完整性] CDC 全量快照完成且进入增量；期望：启动后 30 分钟内进入增量阶段
+-- R1439 [强][完整性] CDC 全量快照完成且进入增量；期望：启动后 30 分钟内进入增量阶段
 Flink 指标：isSnapshotSplitFinished / sourceIdleTime
 
 -- ==================== dq.ods_ord_refund_order_rt  退款单 binlog 流 监控 ====================
--- R1396 [强][及时性] CDC 采集延迟 ≤ 60 秒；期望：连续 3 分钟 > 60000 告警并电话通知
-Flink 指标：currentFetchEventTimeLag（毫秒），按作业 flink_job_ord_realtime_sales 的源算子 ods_ord_refund_order_rt 采集
+-- R1440 [强][及时性] CDC 采集延迟 ≤ 60 秒；期望：连续 3 分钟 > 60000 告警并电话通知
+Flink 指标：currentFetchEventTimeLag（毫秒），按作业 flink_job_opr_risk_alert 的源算子 ods_ord_refund_order_rt 采集
 
--- R1397 [强][完整性] CDC 全量快照完成且进入增量；期望：启动后 30 分钟内进入增量阶段
+-- R1441 [强][完整性] CDC 全量快照完成且进入增量；期望：启动后 30 分钟内进入增量阶段
 Flink 指标：isSnapshotSplitFinished / sourceIdleTime
 
 -- ==================== dq.ods_fin_payment_record_rt  支付记录 binlog 流 监控 ====================
--- R1398 [强][及时性] CDC 采集延迟 ≤ 60 秒；期望：连续 3 分钟 > 60000 告警并电话通知
-Flink 指标：currentFetchEventTimeLag（毫秒），按作业 flink_job_ord_realtime_sales 的源算子 ods_fin_payment_record_rt 采集
+-- R1442 [强][及时性] CDC 采集延迟 ≤ 60 秒；期望：连续 3 分钟 > 60000 告警并电话通知
+Flink 指标：currentFetchEventTimeLag（毫秒），按作业 flink_job_opr_risk_alert 的源算子 ods_fin_payment_record_rt 采集
 
--- R1399 [强][完整性] CDC 全量快照完成且进入增量；期望：启动后 30 分钟内进入增量阶段
+-- R1443 [强][完整性] CDC 全量快照完成且进入增量；期望：启动后 30 分钟内进入增量阶段
 Flink 指标：isSnapshotSplitFinished / sourceIdleTime
 
 -- ==================== dq.ods_inv_inventory_pool_rt  库存池 binlog 流 监控 ====================
--- R1400 [强][及时性] CDC 采集延迟 ≤ 60 秒；期望：连续 3 分钟 > 60000 告警并电话通知
+-- R1444 [强][及时性] CDC 采集延迟 ≤ 60 秒；期望：连续 3 分钟 > 60000 告警并电话通知
 Flink 指标：currentFetchEventTimeLag（毫秒），按作业 flink_job_inv_realtime_stock 的源算子 ods_inv_inventory_pool_rt 采集
 
--- R1401 [强][完整性] CDC 全量快照完成且进入增量；期望：启动后 30 分钟内进入增量阶段
+-- R1445 [强][完整性] CDC 全量快照完成且进入增量；期望：启动后 30 分钟内进入增量阶段
 Flink 指标：isSnapshotSplitFinished / sourceIdleTime
 
 -- ==================== dq.ods_inv_inventory_unit_rt  座位/房间 binlog 流 监控 ====================
--- R1402 [强][及时性] CDC 采集延迟 ≤ 60 秒；期望：连续 3 分钟 > 60000 告警并电话通知
+-- R1446 [强][及时性] CDC 采集延迟 ≤ 60 秒；期望：连续 3 分钟 > 60000 告警并电话通知
 Flink 指标：currentFetchEventTimeLag（毫秒），按作业 flink_job_inv_realtime_stock 的源算子 ods_inv_inventory_unit_rt 采集
 
--- R1403 [强][完整性] CDC 全量快照完成且进入增量；期望：启动后 30 分钟内进入增量阶段
+-- R1447 [强][完整性] CDC 全量快照完成且进入增量；期望：启动后 30 分钟内进入增量阶段
 Flink 指标：isSnapshotSplitFinished / sourceIdleTime
 
 -- ==================== dq.ods_opr_risk_event_rt  风控事件 binlog 流 监控 ====================
--- R1404 [强][及时性] CDC 采集延迟 ≤ 60 秒；期望：连续 3 分钟 > 60000 告警并电话通知
+-- R1448 [强][及时性] CDC 采集延迟 ≤ 60 秒；期望：连续 3 分钟 > 60000 告警并电话通知
 Flink 指标：currentFetchEventTimeLag（毫秒），按作业 flink_job_opr_risk_alert 的源算子 ods_opr_risk_event_rt 采集
 
--- R1405 [强][完整性] CDC 全量快照完成且进入增量；期望：启动后 30 分钟内进入增量阶段
+-- R1449 [强][完整性] CDC 全量快照完成且进入增量；期望：启动后 30 分钟内进入增量阶段
+Flink 指标：isSnapshotSplitFinished / sourceIdleTime
+
+-- ==================== dq.ods_fin_account_rt  账户 binlog 流 监控 ====================
+-- R1450 [强][及时性] CDC 采集延迟 ≤ 60 秒；期望：连续 3 分钟 > 60000 告警并电话通知
+Flink 指标：currentFetchEventTimeLag（毫秒），按作业 flink_job_fin_account_fund 的源算子 ods_fin_account_rt 采集
+
+-- R1451 [强][完整性] CDC 全量快照完成且进入增量；期望：启动后 30 分钟内进入增量阶段
+Flink 指标：isSnapshotSplitFinished / sourceIdleTime
+
+-- ==================== dq.ods_fin_frozen_record_rt  冻结记录 binlog 流 监控 ====================
+-- R1452 [强][及时性] CDC 采集延迟 ≤ 60 秒；期望：连续 3 分钟 > 60000 告警并电话通知
+Flink 指标：currentFetchEventTimeLag（毫秒），按作业 flink_job_fin_account_fund 的源算子 ods_fin_frozen_record_rt 采集
+
+-- R1453 [强][完整性] CDC 全量快照完成且进入增量；期望：启动后 30 分钟内进入增量阶段
+Flink 指标：isSnapshotSplitFinished / sourceIdleTime
+
+-- ==================== dq.ods_trf_distribution_relation_rt  分销关系 binlog 流 监控 ====================
+-- R1454 [强][及时性] CDC 采集延迟 ≤ 60 秒；期望：连续 3 分钟 > 60000 告警并电话通知
+Flink 指标：currentFetchEventTimeLag（毫秒），按作业 flink_job_trf_credit_alert 的源算子 ods_trf_distribution_relation_rt 采集
+
+-- R1455 [强][完整性] CDC 全量快照完成且进入增量；期望：启动后 30 分钟内进入增量阶段
+Flink 指标：isSnapshotSplitFinished / sourceIdleTime
+
+-- ==================== dq.ods_cus_customer_rt  游客账号 binlog 流 监控 ====================
+-- R1456 [强][及时性] CDC 采集延迟 ≤ 60 秒；期望：连续 3 分钟 > 60000 告警并电话通知
+Flink 指标：currentFetchEventTimeLag（毫秒），按作业 flink_job_opr_risk_alert 的源算子 ods_cus_customer_rt 采集
+
+-- R1457 [强][完整性] CDC 全量快照完成且进入增量；期望：启动后 30 分钟内进入增量阶段
+Flink 指标：isSnapshotSplitFinished / sourceIdleTime
+
+-- ==================== dq.ods_opr_device_rt  设备 binlog 流 监控 ====================
+-- R1458 [强][及时性] CDC 采集延迟 ≤ 60 秒；期望：连续 3 分钟 > 60000 告警并电话通知
+Flink 指标：currentFetchEventTimeLag（毫秒），按作业 flink_job_opr_operation_monitor 的源算子 ods_opr_device_rt 采集
+
+-- R1459 [强][完整性] CDC 全量快照完成且进入增量；期望：启动后 30 分钟内进入增量阶段
+Flink 指标：isSnapshotSplitFinished / sourceIdleTime
+
+-- ==================== dq.ods_opr_notify_record_rt  通知记录 binlog 流 监控 ====================
+-- R1460 [强][及时性] CDC 采集延迟 ≤ 60 秒；期望：连续 3 分钟 > 60000 告警并电话通知
+Flink 指标：currentFetchEventTimeLag（毫秒），按作业 flink_job_opr_operation_monitor 的源算子 ods_opr_notify_record_rt 采集
+
+-- R1461 [强][完整性] CDC 全量快照完成且进入增量；期望：启动后 30 分钟内进入增量阶段
+Flink 指标：isSnapshotSplitFinished / sourceIdleTime
+
+-- ==================== dq.ods_opr_complaint_rt  投诉工单 binlog 流 监控 ====================
+-- R1462 [强][及时性] CDC 采集延迟 ≤ 60 秒；期望：连续 3 分钟 > 60000 告警并电话通知
+Flink 指标：currentFetchEventTimeLag（毫秒），按作业 flink_job_opr_operation_monitor 的源算子 ods_opr_complaint_rt 采集
+
+-- R1463 [强][完整性] CDC 全量快照完成且进入增量；期望：启动后 30 分钟内进入增量阶段
+Flink 指标：isSnapshotSplitFinished / sourceIdleTime
+
+-- ==================== dq.ods_opr_code_pool_rt  码池 binlog 流 监控 ====================
+-- R1464 [强][及时性] CDC 采集延迟 ≤ 60 秒；期望：连续 3 分钟 > 60000 告警并电话通知
+Flink 指标：currentFetchEventTimeLag（毫秒），按作业 flink_job_opr_operation_monitor 的源算子 ods_opr_code_pool_rt 采集
+
+-- R1465 [强][完整性] CDC 全量快照完成且进入增量；期望：启动后 30 分钟内进入增量阶段
 Flink 指标：isSnapshotSplitFinished / sourceIdleTime
 
 -- ==================== dq.dwd_ord_order_rt  实时下单明细 监控 ====================
--- R1406 [强][及时性] 数据新鲜度 ≤ 5 分钟；期望：lag_s ≤ 300（营业时间 08:00–22:00）
+-- R1466 [强][及时性] 数据新鲜度 ≤ 5 分钟；期望：lag_s ≤ 300（营业时间 08:00–22:00）
 SELECT TIMESTAMPDIFF(SECOND, MAX(event_time), NOW()) AS lag_s FROM dwd.dwd_ord_order_rt WHERE travel_date = DATE_FORMAT(NOW(), '%Y%m%d');
 
 -- ==================== dq.dwd_fin_payment_rt  实时支付明细 监控 ====================
--- R1407 [强][及时性] 数据新鲜度 ≤ 5 分钟；期望：lag_s ≤ 300（营业时间 08:00–22:00）
+-- R1467 [强][及时性] 数据新鲜度 ≤ 5 分钟；期望：lag_s ≤ 300（营业时间 08:00–22:00）
 SELECT TIMESTAMPDIFF(SECOND, MAX(event_time), NOW()) AS lag_s FROM dwd.dwd_fin_payment_rt WHERE travel_date = DATE_FORMAT(NOW(), '%Y%m%d');
 
 -- ==================== dq.dwd_ord_verify_rt  实时核销明细 监控 ====================
--- R1408 [强][及时性] 数据新鲜度 ≤ 5 分钟；期望：lag_s ≤ 300（营业时间 08:00–22:00）
+-- R1468 [强][及时性] 数据新鲜度 ≤ 5 分钟；期望：lag_s ≤ 300（营业时间 08:00–22:00）
 SELECT TIMESTAMPDIFF(SECOND, MAX(event_time), NOW()) AS lag_s FROM dwd.dwd_ord_verify_rt WHERE travel_date = DATE_FORMAT(NOW(), '%Y%m%d');
 
 -- ==================== dq.dwd_ord_refund_rt  实时退款明细 监控 ====================
--- R1409 [强][及时性] 数据新鲜度 ≤ 5 分钟；期望：lag_s ≤ 300（营业时间 08:00–22:00）
+-- R1469 [强][及时性] 数据新鲜度 ≤ 5 分钟；期望：lag_s ≤ 300（营业时间 08:00–22:00）
 SELECT TIMESTAMPDIFF(SECOND, MAX(event_time), NOW()) AS lag_s FROM dwd.dwd_ord_refund_rt WHERE travel_date = DATE_FORMAT(NOW(), '%Y%m%d');
 
 -- ==================== dq.dwd_inv_pool_change_rt  实时库存变动 监控 ====================
--- R1410 [强][及时性] 数据新鲜度 ≤ 5 分钟；期望：lag_s ≤ 300（营业时间 08:00–22:00）
+-- R1470 [强][及时性] 数据新鲜度 ≤ 5 分钟；期望：lag_s ≤ 300（营业时间 08:00–22:00）
 SELECT TIMESTAMPDIFF(SECOND, MAX(event_time), NOW()) AS lag_s FROM dwd.dwd_inv_pool_change_rt WHERE travel_date = DATE_FORMAT(NOW(), '%Y%m%d');
 
 -- ==================== dq.dwd_opr_risk_event_rt  实时风控事件 监控 ====================
--- R1411 [强][及时性] 数据新鲜度 ≤ 5 分钟；期望：lag_s ≤ 300（营业时间 08:00–22:00）
+-- R1471 [强][及时性] 数据新鲜度 ≤ 5 分钟；期望：lag_s ≤ 300（营业时间 08:00–22:00）
 SELECT TIMESTAMPDIFF(SECOND, MAX(event_time), NOW()) AS lag_s FROM dwd.dwd_opr_risk_event_rt WHERE travel_date = DATE_FORMAT(NOW(), '%Y%m%d');
 
+-- ==================== dq.dwd_fin_frozen_rt  实时冻结/解冻明细 监控 ====================
+-- R1472 [强][及时性] 数据新鲜度 ≤ 5 分钟；期望：lag_s ≤ 300（营业时间 08:00–22:00）
+SELECT TIMESTAMPDIFF(SECOND, MAX(event_time), NOW()) AS lag_s FROM dwd.dwd_fin_frozen_rt WHERE travel_date = DATE_FORMAT(NOW(), '%Y%m%d');
+
+-- ==================== dq.dwd_fin_account_balance_rt  实时账户余额 监控 ====================
+-- R1473 [强][及时性] 数据新鲜度 ≤ 5 分钟；期望：lag_s ≤ 300（营业时间 08:00–22:00）
+SELECT TIMESTAMPDIFF(SECOND, MAX(event_time), NOW()) AS lag_s FROM dwd.dwd_fin_account_balance_rt WHERE travel_date = DATE_FORMAT(NOW(), '%Y%m%d');
+
+-- ==================== dq.dwd_trf_distribution_credit_rt  实时分销授信 监控 ====================
+-- R1474 [强][及时性] 数据新鲜度 ≤ 5 分钟；期望：lag_s ≤ 300（营业时间 08:00–22:00）
+SELECT TIMESTAMPDIFF(SECOND, MAX(event_time), NOW()) AS lag_s FROM dwd.dwd_trf_distribution_credit_rt WHERE travel_date = DATE_FORMAT(NOW(), '%Y%m%d');
+
+-- ==================== dq.dwd_cus_customer_register_rt  实时游客注册 监控 ====================
+-- R1475 [强][及时性] 数据新鲜度 ≤ 5 分钟；期望：lag_s ≤ 300（营业时间 08:00–22:00）
+SELECT TIMESTAMPDIFF(SECOND, MAX(event_time), NOW()) AS lag_s FROM dwd.dwd_cus_customer_register_rt WHERE travel_date = DATE_FORMAT(NOW(), '%Y%m%d');
+
+-- ==================== dq.dwd_opr_device_status_log_rt  实时设备状态变更 监控 ====================
+-- R1476 [强][及时性] 数据新鲜度 ≤ 5 分钟；期望：lag_s ≤ 300（营业时间 08:00–22:00）
+SELECT TIMESTAMPDIFF(SECOND, MAX(event_time), NOW()) AS lag_s FROM dwd.dwd_opr_device_status_log_rt WHERE travel_date = DATE_FORMAT(NOW(), '%Y%m%d');
+
+-- ==================== dq.dwd_opr_notify_rt  实时通知发送 监控 ====================
+-- R1477 [强][及时性] 数据新鲜度 ≤ 5 分钟；期望：lag_s ≤ 300（营业时间 08:00–22:00）
+SELECT TIMESTAMPDIFF(SECOND, MAX(event_time), NOW()) AS lag_s FROM dwd.dwd_opr_notify_rt WHERE travel_date = DATE_FORMAT(NOW(), '%Y%m%d');
+
+-- ==================== dq.dwd_opr_complaint_rt  实时投诉工单 监控 ====================
+-- R1478 [强][及时性] 数据新鲜度 ≤ 5 分钟；期望：lag_s ≤ 300（营业时间 08:00–22:00）
+SELECT TIMESTAMPDIFF(SECOND, MAX(event_time), NOW()) AS lag_s FROM dwd.dwd_opr_complaint_rt WHERE travel_date = DATE_FORMAT(NOW(), '%Y%m%d');
+
+-- ==================== dq.dwd_opr_code_pool_rt  实时码池状态 监控 ====================
+-- R1479 [强][及时性] 数据新鲜度 ≤ 5 分钟；期望：lag_s ≤ 300（营业时间 08:00–22:00）
+SELECT TIMESTAMPDIFF(SECOND, MAX(event_time), NOW()) AS lag_s FROM dwd.dwd_opr_code_pool_rt WHERE travel_date = DATE_FORMAT(NOW(), '%Y%m%d');
+
 -- ==================== dq.dws_ord_tenant_sku_trade_rt  商户×SKU 分钟级交易 监控 ====================
--- R1412 [强][及时性] 数据新鲜度 ≤ 5 分钟；期望：lag_s ≤ 300（营业时间 08:00–22:00）
+-- R1480 [强][及时性] 数据新鲜度 ≤ 5 分钟；期望：lag_s ≤ 300（营业时间 08:00–22:00）
 SELECT TIMESTAMPDIFF(SECOND, MAX(update_time), NOW()) AS lag_s FROM dws.dws_ord_tenant_sku_trade_rt WHERE travel_date = DATE_FORMAT(NOW(), '%Y%m%d');
 
--- R1413 [弱][有效性] 金额/数量非负；期望：0
-SELECT COUNT(*) FROM dws.dws_ord_tenant_sku_trade_rt WHERE travel_date = DATE_FORMAT(NOW(), '%Y%m%d') AND (pay_amt < 0 OR pay_order_qty < 0 OR pay_ticket_qty < 0 OR pay_buyer_qty < 0 OR refund_amt < 0);
+-- R1481 [弱][有效性] 金额/数量非负；期望：0
+SELECT COUNT(*) FROM dws.dws_ord_tenant_sku_trade_rt WHERE travel_date = DATE_FORMAT(NOW(), '%Y%m%d') AND (pay_amt < 0 OR pay_order_qty < 0 OR pay_ticket_qty < 0 OR pay_buyer_qty < 0 OR refund_amt < 0 OR refund_ticket_qty < 0 OR order_qty < 0 OR order_ticket_qty < 0 OR order_amt < 0 OR cancel_order_qty < 0 OR staff_order_qty < 0 OR staff_pay_amt < 0);
 
 -- ==================== dq.dws_ord_verify_point_flow_rt  核销点 分钟级客流 监控 ====================
--- R1414 [强][及时性] 数据新鲜度 ≤ 5 分钟；期望：lag_s ≤ 300（营业时间 08:00–22:00）
+-- R1482 [强][及时性] 数据新鲜度 ≤ 5 分钟；期望：lag_s ≤ 300（营业时间 08:00–22:00）
 SELECT TIMESTAMPDIFF(SECOND, MAX(update_time), NOW()) AS lag_s FROM dws.dws_ord_verify_point_flow_rt WHERE travel_date = DATE_FORMAT(NOW(), '%Y%m%d');
 
--- R1415 [弱][有效性] 金额/数量非负；期望：0
+-- R1483 [弱][有效性] 金额/数量非负；期望：0
 SELECT COUNT(*) FROM dws.dws_ord_verify_point_flow_rt WHERE travel_date = DATE_FORMAT(NOW(), '%Y%m%d') AND (verify_person_qty < 0 OR verify_fail_qty < 0 OR verify_entitlement_qty < 0 OR duplicate_verify_qty < 0 OR offline_conflict_qty < 0);
 
 -- ==================== dq.dws_inv_sku_stock_rt  SKU 实时库存 监控 ====================
--- R1416 [强][及时性] 数据新鲜度 ≤ 5 分钟；期望：lag_s ≤ 300（营业时间 08:00–22:00）
+-- R1484 [强][及时性] 数据新鲜度 ≤ 5 分钟；期望：lag_s ≤ 300（营业时间 08:00–22:00）
 SELECT TIMESTAMPDIFF(SECOND, MAX(update_time), NOW()) AS lag_s FROM dws.dws_inv_sku_stock_rt WHERE travel_date = DATE_FORMAT(NOW(), '%Y%m%d');
 
--- R1417 [弱][有效性] 金额/数量非负；期望：0
+-- R1485 [弱][有效性] 金额/数量非负；期望：0
 SELECT COUNT(*) FROM dws.dws_inv_sku_stock_rt WHERE travel_date = DATE_FORMAT(NOW(), '%Y%m%d') AND (stock_total_qty < 0 OR stock_available_qty < 0 OR stock_frozen_qty < 0 OR stock_sold_qty < 0 OR sellout_pool_qty < 0 OR prededuct_qty < 0 OR prededuct_release_qty < 0);
 
 -- ==================== dq.dws_opr_risk_rule_hit_rt  风控规则 分钟级命中 监控 ====================
--- R1418 [强][及时性] 数据新鲜度 ≤ 5 分钟；期望：lag_s ≤ 300（营业时间 08:00–22:00）
+-- R1486 [强][及时性] 数据新鲜度 ≤ 5 分钟；期望：lag_s ≤ 300（营业时间 08:00–22:00）
 SELECT TIMESTAMPDIFF(SECOND, MAX(update_time), NOW()) AS lag_s FROM dws.dws_opr_risk_rule_hit_rt WHERE travel_date = DATE_FORMAT(NOW(), '%Y%m%d');
 
--- R1419 [弱][有效性] 金额/数量非负；期望：0
+-- R1487 [弱][有效性] 金额/数量非负；期望：0
 SELECT COUNT(*) FROM dws.dws_opr_risk_rule_hit_rt WHERE travel_date = DATE_FORMAT(NOW(), '%Y%m%d') AND (risk_hit_qty < 0 OR risk_block_qty < 0);
 
+-- ==================== dq.dws_ord_tenant_sku_verify_rt  商户×SKU 实时核销 监控 ====================
+-- R1488 [强][及时性] 数据新鲜度 ≤ 5 分钟；期望：lag_s ≤ 300（营业时间 08:00–22:00）
+SELECT TIMESTAMPDIFF(SECOND, MAX(update_time), NOW()) AS lag_s FROM dws.dws_ord_tenant_sku_verify_rt WHERE travel_date = DATE_FORMAT(NOW(), '%Y%m%d');
+
+-- R1489 [弱][有效性] 金额/数量非负；期望：0
+SELECT COUNT(*) FROM dws.dws_ord_tenant_sku_verify_rt WHERE travel_date = DATE_FORMAT(NOW(), '%Y%m%d') AND (verify_ticket_qty < 0 OR verify_amt < 0 OR verify_entitlement_qty < 0 OR verify_fail_qty < 0);
+
+-- ==================== dq.dws_fin_account_fund_rt  账户实时资金 监控 ====================
+-- R1490 [强][及时性] 数据新鲜度 ≤ 5 分钟；期望：lag_s ≤ 300（营业时间 08:00–22:00）
+SELECT TIMESTAMPDIFF(SECOND, MAX(update_time), NOW()) AS lag_s FROM dws.dws_fin_account_fund_rt WHERE travel_date = DATE_FORMAT(NOW(), '%Y%m%d');
+
+-- R1491 [弱][有效性] 金额/数量非负；期望：0
+SELECT COUNT(*) FROM dws.dws_fin_account_fund_rt WHERE travel_date = DATE_FORMAT(NOW(), '%Y%m%d') AND (available_balance_amt < 0 OR frozen_balance_amt < 0 OR freeze_amt < 0 OR unfreeze_verify_amt < 0 OR unfreeze_refund_amt < 0);
+
+-- ==================== dq.dws_trf_distributor_credit_rt  分销授信实时 监控 ====================
+-- R1492 [强][及时性] 数据新鲜度 ≤ 5 分钟；期望：lag_s ≤ 300（营业时间 08:00–22:00）
+SELECT TIMESTAMPDIFF(SECOND, MAX(update_time), NOW()) AS lag_s FROM dws.dws_trf_distributor_credit_rt WHERE travel_date = DATE_FORMAT(NOW(), '%Y%m%d');
+
+-- R1493 [弱][有效性] 金额/数量非负；期望：0
+SELECT COUNT(*) FROM dws.dws_trf_distributor_credit_rt WHERE travel_date = DATE_FORMAT(NOW(), '%Y%m%d') AND (credit_limit_amt < 0 OR credit_used_amt < 0);
+
+-- ==================== dq.dws_cus_tenant_growth_rt  游客实时增长 监控 ====================
+-- R1494 [强][及时性] 数据新鲜度 ≤ 5 分钟；期望：lag_s ≤ 300（营业时间 08:00–22:00）
+SELECT TIMESTAMPDIFF(SECOND, MAX(update_time), NOW()) AS lag_s FROM dws.dws_cus_tenant_growth_rt WHERE travel_date = DATE_FORMAT(NOW(), '%Y%m%d');
+
+-- R1495 [弱][有效性] 金额/数量非负；期望：0
+SELECT COUNT(*) FROM dws.dws_cus_tenant_growth_rt WHERE travel_date = DATE_FORMAT(NOW(), '%Y%m%d') AND (new_customer_qty < 0);
+
+-- ==================== dq.dws_opr_device_rt  设备实时状态 监控 ====================
+-- R1496 [强][及时性] 数据新鲜度 ≤ 5 分钟；期望：lag_s ≤ 300（营业时间 08:00–22:00）
+SELECT TIMESTAMPDIFF(SECOND, MAX(update_time), NOW()) AS lag_s FROM dws.dws_opr_device_rt WHERE travel_date = DATE_FORMAT(NOW(), '%Y%m%d');
+
+-- R1497 [弱][有效性] 金额/数量非负；期望：0
+SELECT COUNT(*) FROM dws.dws_opr_device_rt WHERE travel_date = DATE_FORMAT(NOW(), '%Y%m%d') AND (offline_times_qty < 0 OR device_total_qty < 0);
+
+-- ==================== dq.dws_opr_notify_rt  通知实时发送 监控 ====================
+-- R1498 [强][及时性] 数据新鲜度 ≤ 5 分钟；期望：lag_s ≤ 300（营业时间 08:00–22:00）
+SELECT TIMESTAMPDIFF(SECOND, MAX(update_time), NOW()) AS lag_s FROM dws.dws_opr_notify_rt WHERE travel_date = DATE_FORMAT(NOW(), '%Y%m%d');
+
+-- R1499 [弱][有效性] 金额/数量非负；期望：0
+SELECT COUNT(*) FROM dws.dws_opr_notify_rt WHERE travel_date = DATE_FORMAT(NOW(), '%Y%m%d') AND (notify_send_qty < 0 OR notify_success_qty < 0 OR notify_fail_qty < 0);
+
+-- ==================== dq.dws_opr_complaint_rt  投诉实时处理 监控 ====================
+-- R1500 [强][及时性] 数据新鲜度 ≤ 5 分钟；期望：lag_s ≤ 300（营业时间 08:00–22:00）
+SELECT TIMESTAMPDIFF(SECOND, MAX(update_time), NOW()) AS lag_s FROM dws.dws_opr_complaint_rt WHERE travel_date = DATE_FORMAT(NOW(), '%Y%m%d');
+
+-- R1501 [弱][有效性] 金额/数量非负；期望：0
+SELECT COUNT(*) FROM dws.dws_opr_complaint_rt WHERE travel_date = DATE_FORMAT(NOW(), '%Y%m%d') AND (complaint_qty < 0 OR complaint_resolved_qty < 0 OR complaint_overdue_qty < 0);
+
+-- ==================== dq.dws_opr_code_pool_rt  码池实时余量 监控 ====================
+-- R1502 [强][及时性] 数据新鲜度 ≤ 5 分钟；期望：lag_s ≤ 300（营业时间 08:00–22:00）
+SELECT TIMESTAMPDIFF(SECOND, MAX(update_time), NOW()) AS lag_s FROM dws.dws_opr_code_pool_rt WHERE travel_date = DATE_FORMAT(NOW(), '%Y%m%d');
+
+-- R1503 [弱][有效性] 金额/数量非负；期望：0
+SELECT COUNT(*) FROM dws.dws_opr_code_pool_rt WHERE travel_date = DATE_FORMAT(NOW(), '%Y%m%d') AND (code_capacity_qty < 0 OR code_allocated_qty < 0 OR code_recycled_qty < 0);
+
 -- ==================== dq.ads_ord_realtime_sales_rt  实时销售看板（对应 DP08） 监控 ====================
--- R1420 [强][及时性] 数据新鲜度 ≤ 5 分钟；期望：lag_s ≤ 300（营业时间 08:00–22:00）
+-- R1504 [强][及时性] 数据新鲜度 ≤ 5 分钟；期望：lag_s ≤ 300（营业时间 08:00–22:00）
 SELECT TIMESTAMPDIFF(SECOND, MAX(update_time), NOW()) AS lag_s FROM ads.ads_ord_realtime_sales_rt WHERE travel_date = DATE_FORMAT(NOW(), '%Y%m%d');
 
--- R1421 [弱][有效性] 金额/数量非负；期望：0
-SELECT COUNT(*) FROM ads.ads_ord_realtime_sales_rt WHERE travel_date = DATE_FORMAT(NOW(), '%Y%m%d') AND (pay_today_amt < 0 OR pay_1h_amt < 0 OR pay_5m_amt < 0 OR pay_order_today_qty < 0 OR pay_order_1h_qty < 0 OR pay_order_5m_qty < 0 OR pay_ticket_today_qty < 0 OR pay_ticket_1h_qty < 0 OR pay_ticket_5m_qty < 0 OR pay_buyer_today_qty < 0 OR pay_buyer_1h_qty < 0 OR pay_buyer_5m_qty < 0 OR refund_today_amt < 0 OR refund_1h_amt < 0 OR refund_5m_amt < 0 OR avg_ticket_price_today_amt < 0 OR avg_ticket_price_1h_amt < 0 OR avg_ticket_price_5m_amt < 0 OR mp_pay_today_amt < 0 OR h5_pay_today_amt < 0 OR pc_pay_today_amt < 0 OR offline_pay_today_amt < 0 OR api_pay_today_amt < 0);
+-- R1505 [弱][有效性] 金额/数量非负；期望：0
+SELECT COUNT(*) FROM ads.ads_ord_realtime_sales_rt WHERE travel_date = DATE_FORMAT(NOW(), '%Y%m%d') AND (pay_today_amt < 0 OR pay_1h_amt < 0 OR pay_5m_amt < 0 OR pay_order_today_qty < 0 OR pay_order_1h_qty < 0 OR pay_order_5m_qty < 0 OR pay_ticket_today_qty < 0 OR pay_ticket_1h_qty < 0 OR pay_ticket_5m_qty < 0 OR pay_buyer_today_qty < 0 OR pay_buyer_1h_qty < 0 OR pay_buyer_5m_qty < 0 OR refund_today_amt < 0 OR refund_1h_amt < 0 OR refund_5m_amt < 0 OR avg_ticket_price_today_amt < 0 OR avg_ticket_price_1h_amt < 0 OR avg_ticket_price_5m_amt < 0);
 
 -- ==================== dq.ads_inv_realtime_stock_rt  实时库存看板（对应 DP09） 监控 ====================
--- R1422 [强][及时性] 数据新鲜度 ≤ 5 分钟；期望：lag_s ≤ 300（营业时间 08:00–22:00）
+-- R1506 [强][及时性] 数据新鲜度 ≤ 5 分钟；期望：lag_s ≤ 300（营业时间 08:00–22:00）
 SELECT TIMESTAMPDIFF(SECOND, MAX(update_time), NOW()) AS lag_s FROM ads.ads_inv_realtime_stock_rt WHERE travel_date = DATE_FORMAT(NOW(), '%Y%m%d');
 
--- R1423 [弱][有效性] 金额/数量非负；期望：0
+-- R1507 [弱][有效性] 金额/数量非负；期望：0
 SELECT COUNT(*) FROM ads.ads_inv_realtime_stock_rt WHERE travel_date = DATE_FORMAT(NOW(), '%Y%m%d') AND (stock_available_now_qty < 0 OR stock_frozen_now_qty < 0 OR sellout_pool_now_qty < 0 OR prededuct_5m_qty < 0 OR prededuct_release_5m_qty < 0);
 
 -- ==================== dq.ads_ord_realtime_flow_rt  实时客流大屏 监控 ====================
--- R1424 [强][及时性] 数据新鲜度 ≤ 5 分钟；期望：lag_s ≤ 300（营业时间 08:00–22:00）
+-- R1508 [强][及时性] 数据新鲜度 ≤ 5 分钟；期望：lag_s ≤ 300（营业时间 08:00–22:00）
 SELECT TIMESTAMPDIFF(SECOND, MAX(update_time), NOW()) AS lag_s FROM ads.ads_ord_realtime_flow_rt WHERE travel_date = DATE_FORMAT(NOW(), '%Y%m%d');
 
--- R1425 [弱][有效性] 金额/数量非负；期望：0
+-- R1509 [弱][有效性] 金额/数量非负；期望：0
 SELECT COUNT(*) FROM ads.ads_ord_realtime_flow_rt WHERE travel_date = DATE_FORMAT(NOW(), '%Y%m%d') AND (verify_person_today_qty < 0 OR verify_person_1h_qty < 0 OR verify_person_5m_qty < 0 OR verify_fail_today_qty < 0 OR verify_fail_1h_qty < 0 OR verify_fail_5m_qty < 0);
 
 -- ==================== dq.ads_opr_risk_alert_rt  实时风控预警 监控 ====================
--- R1426 [强][及时性] 数据新鲜度 ≤ 5 分钟；期望：lag_s ≤ 300（营业时间 08:00–22:00）
+-- R1510 [强][及时性] 数据新鲜度 ≤ 5 分钟；期望：lag_s ≤ 300（营业时间 08:00–22:00）
 SELECT TIMESTAMPDIFF(SECOND, MAX(update_time), NOW()) AS lag_s FROM ads.ads_opr_risk_alert_rt WHERE travel_date = DATE_FORMAT(NOW(), '%Y%m%d');
 
--- R1427 [弱][有效性] 金额/数量非负；期望：0
+-- R1511 [弱][有效性] 金额/数量非负；期望：0
 SELECT COUNT(*) FROM ads.ads_opr_risk_alert_rt WHERE travel_date = DATE_FORMAT(NOW(), '%Y%m%d') AND (risk_hit_5m_qty < 0 OR risk_hit_today_qty < 0 OR risk_block_5m_qty < 0 OR risk_block_today_qty < 0 OR duplicate_verify_5m_qty < 0 OR duplicate_verify_today_qty < 0 OR offline_conflict_5m_qty < 0 OR offline_conflict_today_qty < 0);
 
--- ==================== dq.flink_job_inv_realtime_stock  作业 flink_job_inv_realtime_stock 运行监控 ====================
--- R1428 [强][及时性] Checkpoint 成功；期望：连续 3 次失败或单次 > 5 分钟告警
+-- ==================== dq.ads_ord_tenant_trade_overview_rt  商户经营实时概览 监控 ====================
+-- R1512 [强][及时性] 数据新鲜度 ≤ 5 分钟；期望：lag_s ≤ 300（营业时间 08:00–22:00）
+SELECT TIMESTAMPDIFF(SECOND, MAX(update_time), NOW()) AS lag_s FROM ads.ads_ord_tenant_trade_overview_rt WHERE travel_date = DATE_FORMAT(NOW(), '%Y%m%d');
+
+-- R1513 [弱][有效性] 金额/数量非负；期望：0
+SELECT COUNT(*) FROM ads.ads_ord_tenant_trade_overview_rt WHERE travel_date = DATE_FORMAT(NOW(), '%Y%m%d') AND (pay_today_amt < 0 OR pay_order_today_qty < 0 OR pay_ticket_today_qty < 0 OR pay_buyer_today_qty < 0 OR order_today_qty < 0 OR refund_today_amt < 0 OR refund_ticket_today_qty < 0 OR verify_ticket_today_qty < 0 OR verify_today_amt < 0 OR avg_ticket_price_today_amt < 0 OR per_customer_today_amt < 0);
+
+-- ==================== dq.ads_ord_sku_sales_rank_rt  SKU 实时销售排行 监控 ====================
+-- R1514 [强][及时性] 数据新鲜度 ≤ 5 分钟；期望：lag_s ≤ 300（营业时间 08:00–22:00）
+SELECT TIMESTAMPDIFF(SECOND, MAX(update_time), NOW()) AS lag_s FROM ads.ads_ord_sku_sales_rank_rt WHERE travel_date = DATE_FORMAT(NOW(), '%Y%m%d');
+
+-- R1515 [弱][有效性] 金额/数量非负；期望：0
+SELECT COUNT(*) FROM ads.ads_ord_sku_sales_rank_rt WHERE travel_date = DATE_FORMAT(NOW(), '%Y%m%d') AND (pay_today_amt < 0 OR pay_ticket_today_qty < 0 OR refund_ticket_today_qty < 0 OR avg_ticket_price_today_amt < 0);
+
+-- ==================== dq.ads_ord_channel_sales_rt  渠道实时销售结构 监控 ====================
+-- R1516 [强][及时性] 数据新鲜度 ≤ 5 分钟；期望：lag_s ≤ 300（营业时间 08:00–22:00）
+SELECT TIMESTAMPDIFF(SECOND, MAX(update_time), NOW()) AS lag_s FROM ads.ads_ord_channel_sales_rt WHERE travel_date = DATE_FORMAT(NOW(), '%Y%m%d');
+
+-- R1517 [弱][有效性] 金额/数量非负；期望：0
+SELECT COUNT(*) FROM ads.ads_ord_channel_sales_rt WHERE travel_date = DATE_FORMAT(NOW(), '%Y%m%d') AND (mp_pay_today_amt < 0 OR h5_pay_today_amt < 0 OR pc_pay_today_amt < 0 OR offline_pay_today_amt < 0 OR api_pay_today_amt < 0 OR mp_pay_order_today_qty < 0 OR h5_pay_order_today_qty < 0 OR pc_pay_order_today_qty < 0 OR offline_pay_order_today_qty < 0 OR api_pay_order_today_qty < 0 OR mp_pay_ticket_today_qty < 0 OR h5_pay_ticket_today_qty < 0 OR pc_pay_ticket_today_qty < 0 OR offline_pay_ticket_today_qty < 0 OR api_pay_ticket_today_qty < 0 OR staff_order_today_qty < 0 OR staff_pay_today_amt < 0);
+
+-- ==================== dq.ads_fin_account_fund_rt  账户资金实时 监控 ====================
+-- R1518 [强][及时性] 数据新鲜度 ≤ 5 分钟；期望：lag_s ≤ 300（营业时间 08:00–22:00）
+SELECT TIMESTAMPDIFF(SECOND, MAX(update_time), NOW()) AS lag_s FROM ads.ads_fin_account_fund_rt WHERE travel_date = DATE_FORMAT(NOW(), '%Y%m%d');
+
+-- R1519 [弱][有效性] 金额/数量非负；期望：0
+SELECT COUNT(*) FROM ads.ads_fin_account_fund_rt WHERE travel_date = DATE_FORMAT(NOW(), '%Y%m%d') AND (available_balance_now_amt < 0 OR frozen_balance_now_amt < 0 OR freeze_today_amt < 0 OR unfreeze_verify_today_amt < 0 OR unfreeze_refund_today_amt < 0);
+
+-- ==================== dq.ads_trf_credit_alert_rt  分销授信实时预警 监控 ====================
+-- R1520 [强][及时性] 数据新鲜度 ≤ 5 分钟；期望：lag_s ≤ 300（营业时间 08:00–22:00）
+SELECT TIMESTAMPDIFF(SECOND, MAX(update_time), NOW()) AS lag_s FROM ads.ads_trf_credit_alert_rt WHERE travel_date = DATE_FORMAT(NOW(), '%Y%m%d');
+
+-- R1521 [弱][有效性] 金额/数量非负；期望：0
+SELECT COUNT(*) FROM ads.ads_trf_credit_alert_rt WHERE travel_date = DATE_FORMAT(NOW(), '%Y%m%d') AND (credit_limit_now_amt < 0 OR credit_used_now_amt < 0);
+
+-- ==================== dq.ads_sup_platform_overview_rt  平台实时大盘 监控 ====================
+-- R1522 [强][及时性] 数据新鲜度 ≤ 5 分钟；期望：lag_s ≤ 300（营业时间 08:00–22:00）
+SELECT TIMESTAMPDIFF(SECOND, MAX(update_time), NOW()) AS lag_s FROM ads.ads_sup_platform_overview_rt WHERE travel_date = DATE_FORMAT(NOW(), '%Y%m%d');
+
+-- R1523 [弱][有效性] 金额/数量非负；期望：0
+SELECT COUNT(*) FROM ads.ads_sup_platform_overview_rt WHERE travel_date = DATE_FORMAT(NOW(), '%Y%m%d') AND (pay_today_amt < 0 OR pay_1h_amt < 0 OR pay_order_today_qty < 0 OR pay_order_1h_qty < 0 OR pay_buyer_today_qty < 0 OR pay_buyer_1h_qty < 0 OR refund_today_amt < 0 OR refund_1h_amt < 0 OR verify_ticket_today_qty < 0 OR verify_ticket_1h_qty < 0 OR new_customer_today_qty < 0 OR new_customer_1h_qty < 0);
+
+-- ==================== dq.ads_opr_operation_monitor_rt  运营实时监控 监控 ====================
+-- R1524 [强][及时性] 数据新鲜度 ≤ 5 分钟；期望：lag_s ≤ 300（营业时间 08:00–22:00）
+SELECT TIMESTAMPDIFF(SECOND, MAX(update_time), NOW()) AS lag_s FROM ads.ads_opr_operation_monitor_rt WHERE travel_date = DATE_FORMAT(NOW(), '%Y%m%d');
+
+-- R1525 [弱][有效性] 金额/数量非负；期望：0
+SELECT COUNT(*) FROM ads.ads_opr_operation_monitor_rt WHERE travel_date = DATE_FORMAT(NOW(), '%Y%m%d') AND (offline_times_today_qty < 0 OR notify_send_today_qty < 0 OR notify_fail_today_qty < 0 OR complaint_today_qty < 0 OR complaint_overdue_today_qty < 0 OR device_total_now_qty < 0 OR code_capacity_now_qty < 0 OR code_allocated_now_qty < 0);
+
+-- ==================== dq.flink_job_fin_account_fund  作业 flink_job_fin_account_fund 运行监控 ====================
+-- R1526 [强][及时性] Checkpoint 成功；期望：连续 3 次失败或单次 > 5 分钟告警
 Flink 指标：numberOfFailedCheckpoints、lastCheckpointDuration
 
--- R1429 [弱][及时性] 无持续反压；期望：任一算子 > 500 持续 5 分钟告警
+-- R1527 [弱][及时性] 无持续反压；期望：任一算子 > 500 持续 5 分钟告警
 Flink 指标：backPressuredTimeMsPerSecond
 
--- ==================== dq.flink_job_ord_realtime_sales  作业 flink_job_ord_realtime_sales 运行监控 ====================
--- R1430 [强][及时性] Checkpoint 成功；期望：连续 3 次失败或单次 > 5 分钟告警
+-- ==================== dq.flink_job_inv_realtime_stock  作业 flink_job_inv_realtime_stock 运行监控 ====================
+-- R1528 [强][及时性] Checkpoint 成功；期望：连续 3 次失败或单次 > 5 分钟告警
 Flink 指标：numberOfFailedCheckpoints、lastCheckpointDuration
 
--- R1431 [弱][及时性] 无持续反压；期望：任一算子 > 500 持续 5 分钟告警
+-- R1529 [弱][及时性] 无持续反压；期望：任一算子 > 500 持续 5 分钟告警
+Flink 指标：backPressuredTimeMsPerSecond
+
+-- ==================== dq.flink_job_opr_operation_monitor  作业 flink_job_opr_operation_monitor 运行监控 ====================
+-- R1530 [强][及时性] Checkpoint 成功；期望：连续 3 次失败或单次 > 5 分钟告警
+Flink 指标：numberOfFailedCheckpoints、lastCheckpointDuration
+
+-- R1531 [弱][及时性] 无持续反压；期望：任一算子 > 500 持续 5 分钟告警
 Flink 指标：backPressuredTimeMsPerSecond
 
 -- ==================== dq.flink_job_opr_risk_alert  作业 flink_job_opr_risk_alert 运行监控 ====================
--- R1432 [强][及时性] Checkpoint 成功；期望：连续 3 次失败或单次 > 5 分钟告警
+-- R1532 [强][及时性] Checkpoint 成功；期望：连续 3 次失败或单次 > 5 分钟告警
 Flink 指标：numberOfFailedCheckpoints、lastCheckpointDuration
 
--- R1433 [弱][及时性] 无持续反压；期望：任一算子 > 500 持续 5 分钟告警
+-- R1533 [弱][及时性] 无持续反压；期望：任一算子 > 500 持续 5 分钟告警
+Flink 指标：backPressuredTimeMsPerSecond
+
+-- ==================== dq.flink_job_trf_credit_alert  作业 flink_job_trf_credit_alert 运行监控 ====================
+-- R1534 [强][及时性] Checkpoint 成功；期望：连续 3 次失败或单次 > 5 分钟告警
+Flink 指标：numberOfFailedCheckpoints、lastCheckpointDuration
+
+-- R1535 [弱][及时性] 无持续反压；期望：任一算子 > 500 持续 5 分钟告警
 Flink 指标：backPressuredTimeMsPerSecond
 

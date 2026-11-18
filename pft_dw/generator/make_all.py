@@ -106,6 +106,9 @@ _iss.append([len(_iss) + 1, "实时采集", "实时链路用 Flink CDC 直读 My
 _iss.append([len(_iss) + 1, "离线采集", "离线 ODS 的同步工具与增量方式",
              "当前设计：_di 表按 binlog 增量（带 binlog_op_type / binlog_time），_df 表每日全量；离线是否也用 Flink CDC（如 CDC 快照模式每日全量 + 增量入湖）待确认",
              "影响 81 张离线 ODS 的采集作业与 binlog 字段来源"])
+_nrt = sum(1 for t in tables if t["rt"])
+for r in _iss:
+    r[4] = re.sub(r"影响 \d+ 张实时表", "影响 %d 张实时表" % _nrt, r[4])
 issues = [dict(no=r[0], cat=r[1], q=r[2], a=r[3], impact=r[4]) for r in _iss]
 dbs = OrderedDict()
 for t in tables:
@@ -123,6 +126,8 @@ for r in ads_m:
 exec(open(os.path.join(HERE, "build_schema.py"), encoding="utf-8").read())
 for t in tables:
     t["col_qty"] = len(SCH[t["short"]]["cols"])
+    # 实时表 lookup 的离线维表（字段级血缘里真正引用到的维表）——实时对离线的唯一依赖
+    t["lookup"] = sorted({a for c in SCH[t["short"]]["cols"] for a, b in c["r"] if a in TB and TB[a]["layer"] == "DIM" and not TB[a]["rt"]}) if t["rt"] else []
     t["engine"] = SCH[t["short"]]["engine"]
 json.dump({k: dict(cols=v["cols"], ddl=v["ddl"], engine=v["engine"]) for k, v in SCH.items()},
           open(os.path.join(OUT, "web", "schema.json"), "w", encoding="utf-8"), ensure_ascii=False, separators=(",", ":"))
@@ -158,6 +163,39 @@ def _qadd(key, name, ok, value, detail):
             dm["checks"].append(dict(name=name, value=value, status="通过" if ok else "待改进", detail=detail))
             dm["total"] += 1
             dm["pass"] += 1 if ok else 0
+# 实时与离线同一指标：口径必须完全一致（同一原子口径，只差统计周期）
+def _core(r):
+    f = r["formula"].split("=", 1)[-1]
+    f = "；".join(x for x in f.split("；") if not re.search(r"时间在|取当前|取统计日|今日 0 点|统计日当天", x))
+    return f.replace(r["period"], "{P}").strip()
+_off = {}
+for r in ads_m:
+    if r["mode"] == "离线":
+        _off.setdefault((r["base"], r["mod"]), []).append(r)
+_rt_peer, _same, _diff = 0, 0, []
+for r in ads_m:
+    if r["mode"] != "实时":
+        continue
+    ps = _off.get((r["base"], r["mod"]), [])
+    r["peers"] = [p["code"] for p in ps]
+    for p in ps:
+        p.setdefault("peers", []).append(r["code"])
+    if not ps:
+        r["kou_same"] = None
+        continue
+    _rt_peer += 1
+    ref = next((p for p in ps if p["period"] in ("当日", "截至当日")), ps[0])
+    ok = _core(r) == _core(ref) and r["base_code"] == ref["base_code"]
+    r["kou_same"] = ok
+    _same += ok
+    if not ok:
+        _diff.append("%s↔%s" % (r["en"], ref["en"]))
+for r in ads_m:
+    r.setdefault("peers", [])
+_qadd("reuse", "实时指标与离线同名指标口径一致", not _diff, "%d/%d" % (_same, _rt_peer),
+      "实时 %d 个指标中 %d 个与离线共用同一原子口径（编码相同），口径条件逐字一致，只差统计周期；其余 %d 个为实时专属（分钟窗口、当前值）%s" % (
+          sum(1 for r in ads_m if r["mode"] == "实时"), _rt_peer, sum(1 for r in ads_m if r["mode"] == "实时") - _rt_peer,
+          ("；不一致：" + "、".join(_diff[:10])) if _diff else ""))
 _qadd("std", "字段与表全部带注释", _cm == _nc, "%d/%d" % (_cm, _nc), "242 张表 DDL 均含 COMMENT；类型/状态字段逐值写明含义")
 _qadd("std", "字段名以规范关键词结尾（DWD 及以上）", not _kw, "%d 处" % len(_kw), "_id/_no/_code/_name/_type/_status/_date/_time/_amt/_qty/_rate；文本类统一 _desc")
 _qadd("std", "类型/状态字段注释列明取值", not _enum, "%d 处缺失" % len(_enum), "如 pay_status：UNPAID-未支付，PAID-已支付" + ("；缺：" + "、".join("%s.%s" % x for x in _enum[:8]) if _enum else ""))
@@ -251,7 +289,7 @@ wb2.save(os.path.join(OUT, "output", "pft_dw_fields.xlsx"))
 ws = wb.create_sheet("调度工作流")
 rows = []
 for n in sorted(WF["nodes"], key=lambda n: (list(FLOWS).index(n["flow"]), n["level"], n["id"])):
-    kind = {"task": "任务", "dq": "监控" if n.get("monitor") else "质检", "recon": "对账", "start": "开始", "end": "结束"}[n["kind"]]
+    kind = {"task": "任务", "dq": "监控" if n.get("monitor") else "质检", "recon": "对账", "start": "开始", "end": "结束", "ext": "外部依赖"}[n["kind"]]
     rows.append([FLOWS[n["flow"]]["name"], n["level"] + 1, n["id"], kind, n.get("cn", ""), n.get("layer", ""),
                  ("阻断" if n.get("block") else "告警") if n["kind"] in ("dq", "recon") else "",
                  len(n["rules"]), "、".join(n["deps"]), "、".join(n.get("cut", [])), "、".join(n.get("cross", [])), n.get("cmd") or n.get("desc", "")])

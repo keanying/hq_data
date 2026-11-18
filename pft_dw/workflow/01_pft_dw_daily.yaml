@@ -7027,6 +7027,35 @@ tasks:
       SELECT MAX(CASE WHEN travel_date = '${bizdate}' THEN v END) AS cur,
              AVG(CASE WHEN travel_date < '${bizdate}' THEN v END) AS avg7
       FROM d;
+- name: dq.recon.dws_trf_distributor_credit_rt
+  type: DATA_QUALITY
+  desc: 实时/离线对账：分销授信实时：跨实时/离线：读实时表 dws.dws_trf_distributor_credit_rt 的 ${bizdate} 分区，与离线同口径汇总对账
+  depends_on:
+  - dq.dws_trf_distributor_credit_df
+  depends_on_other_workflow:
+  - dws_trf_distributor_credit_rt
+  on_fail: 告警
+  rules:
+  - id: R1418
+    dimension: 一致性
+    name: 实时 dws_trf_distributor_credit_rt.credit_limit_amt 与离线 dws_trf_distributor_credit_df.credit_limit_amt 对账
+    level: 弱
+    expect: '|实时 − 离线| / 离线 ≤ 0.5%'
+    sql: |-
+      -- StarRocks 实时
+      SELECT SUM(credit_limit_amt) FROM dws.dws_trf_distributor_credit_rt WHERE travel_date = '${bizdate}';
+      -- Hive 离线
+      SELECT SUM(credit_limit_amt) FROM dws.dws_trf_distributor_credit_df WHERE travel_date = '${bizdate}';
+  - id: R1419
+    dimension: 一致性
+    name: 实时 dws_trf_distributor_credit_rt.credit_used_amt 与离线 dws_trf_distributor_credit_df.credit_used_amt 对账
+    level: 弱
+    expect: '|实时 − 离线| / 离线 ≤ 0.5%'
+    sql: |-
+      -- StarRocks 实时
+      SELECT SUM(credit_used_amt) FROM dws.dws_trf_distributor_credit_rt WHERE travel_date = '${bizdate}';
+      -- Hive 离线
+      SELECT SUM(credit_used_amt) FROM dws.dws_trf_distributor_credit_df WHERE travel_date = '${bizdate}';
 - name: dws_opr_approval_di
   type: SQL
   desc: 审批日汇总
@@ -7762,12 +7791,14 @@ tasks:
       FROM d;
 - name: dq.recon.dws_opr_risk_rule_hit_rt
   type: DATA_QUALITY
-  desc: 实时/离线对账：风控规则 分钟级命中
+  desc: 实时/离线对账：风控规则 分钟级命中：跨实时/离线：读实时表 dws.dws_opr_risk_rule_hit_rt 的 ${bizdate} 分区，与离线同口径汇总对账
   depends_on:
   - dq.dws_opr_risk_rule_hit_di
+  depends_on_other_workflow:
+  - dws_opr_risk_rule_hit_rt
   on_fail: 告警
   rules:
-  - id: R1387
+  - id: R1407
     dimension: 一致性
     name: 实时 dws_opr_risk_rule_hit_rt.risk_hit_qty 与离线 dws_opr_risk_rule_hit_di.risk_hit_qty 对账
     level: 弱
@@ -7777,6 +7808,16 @@ tasks:
       SELECT SUM(risk_hit_qty) FROM dws.dws_opr_risk_rule_hit_rt WHERE travel_date = '${bizdate}';
       -- Hive 离线
       SELECT SUM(risk_hit_qty) FROM dws.dws_opr_risk_rule_hit_di WHERE travel_date = '${bizdate}';
+  - id: R1408
+    dimension: 一致性
+    name: 实时 dws_opr_risk_rule_hit_rt.risk_block_qty 与离线 dws_opr_risk_rule_hit_di.risk_block_qty 对账
+    level: 弱
+    expect: '|实时 − 离线| / 离线 ≤ 0.5%'
+    sql: |-
+      -- StarRocks 实时
+      SELECT SUM(risk_block_qty) FROM dws.dws_opr_risk_rule_hit_rt WHERE travel_date = '${bizdate}';
+      -- Hive 离线
+      SELECT SUM(risk_block_qty) FROM dws.dws_opr_risk_rule_hit_di WHERE travel_date = '${bizdate}';
 - name: dwd_fin_fund_flow_di
   type: SQL
   desc: 资金流水明细
@@ -9053,6 +9094,84 @@ tasks:
       SELECT MAX(CASE WHEN travel_date = '${bizdate}' THEN v END) AS cur,
              AVG(CASE WHEN travel_date < '${bizdate}' THEN v END) AS avg7
       FROM d;
+- name: dq.recon.dws_opr_complaint_rt
+  type: DATA_QUALITY
+  desc: 实时/离线对账：投诉实时处理：跨实时/离线：读实时表 dws.dws_opr_complaint_rt 的 ${bizdate} 分区，与离线同口径汇总对账
+  depends_on:
+  - dq.dws_opr_complaint_di
+  depends_on_other_workflow:
+  - dws_opr_complaint_rt
+  on_fail: 告警
+  rules:
+  - id: R1426
+    dimension: 一致性
+    name: 实时 dws_opr_complaint_rt.complaint_qty 与离线 dws_opr_complaint_di.complaint_qty 对账
+    level: 弱
+    expect: '|实时 − 离线| / 离线 ≤ 0.5%'
+    sql: |-
+      -- StarRocks 实时
+      SELECT SUM(complaint_qty) FROM dws.dws_opr_complaint_rt WHERE travel_date = '${bizdate}';
+      -- Hive 离线
+      SELECT SUM(complaint_qty) FROM dws.dws_opr_complaint_di WHERE travel_date = '${bizdate}';
+  - id: R1427
+    dimension: 一致性
+    name: 实时 dws_opr_complaint_rt.complaint_resolved_qty 与离线 dws_opr_complaint_di.complaint_resolved_qty 对账
+    level: 弱
+    expect: '|实时 − 离线| / 离线 ≤ 0.5%'
+    sql: |-
+      -- StarRocks 实时
+      SELECT SUM(complaint_resolved_qty) FROM dws.dws_opr_complaint_rt WHERE travel_date = '${bizdate}';
+      -- Hive 离线
+      SELECT SUM(complaint_resolved_qty) FROM dws.dws_opr_complaint_di WHERE travel_date = '${bizdate}';
+  - id: R1428
+    dimension: 一致性
+    name: 实时 dws_opr_complaint_rt.complaint_overdue_qty 与离线 dws_opr_complaint_di.complaint_overdue_qty 对账
+    level: 弱
+    expect: '|实时 − 离线| / 离线 ≤ 0.5%'
+    sql: |-
+      -- StarRocks 实时
+      SELECT SUM(complaint_overdue_qty) FROM dws.dws_opr_complaint_rt WHERE travel_date = '${bizdate}';
+      -- Hive 离线
+      SELECT SUM(complaint_overdue_qty) FROM dws.dws_opr_complaint_di WHERE travel_date = '${bizdate}';
+- name: dq.recon.dws_opr_notify_rt
+  type: DATA_QUALITY
+  desc: 实时/离线对账：通知实时发送：跨实时/离线：读实时表 dws.dws_opr_notify_rt 的 ${bizdate} 分区，与离线同口径汇总对账
+  depends_on:
+  - dq.dws_opr_notify_di
+  depends_on_other_workflow:
+  - dws_opr_notify_rt
+  on_fail: 告警
+  rules:
+  - id: R1423
+    dimension: 一致性
+    name: 实时 dws_opr_notify_rt.notify_send_qty 与离线 dws_opr_notify_di.notify_send_qty 对账
+    level: 弱
+    expect: '|实时 − 离线| / 离线 ≤ 0.5%'
+    sql: |-
+      -- StarRocks 实时
+      SELECT SUM(notify_send_qty) FROM dws.dws_opr_notify_rt WHERE travel_date = '${bizdate}';
+      -- Hive 离线
+      SELECT SUM(notify_send_qty) FROM dws.dws_opr_notify_di WHERE travel_date = '${bizdate}';
+  - id: R1424
+    dimension: 一致性
+    name: 实时 dws_opr_notify_rt.notify_success_qty 与离线 dws_opr_notify_di.notify_success_qty 对账
+    level: 弱
+    expect: '|实时 − 离线| / 离线 ≤ 0.5%'
+    sql: |-
+      -- StarRocks 实时
+      SELECT SUM(notify_success_qty) FROM dws.dws_opr_notify_rt WHERE travel_date = '${bizdate}';
+      -- Hive 离线
+      SELECT SUM(notify_success_qty) FROM dws.dws_opr_notify_di WHERE travel_date = '${bizdate}';
+  - id: R1425
+    dimension: 一致性
+    name: 实时 dws_opr_notify_rt.notify_fail_qty 与离线 dws_opr_notify_di.notify_fail_qty 对账
+    level: 弱
+    expect: '|实时 − 离线| / 离线 ≤ 0.5%'
+    sql: |-
+      -- StarRocks 实时
+      SELECT SUM(notify_fail_qty) FROM dws.dws_opr_notify_rt WHERE travel_date = '${bizdate}';
+      -- Hive 离线
+      SELECT SUM(notify_fail_qty) FROM dws.dws_opr_notify_di WHERE travel_date = '${bizdate}';
 - name: dws_inv_sku_stock_df
   type: SQL
   desc: SKU×库存维度 库存日快照
@@ -9899,6 +10018,85 @@ tasks:
     sql: |-
       SELECT COUNT(*) AS bad_cnt FROM dws.dws_prd_sku_price_di WHERE travel_date = '${bizdate}' AND list_price_amt <> 0
         AND ABS(discount_rate - ROUND(avg_deal_price_amt * 100 / list_price_amt, 6)) > 0.000001;
+- name: dq.recon.dws_inv_sku_stock_rt
+  type: DATA_QUALITY
+  desc: 实时/离线对账：SKU 实时库存：跨实时/离线：读实时表 dws.dws_inv_sku_stock_rt 的 ${bizdate} 分区，与离线同口径汇总对账
+  depends_on:
+  - dq.dws_inv_sku_stock_df
+  depends_on_other_workflow:
+  - dws_inv_sku_stock_rt
+  on_fail: 告警
+  rules:
+  - id: R1400
+    dimension: 一致性
+    name: 实时 dws_inv_sku_stock_rt.stock_total_qty 与离线 dws_inv_sku_stock_df.stock_total_qty 对账
+    level: 弱
+    expect: '|实时 − 离线| / 离线 ≤ 0.5%'
+    sql: |-
+      -- StarRocks 实时
+      SELECT SUM(stock_total_qty) FROM dws.dws_inv_sku_stock_rt WHERE travel_date = '${bizdate}';
+      -- Hive 离线
+      SELECT SUM(stock_total_qty) FROM dws.dws_inv_sku_stock_df WHERE travel_date = '${bizdate}';
+  - id: R1401
+    dimension: 一致性
+    name: 实时 dws_inv_sku_stock_rt.stock_available_qty 与离线 dws_inv_sku_stock_df.stock_available_qty 对账
+    level: 弱
+    expect: '|实时 − 离线| / 离线 ≤ 0.5%'
+    sql: |-
+      -- StarRocks 实时
+      SELECT SUM(stock_available_qty) FROM dws.dws_inv_sku_stock_rt WHERE travel_date = '${bizdate}';
+      -- Hive 离线
+      SELECT SUM(stock_available_qty) FROM dws.dws_inv_sku_stock_df WHERE travel_date = '${bizdate}';
+  - id: R1402
+    dimension: 一致性
+    name: 实时 dws_inv_sku_stock_rt.stock_frozen_qty 与离线 dws_inv_sku_stock_df.stock_frozen_qty 对账
+    level: 弱
+    expect: '|实时 − 离线| / 离线 ≤ 0.5%'
+    sql: |-
+      -- StarRocks 实时
+      SELECT SUM(stock_frozen_qty) FROM dws.dws_inv_sku_stock_rt WHERE travel_date = '${bizdate}';
+      -- Hive 离线
+      SELECT SUM(stock_frozen_qty) FROM dws.dws_inv_sku_stock_df WHERE travel_date = '${bizdate}';
+  - id: R1403
+    dimension: 一致性
+    name: 实时 dws_inv_sku_stock_rt.stock_sold_qty 与离线 dws_inv_sku_stock_df.stock_sold_qty 对账
+    level: 弱
+    expect: '|实时 − 离线| / 离线 ≤ 0.5%'
+    sql: |-
+      -- StarRocks 实时
+      SELECT SUM(stock_sold_qty) FROM dws.dws_inv_sku_stock_rt WHERE travel_date = '${bizdate}';
+      -- Hive 离线
+      SELECT SUM(stock_sold_qty) FROM dws.dws_inv_sku_stock_df WHERE travel_date = '${bizdate}';
+  - id: R1404
+    dimension: 一致性
+    name: 实时 dws_inv_sku_stock_rt.sellout_pool_qty 与离线 dws_inv_sku_stock_df.sellout_pool_qty 对账
+    level: 弱
+    expect: '|实时 − 离线| / 离线 ≤ 0.5%'
+    sql: |-
+      -- StarRocks 实时
+      SELECT SUM(sellout_pool_qty) FROM dws.dws_inv_sku_stock_rt WHERE travel_date = '${bizdate}';
+      -- Hive 离线
+      SELECT SUM(sellout_pool_qty) FROM dws.dws_inv_sku_stock_df WHERE travel_date = '${bizdate}';
+  - id: R1405
+    dimension: 一致性
+    name: 实时 dws_inv_sku_stock_rt.prededuct_qty 与离线 dws_inv_sku_stock_df.prededuct_qty 对账
+    level: 弱
+    expect: '|实时 − 离线| / 离线 ≤ 0.5%'
+    sql: |-
+      -- StarRocks 实时
+      SELECT SUM(prededuct_qty) FROM dws.dws_inv_sku_stock_rt WHERE travel_date = '${bizdate}';
+      -- Hive 离线
+      SELECT SUM(prededuct_qty) FROM dws.dws_inv_sku_stock_df WHERE travel_date = '${bizdate}';
+  - id: R1406
+    dimension: 一致性
+    name: 实时 dws_inv_sku_stock_rt.prededuct_release_qty 与离线 dws_inv_sku_stock_df.prededuct_release_qty 对账
+    level: 弱
+    expect: '|实时 − 离线| / 离线 ≤ 0.5%'
+    sql: |-
+      -- StarRocks 实时
+      SELECT SUM(prededuct_release_qty) FROM dws.dws_inv_sku_stock_rt WHERE travel_date = '${bizdate}';
+      -- Hive 离线
+      SELECT SUM(prededuct_release_qty) FROM dws.dws_inv_sku_stock_df WHERE travel_date = '${bizdate}';
 - name: ads_ord_channel_sales_structure_di
   type: SQL
   desc: 渠道销售结构
@@ -11681,6 +11879,105 @@ tasks:
   retries: 2
   timeout_minutes: 40
   priority: 中
+- name: dq.recon.dws_fin_account_fund_rt
+  type: DATA_QUALITY
+  desc: 实时/离线对账：账户实时资金：跨实时/离线：读实时表 dws.dws_fin_account_fund_rt 的 ${bizdate} 分区，与离线同口径汇总对账
+  depends_on:
+  - dq.dws_fin_account_balance_df
+  - dq.dws_fin_account_frozen_di
+  depends_on_other_workflow:
+  - dws_fin_account_fund_rt
+  on_fail: 告警
+  rules:
+  - id: R1413
+    dimension: 一致性
+    name: 实时 dws_fin_account_fund_rt.available_balance_amt 与离线 dws_fin_account_balance_df.available_balance_amt 对账
+    level: 弱
+    expect: '|实时 − 离线| / 离线 ≤ 0.5%'
+    sql: |-
+      -- StarRocks 实时
+      SELECT SUM(available_balance_amt) FROM dws.dws_fin_account_fund_rt WHERE travel_date = '${bizdate}';
+      -- Hive 离线
+      SELECT SUM(available_balance_amt) FROM dws.dws_fin_account_balance_df WHERE travel_date = '${bizdate}';
+  - id: R1414
+    dimension: 一致性
+    name: 实时 dws_fin_account_fund_rt.frozen_balance_amt 与离线 dws_fin_account_balance_df.frozen_balance_amt 对账
+    level: 弱
+    expect: '|实时 − 离线| / 离线 ≤ 0.5%'
+    sql: |-
+      -- StarRocks 实时
+      SELECT SUM(frozen_balance_amt) FROM dws.dws_fin_account_fund_rt WHERE travel_date = '${bizdate}';
+      -- Hive 离线
+      SELECT SUM(frozen_balance_amt) FROM dws.dws_fin_account_balance_df WHERE travel_date = '${bizdate}';
+  - id: R1415
+    dimension: 一致性
+    name: 实时 dws_fin_account_fund_rt.freeze_amt 与离线 dws_fin_account_frozen_di.freeze_amt 对账
+    level: 弱
+    expect: '|实时 − 离线| / 离线 ≤ 0.5%'
+    sql: |-
+      -- StarRocks 实时
+      SELECT SUM(freeze_amt) FROM dws.dws_fin_account_fund_rt WHERE travel_date = '${bizdate}';
+      -- Hive 离线
+      SELECT SUM(freeze_amt) FROM dws.dws_fin_account_frozen_di WHERE travel_date = '${bizdate}';
+  - id: R1416
+    dimension: 一致性
+    name: 实时 dws_fin_account_fund_rt.unfreeze_verify_amt 与离线 dws_fin_account_frozen_di.unfreeze_verify_amt 对账
+    level: 弱
+    expect: '|实时 − 离线| / 离线 ≤ 0.5%'
+    sql: |-
+      -- StarRocks 实时
+      SELECT SUM(unfreeze_verify_amt) FROM dws.dws_fin_account_fund_rt WHERE travel_date = '${bizdate}';
+      -- Hive 离线
+      SELECT SUM(unfreeze_verify_amt) FROM dws.dws_fin_account_frozen_di WHERE travel_date = '${bizdate}';
+  - id: R1417
+    dimension: 一致性
+    name: 实时 dws_fin_account_fund_rt.unfreeze_refund_amt 与离线 dws_fin_account_frozen_di.unfreeze_refund_amt 对账
+    level: 弱
+    expect: '|实时 − 离线| / 离线 ≤ 0.5%'
+    sql: |-
+      -- StarRocks 实时
+      SELECT SUM(unfreeze_refund_amt) FROM dws.dws_fin_account_fund_rt WHERE travel_date = '${bizdate}';
+      -- Hive 离线
+      SELECT SUM(unfreeze_refund_amt) FROM dws.dws_fin_account_frozen_di WHERE travel_date = '${bizdate}';
+- name: dq.recon.dws_opr_code_pool_rt
+  type: DATA_QUALITY
+  desc: 实时/离线对账：码池实时余量：跨实时/离线：读实时表 dws.dws_opr_code_pool_rt 的 ${bizdate} 分区，与离线同口径汇总对账
+  depends_on:
+  - dq.dws_opr_code_pool_df
+  depends_on_other_workflow:
+  - dws_opr_code_pool_rt
+  on_fail: 告警
+  rules:
+  - id: R1429
+    dimension: 一致性
+    name: 实时 dws_opr_code_pool_rt.code_capacity_qty 与离线 dws_opr_code_pool_df.code_capacity_qty 对账
+    level: 弱
+    expect: '|实时 − 离线| / 离线 ≤ 0.5%'
+    sql: |-
+      -- StarRocks 实时
+      SELECT SUM(code_capacity_qty) FROM dws.dws_opr_code_pool_rt WHERE travel_date = '${bizdate}';
+      -- Hive 离线
+      SELECT SUM(code_capacity_qty) FROM dws.dws_opr_code_pool_df WHERE travel_date = '${bizdate}';
+  - id: R1430
+    dimension: 一致性
+    name: 实时 dws_opr_code_pool_rt.code_allocated_qty 与离线 dws_opr_code_pool_df.code_allocated_qty 对账
+    level: 弱
+    expect: '|实时 − 离线| / 离线 ≤ 0.5%'
+    sql: |-
+      -- StarRocks 实时
+      SELECT SUM(code_allocated_qty) FROM dws.dws_opr_code_pool_rt WHERE travel_date = '${bizdate}';
+      -- Hive 离线
+      SELECT SUM(code_allocated_qty) FROM dws.dws_opr_code_pool_df WHERE travel_date = '${bizdate}';
+  - id: R1431
+    dimension: 一致性
+    name: 实时 dws_opr_code_pool_rt.code_recycled_qty 与离线 dws_opr_code_pool_df.code_recycled_qty 对账
+    level: 弱
+    expect: '|实时 − 离线| / 离线 ≤ 0.5%'
+    sql: |-
+      -- StarRocks 实时
+      SELECT SUM(code_recycled_qty) FROM dws.dws_opr_code_pool_rt WHERE travel_date = '${bizdate}';
+      -- Hive 离线
+      SELECT SUM(code_recycled_qty) FROM dws.dws_opr_code_pool_df WHERE travel_date = '${bizdate}';
 - name: dws_cus_customer_trade_di
   type: SQL
   desc: 游客×商户 交易日汇总
@@ -13120,23 +13417,143 @@ tasks:
   retries: 2
   timeout_minutes: 40
   priority: 中
-- name: dq.recon.dws_ord_verify_point_flow_rt
+- name: dq.recon.dws_opr_device_rt
   type: DATA_QUALITY
-  desc: 实时/离线对账：核销点 分钟级客流
+  desc: 实时/离线对账：设备实时状态：跨实时/离线：读实时表 dws.dws_opr_device_rt 的 ${bizdate} 分区，与离线同口径汇总对账
   depends_on:
-  - dq.dws_ord_verify_point_flow_hrs
+  - dq.dws_opr_device_di
+  depends_on_other_workflow:
+  - dws_opr_device_rt
   on_fail: 告警
   rules:
-  - id: R1386
+  - id: R1421
     dimension: 一致性
-    name: 实时 dws_ord_verify_point_flow_rt.verify_person_qty 与离线 dws_ord_verify_point_flow_hrs.verify_person_qty 对账
+    name: 实时 dws_opr_device_rt.offline_times_qty 与离线 dws_opr_device_di.offline_times_qty 对账
+    level: 弱
+    expect: '|实时 − 离线| / 离线 ≤ 0.5%'
+    sql: |-
+      -- StarRocks 实时
+      SELECT SUM(offline_times_qty) FROM dws.dws_opr_device_rt WHERE travel_date = '${bizdate}';
+      -- Hive 离线
+      SELECT SUM(offline_times_qty) FROM dws.dws_opr_device_di WHERE travel_date = '${bizdate}';
+  - id: R1422
+    dimension: 一致性
+    name: 实时 dws_opr_device_rt.device_total_qty 与离线 dws_opr_device_di.device_total_qty 对账
+    level: 弱
+    expect: '|实时 − 离线| / 离线 ≤ 0.5%'
+    sql: |-
+      -- StarRocks 实时
+      SELECT SUM(device_total_qty) FROM dws.dws_opr_device_rt WHERE travel_date = '${bizdate}';
+      -- Hive 离线
+      SELECT SUM(device_total_qty) FROM dws.dws_opr_device_di WHERE travel_date = '${bizdate}';
+- name: dq.recon.dws_ord_tenant_sku_verify_rt
+  type: DATA_QUALITY
+  desc: 实时/离线对账：商户×SKU 实时核销：跨实时/离线：读实时表 dws.dws_ord_tenant_sku_verify_rt 的 ${bizdate} 分区，与离线同口径汇总对账
+  depends_on:
+  - dq.dws_ord_tenant_sku_verify_di
+  depends_on_other_workflow:
+  - dws_ord_tenant_sku_verify_rt
+  on_fail: 告警
+  rules:
+  - id: R1409
+    dimension: 一致性
+    name: 实时 dws_ord_tenant_sku_verify_rt.verify_ticket_qty 与离线 dws_ord_tenant_sku_verify_di.verify_ticket_qty 对账
+    level: 弱
+    expect: '|实时 − 离线| / 离线 ≤ 0.5%'
+    sql: |-
+      -- StarRocks 实时
+      SELECT SUM(verify_ticket_qty) FROM dws.dws_ord_tenant_sku_verify_rt WHERE travel_date = '${bizdate}';
+      -- Hive 离线
+      SELECT SUM(verify_ticket_qty) FROM dws.dws_ord_tenant_sku_verify_di WHERE travel_date = '${bizdate}';
+  - id: R1410
+    dimension: 一致性
+    name: 实时 dws_ord_tenant_sku_verify_rt.verify_amt 与离线 dws_ord_tenant_sku_verify_di.verify_amt 对账
+    level: 弱
+    expect: '|实时 − 离线| / 离线 ≤ 0.5%'
+    sql: |-
+      -- StarRocks 实时
+      SELECT SUM(verify_amt) FROM dws.dws_ord_tenant_sku_verify_rt WHERE travel_date = '${bizdate}';
+      -- Hive 离线
+      SELECT SUM(verify_amt) FROM dws.dws_ord_tenant_sku_verify_di WHERE travel_date = '${bizdate}';
+  - id: R1411
+    dimension: 一致性
+    name: 实时 dws_ord_tenant_sku_verify_rt.verify_entitlement_qty 与离线 dws_ord_tenant_sku_verify_di.verify_entitlement_qty 对账
+    level: 弱
+    expect: '|实时 − 离线| / 离线 ≤ 0.5%'
+    sql: |-
+      -- StarRocks 实时
+      SELECT SUM(verify_entitlement_qty) FROM dws.dws_ord_tenant_sku_verify_rt WHERE travel_date = '${bizdate}';
+      -- Hive 离线
+      SELECT SUM(verify_entitlement_qty) FROM dws.dws_ord_tenant_sku_verify_di WHERE travel_date = '${bizdate}';
+  - id: R1412
+    dimension: 一致性
+    name: 实时 dws_ord_tenant_sku_verify_rt.verify_fail_qty 与离线 dws_ord_tenant_sku_verify_di.verify_fail_qty 对账
+    level: 弱
+    expect: '|实时 − 离线| / 离线 ≤ 0.5%'
+    sql: |-
+      -- StarRocks 实时
+      SELECT SUM(verify_fail_qty) FROM dws.dws_ord_tenant_sku_verify_rt WHERE travel_date = '${bizdate}';
+      -- Hive 离线
+      SELECT SUM(verify_fail_qty) FROM dws.dws_ord_tenant_sku_verify_di WHERE travel_date = '${bizdate}';
+- name: dq.recon.dws_ord_verify_point_flow_rt
+  type: DATA_QUALITY
+  desc: 实时/离线对账：核销点 分钟级客流：跨实时/离线：读实时表 dws.dws_ord_verify_point_flow_rt 的 ${bizdate} 分区，与离线同口径汇总对账
+  depends_on:
+  - dq.dws_ord_tenant_sku_verify_di
+  depends_on_other_workflow:
+  - dws_ord_verify_point_flow_rt
+  on_fail: 告警
+  rules:
+  - id: R1395
+    dimension: 一致性
+    name: 实时 dws_ord_verify_point_flow_rt.verify_person_qty 与离线 dws_ord_tenant_sku_verify_di.verify_person_qty 对账
     level: 弱
     expect: '|实时 − 离线| / 离线 ≤ 0.5%'
     sql: |-
       -- StarRocks 实时
       SELECT SUM(verify_person_qty) FROM dws.dws_ord_verify_point_flow_rt WHERE travel_date = '${bizdate}';
       -- Hive 离线
-      SELECT SUM(verify_person_qty) FROM dws.dws_ord_verify_point_flow_hrs WHERE travel_date = '${bizdate}';
+      SELECT SUM(verify_person_qty) FROM dws.dws_ord_tenant_sku_verify_di WHERE travel_date = '${bizdate}';
+  - id: R1396
+    dimension: 一致性
+    name: 实时 dws_ord_verify_point_flow_rt.verify_fail_qty 与离线 dws_ord_tenant_sku_verify_di.verify_fail_qty 对账
+    level: 弱
+    expect: '|实时 − 离线| / 离线 ≤ 0.5%'
+    sql: |-
+      -- StarRocks 实时
+      SELECT SUM(verify_fail_qty) FROM dws.dws_ord_verify_point_flow_rt WHERE travel_date = '${bizdate}';
+      -- Hive 离线
+      SELECT SUM(verify_fail_qty) FROM dws.dws_ord_tenant_sku_verify_di WHERE travel_date = '${bizdate}';
+  - id: R1397
+    dimension: 一致性
+    name: 实时 dws_ord_verify_point_flow_rt.verify_entitlement_qty 与离线 dws_ord_tenant_sku_verify_di.verify_entitlement_qty 对账
+    level: 弱
+    expect: '|实时 − 离线| / 离线 ≤ 0.5%'
+    sql: |-
+      -- StarRocks 实时
+      SELECT SUM(verify_entitlement_qty) FROM dws.dws_ord_verify_point_flow_rt WHERE travel_date = '${bizdate}';
+      -- Hive 离线
+      SELECT SUM(verify_entitlement_qty) FROM dws.dws_ord_tenant_sku_verify_di WHERE travel_date = '${bizdate}';
+  - id: R1398
+    dimension: 一致性
+    name: 实时 dws_ord_verify_point_flow_rt.duplicate_verify_qty 与离线 dws_ord_tenant_sku_verify_di.duplicate_verify_qty 对账
+    level: 弱
+    expect: '|实时 − 离线| / 离线 ≤ 0.5%'
+    sql: |-
+      -- StarRocks 实时
+      SELECT SUM(duplicate_verify_qty) FROM dws.dws_ord_verify_point_flow_rt WHERE travel_date = '${bizdate}';
+      -- Hive 离线
+      SELECT SUM(duplicate_verify_qty) FROM dws.dws_ord_tenant_sku_verify_di WHERE travel_date = '${bizdate}';
+  - id: R1399
+    dimension: 一致性
+    name: 实时 dws_ord_verify_point_flow_rt.offline_conflict_qty 与离线 dws_ord_tenant_sku_verify_di.offline_conflict_qty 对账
+    level: 弱
+    expect: '|实时 − 离线| / 离线 ≤ 0.5%'
+    sql: |-
+      -- StarRocks 实时
+      SELECT SUM(offline_conflict_qty) FROM dws.dws_ord_verify_point_flow_rt WHERE travel_date = '${bizdate}';
+      -- Hive 离线
+      SELECT SUM(offline_conflict_qty) FROM dws.dws_ord_tenant_sku_verify_di WHERE travel_date = '${bizdate}';
 - name: dws_cus_customer_lifetime_df
   type: SQL
   desc: 游客累计至今汇总
@@ -15121,34 +15538,77 @@ tasks:
   retries: 2
   timeout_minutes: 40
   priority: 中
+- name: dq.recon.dws_cus_tenant_growth_rt
+  type: DATA_QUALITY
+  desc: 实时/离线对账：游客实时增长：跨实时/离线：读实时表 dws.dws_cus_tenant_growth_rt 的 ${bizdate} 分区，与离线同口径汇总对账
+  depends_on:
+  - dq.dws_cus_tenant_growth_di
+  depends_on_other_workflow:
+  - dws_cus_tenant_growth_rt
+  on_fail: 告警
+  rules:
+  - id: R1420
+    dimension: 一致性
+    name: 实时 dws_cus_tenant_growth_rt.new_customer_qty 与离线 dws_cus_tenant_growth_di.new_customer_qty 对账
+    level: 弱
+    expect: '|实时 − 离线| / 离线 ≤ 0.5%'
+    sql: |-
+      -- StarRocks 实时
+      SELECT SUM(new_customer_qty) FROM dws.dws_cus_tenant_growth_rt WHERE travel_date = '${bizdate}';
+      -- Hive 离线
+      SELECT SUM(new_customer_qty) FROM dws.dws_cus_tenant_growth_di WHERE travel_date = '${bizdate}';
 - name: dq.recon.dws_ord_tenant_sku_trade_rt
   type: DATA_QUALITY
-  desc: 实时/离线对账：商户×SKU 分钟级交易
+  desc: 实时/离线对账：商户×SKU 分钟级交易：跨实时/离线：读实时表 dws.dws_ord_tenant_sku_trade_rt 的 ${bizdate} 分区，与离线同口径汇总对账
   depends_on:
+  - dq.dws_ord_tenant_sku_channel_trade_di
+  - dq.dws_sup_staff_operate_di
   - dq.dws_sup_tenant_trade_di
+  depends_on_other_workflow:
+  - dws_ord_tenant_sku_trade_rt
   on_fail: 告警
   rules:
   - id: R1383
     dimension: 一致性
-    name: 实时 dws_ord_tenant_sku_trade_rt.pay_amt 与离线 dws_sup_tenant_trade_di.pay_amt 对账
+    name: 实时 dws_ord_tenant_sku_trade_rt.pay_amt 与离线 dws_ord_tenant_sku_channel_trade_di.pay_amt 对账
     level: 弱
     expect: '|实时 − 离线| / 离线 ≤ 0.5%'
     sql: |-
       -- StarRocks 实时
       SELECT SUM(pay_amt) FROM dws.dws_ord_tenant_sku_trade_rt WHERE travel_date = '${bizdate}';
       -- Hive 离线
-      SELECT SUM(pay_amt) FROM dws.dws_sup_tenant_trade_di WHERE travel_date = '${bizdate}';
+      SELECT SUM(pay_amt) FROM dws.dws_ord_tenant_sku_channel_trade_di WHERE travel_date = '${bizdate}';
   - id: R1384
     dimension: 一致性
-    name: 实时 dws_ord_tenant_sku_trade_rt.pay_order_qty 与离线 dws_sup_tenant_trade_di.pay_order_qty 对账
+    name: 实时 dws_ord_tenant_sku_trade_rt.pay_order_qty 与离线 dws_ord_tenant_sku_channel_trade_di.pay_order_qty 对账
     level: 弱
     expect: '|实时 − 离线| / 离线 ≤ 0.5%'
     sql: |-
       -- StarRocks 实时
       SELECT SUM(pay_order_qty) FROM dws.dws_ord_tenant_sku_trade_rt WHERE travel_date = '${bizdate}';
       -- Hive 离线
-      SELECT SUM(pay_order_qty) FROM dws.dws_sup_tenant_trade_di WHERE travel_date = '${bizdate}';
+      SELECT SUM(pay_order_qty) FROM dws.dws_ord_tenant_sku_channel_trade_di WHERE travel_date = '${bizdate}';
   - id: R1385
+    dimension: 一致性
+    name: 实时 dws_ord_tenant_sku_trade_rt.pay_ticket_qty 与离线 dws_ord_tenant_sku_channel_trade_di.pay_ticket_qty 对账
+    level: 弱
+    expect: '|实时 − 离线| / 离线 ≤ 0.5%'
+    sql: |-
+      -- StarRocks 实时
+      SELECT SUM(pay_ticket_qty) FROM dws.dws_ord_tenant_sku_trade_rt WHERE travel_date = '${bizdate}';
+      -- Hive 离线
+      SELECT SUM(pay_ticket_qty) FROM dws.dws_ord_tenant_sku_channel_trade_di WHERE travel_date = '${bizdate}';
+  - id: R1386
+    dimension: 一致性
+    name: 实时 dws_ord_tenant_sku_trade_rt.pay_buyer_qty 与离线 dws_ord_tenant_sku_channel_trade_di.pay_buyer_qty 对账
+    level: 弱
+    expect: '|实时 − 离线| / 离线 ≤ 0.5%'
+    sql: |-
+      -- StarRocks 实时
+      SELECT SUM(pay_buyer_qty) FROM dws.dws_ord_tenant_sku_trade_rt WHERE travel_date = '${bizdate}';
+      -- Hive 离线
+      SELECT SUM(pay_buyer_qty) FROM dws.dws_ord_tenant_sku_channel_trade_di WHERE travel_date = '${bizdate}';
+  - id: R1387
     dimension: 一致性
     name: 实时 dws_ord_tenant_sku_trade_rt.refund_amt 与离线 dws_sup_tenant_trade_di.refund_amt 对账
     level: 弱
@@ -15158,6 +15618,76 @@ tasks:
       SELECT SUM(refund_amt) FROM dws.dws_ord_tenant_sku_trade_rt WHERE travel_date = '${bizdate}';
       -- Hive 离线
       SELECT SUM(refund_amt) FROM dws.dws_sup_tenant_trade_di WHERE travel_date = '${bizdate}';
+  - id: R1388
+    dimension: 一致性
+    name: 实时 dws_ord_tenant_sku_trade_rt.refund_ticket_qty 与离线 dws_sup_tenant_trade_di.refund_ticket_qty 对账
+    level: 弱
+    expect: '|实时 − 离线| / 离线 ≤ 0.5%'
+    sql: |-
+      -- StarRocks 实时
+      SELECT SUM(refund_ticket_qty) FROM dws.dws_ord_tenant_sku_trade_rt WHERE travel_date = '${bizdate}';
+      -- Hive 离线
+      SELECT SUM(refund_ticket_qty) FROM dws.dws_sup_tenant_trade_di WHERE travel_date = '${bizdate}';
+  - id: R1389
+    dimension: 一致性
+    name: 实时 dws_ord_tenant_sku_trade_rt.order_qty 与离线 dws_ord_tenant_sku_channel_trade_di.order_qty 对账
+    level: 弱
+    expect: '|实时 − 离线| / 离线 ≤ 0.5%'
+    sql: |-
+      -- StarRocks 实时
+      SELECT SUM(order_qty) FROM dws.dws_ord_tenant_sku_trade_rt WHERE travel_date = '${bizdate}';
+      -- Hive 离线
+      SELECT SUM(order_qty) FROM dws.dws_ord_tenant_sku_channel_trade_di WHERE travel_date = '${bizdate}';
+  - id: R1390
+    dimension: 一致性
+    name: 实时 dws_ord_tenant_sku_trade_rt.order_ticket_qty 与离线 dws_ord_tenant_sku_channel_trade_di.order_ticket_qty 对账
+    level: 弱
+    expect: '|实时 − 离线| / 离线 ≤ 0.5%'
+    sql: |-
+      -- StarRocks 实时
+      SELECT SUM(order_ticket_qty) FROM dws.dws_ord_tenant_sku_trade_rt WHERE travel_date = '${bizdate}';
+      -- Hive 离线
+      SELECT SUM(order_ticket_qty) FROM dws.dws_ord_tenant_sku_channel_trade_di WHERE travel_date = '${bizdate}';
+  - id: R1391
+    dimension: 一致性
+    name: 实时 dws_ord_tenant_sku_trade_rt.order_amt 与离线 dws_ord_tenant_sku_channel_trade_di.order_amt 对账
+    level: 弱
+    expect: '|实时 − 离线| / 离线 ≤ 0.5%'
+    sql: |-
+      -- StarRocks 实时
+      SELECT SUM(order_amt) FROM dws.dws_ord_tenant_sku_trade_rt WHERE travel_date = '${bizdate}';
+      -- Hive 离线
+      SELECT SUM(order_amt) FROM dws.dws_ord_tenant_sku_channel_trade_di WHERE travel_date = '${bizdate}';
+  - id: R1392
+    dimension: 一致性
+    name: 实时 dws_ord_tenant_sku_trade_rt.cancel_order_qty 与离线 dws_ord_tenant_sku_channel_trade_di.cancel_order_qty 对账
+    level: 弱
+    expect: '|实时 − 离线| / 离线 ≤ 0.5%'
+    sql: |-
+      -- StarRocks 实时
+      SELECT SUM(cancel_order_qty) FROM dws.dws_ord_tenant_sku_trade_rt WHERE travel_date = '${bizdate}';
+      -- Hive 离线
+      SELECT SUM(cancel_order_qty) FROM dws.dws_ord_tenant_sku_channel_trade_di WHERE travel_date = '${bizdate}';
+  - id: R1393
+    dimension: 一致性
+    name: 实时 dws_ord_tenant_sku_trade_rt.staff_order_qty 与离线 dws_ord_tenant_sku_channel_trade_di.staff_order_qty 对账
+    level: 弱
+    expect: '|实时 − 离线| / 离线 ≤ 0.5%'
+    sql: |-
+      -- StarRocks 实时
+      SELECT SUM(staff_order_qty) FROM dws.dws_ord_tenant_sku_trade_rt WHERE travel_date = '${bizdate}';
+      -- Hive 离线
+      SELECT SUM(staff_order_qty) FROM dws.dws_ord_tenant_sku_channel_trade_di WHERE travel_date = '${bizdate}';
+  - id: R1394
+    dimension: 一致性
+    name: 实时 dws_ord_tenant_sku_trade_rt.staff_pay_amt 与离线 dws_sup_staff_operate_di.staff_pay_amt 对账
+    level: 弱
+    expect: '|实时 − 离线| / 离线 ≤ 0.5%'
+    sql: |-
+      -- StarRocks 实时
+      SELECT SUM(staff_pay_amt) FROM dws.dws_ord_tenant_sku_trade_rt WHERE travel_date = '${bizdate}';
+      -- Hive 离线
+      SELECT SUM(staff_pay_amt) FROM dws.dws_sup_staff_operate_di WHERE travel_date = '${bizdate}';
 - name: dws_sup_tenant_lifetime_df
   type: SQL
   desc: 商户累计至今汇总
@@ -16103,6 +16633,15 @@ tasks:
   - dq.ods_sup_sys_data_permission_df
   - dq.ods_sup_sys_permission_resource_df
   - dq.ods_sup_sys_resource_df
+  - dq.recon.dws_cus_tenant_growth_rt
+  - dq.recon.dws_fin_account_fund_rt
+  - dq.recon.dws_inv_sku_stock_rt
+  - dq.recon.dws_opr_code_pool_rt
+  - dq.recon.dws_opr_complaint_rt
+  - dq.recon.dws_opr_device_rt
+  - dq.recon.dws_opr_notify_rt
   - dq.recon.dws_opr_risk_rule_hit_rt
   - dq.recon.dws_ord_tenant_sku_trade_rt
+  - dq.recon.dws_ord_tenant_sku_verify_rt
   - dq.recon.dws_ord_verify_point_flow_rt
+  - dq.recon.dws_trf_distributor_credit_rt

@@ -163,6 +163,11 @@ svg .port { fill: var(--surface); stroke: var(--accent); stroke-width: 1.5; }
 svg .rowport { fill: var(--accent); }
 svg .gedge { fill: none; stroke: #8b95a5; stroke-opacity: .55; stroke-width: 1.4; }
 svg .gedge.dimlink { stroke: var(--dim); stroke-dasharray: 5 4; stroke-opacity: .45; }
+svg .gedge.cross { stroke: var(--dim); stroke-dasharray: 6 4; stroke-opacity: .75; stroke-width: 1.6; }
+svg .edge.cross { stroke: var(--dim); stroke-dasharray: 5 4; }
+svg .edge.on.cross { stroke: var(--dim); stroke-opacity: .9; }
+svg .laneline { stroke: var(--line); stroke-width: 1.5; stroke-dasharray: 2 4; }
+svg .lanet { font-size: 14px; font-weight: 600; fill: var(--ink); font-family: var(--body); }
 svg .gedge.off { stroke-opacity: .06; }
 svg .gedge.hot { stroke: var(--accent); stroke-opacity: .85; stroke-width: 2; }
 svg .node rect.bg { fill: color-mix(in srgb, var(--c) 7%, var(--surface)); stroke: transparent; }
@@ -579,30 +584,42 @@ function layoutCards(cards, cedges, opt = {}) {
     vis.delete(id);
     return (memo[id] = ups.length ? Math.max(...ups) : 0);
   };
-  cards.forEach(c => { c.sub = sub(c.id); });
+  cards.forEach(c => { c.sub = sub(c.id); c.lane ??= 0; c.y = null; });
   const keys = [...new Set(cards.map(c => c.major * 100 + c.sub))].sort((a, b) => a - b);
-  let x = opt.x0 ?? 20, W = 0, H = 0;
-  const heads = [];
+  const xs = {}, heads = [];
+  let x = opt.x0 ?? 20;
   keys.forEach(k => {
     const col = cards.filter(c => c.major * 100 + c.sub === k);
-    col.forEach(c => {
-      const ys = (ins[c.id] || []).map(u => by[u]).filter(u => u.y != null).map(u => u.y + u.h / 2);
-      c._b = ys.length ? ys.reduce((a, b) => a + b, 0) / ys.length : null;
-    });
-    col.sort((a, b) => (a._b ?? -1) - (b._b ?? -1) || (a.order || 0) - (b.order || 0) || a.id.localeCompare(b.id));
-    const w = Math.max(...col.map(c => c.w));
-    let y = opt.top ?? TOP;
-    // 先按重心排，再整体下移使列中心靠近上游重心
-    const total = col.reduce((a, c) => a + c.h + CGAP, -CGAP);
-    const bs = col.map(c => c._b).filter(v => v != null);
-    if (bs.length) y = Math.max(y, bs.reduce((a, b) => a + b, 0) / bs.length - total / 2);
-    col.forEach(c => { c.x = x; c.y = y; y += c.h + CGAP; });
+    xs[k] = x;
     if (!heads.length || heads[heads.length - 1].major !== col[0].major) heads.push({ major: col[0].major, x });
-    H = Math.max(H, y);
-    x += w + (opt.gap ?? CCOLGAP);
+    x += Math.max(...col.map(c => c.w)) + (opt.gap ?? CCOLGAP);
   });
-  W = x;
-  return { W, H, heads };
+  const lanes = [...new Set(cards.map(c => c.lane))].sort((a, b) => a - b);
+  let top = opt.top ?? TOP, H = top;
+  const laneTops = [];
+  lanes.forEach(L => {
+    const t0 = top + (lanes.length > 1 ? 34 : 0);
+    laneTops.push({ lane: L, y: top });
+    let LH = t0;
+    keys.forEach(k => {
+      const col = cards.filter(c => c.major * 100 + c.sub === k && c.lane === L);
+      if (!col.length) return;
+      col.forEach(c => {
+        const ys = (ins[c.id] || []).map(u => by[u]).filter(u => u.y != null && u.lane === L).map(u => u.y + u.h / 2);
+        c._b = ys.length ? ys.reduce((a, b) => a + b, 0) / ys.length : null;
+      });
+      col.sort((a, b) => (a._b ?? -1) - (b._b ?? -1) || (a.order || 0) - (b.order || 0) || a.id.localeCompare(b.id));
+      let y = t0;
+      const total = col.reduce((a, c) => a + c.h + CGAP, -CGAP);
+      const bs = col.map(c => c._b).filter(v => v != null);
+      if (bs.length) y = Math.max(t0, bs.reduce((a, b) => a + b, 0) / bs.length - total / 2);
+      col.forEach(c => { c.x = xs[k]; c.y = y; y += c.h + CGAP; });
+      LH = Math.max(LH, y);
+    });
+    H = LH;
+    top = LH + (opt.laneGap ?? 120);
+  });
+  return { W: x, H, heads, laneTops };
 }
 function cardPath(a, b, ay, by_) {
   const x1 = a.x + a.w, y1 = ay ?? a.y + 26, x2 = b.x, y2 = by_ ?? b.y + 26;
@@ -651,7 +668,10 @@ function keepT(t) { const m = st.lin.mode; return m === "all" || (m === "off" &&
 function layoutLineage() {
   const cols = { SRC: [], ODS: [], DWD: [], DIM: [], DWS: [], ADS: [], MET: [] };
   const dbs = new Map();
-  DATA.tables.forEach(t => { if (keepT(t)) cols[t.layer].push(t); });
+  const lanesOn = st.lin.mode !== "off";
+  const rtDims = new Set();
+  if (lanesOn) DATA.tables.forEach(t => { if (t.rt && keepT(t)) (t.lookup || []).forEach(d => rtDims.add(d)); });
+  DATA.tables.forEach(t => { if (keepT(t) || (st.lin.mode === "only" && rtDims.has(t.short))) cols[t.layer].push(t); });
   cols.ODS.forEach(t => { if (t.db) { if (!dbs.has(t.db)) dbs.set(t.db, []); dbs.get(t.db).push(t.short); } });
   cols.SRC = [...dbs.keys()].sort().map(db => ({ short: "db:" + db, name: db, cn: (DBCN[db] || "业务库") + " · " + dbs.get(db).length + " 张 ODS", layer: "SRC", domain: "", rt: false, down: dbs.get(db), up: [], dims: [], used_by: [] }));
   const mc = metricColumn();
@@ -676,7 +696,8 @@ function layoutLineage() {
       const subt = c === "SRC" ? `${list.length} 个库` : c === "MET" ? `${list.length} 个指标 · 点指标看单指标链路` : `${t0.rt ? "实时 · " : ""}${LAYCN[c]} · ${list.length} 张`;
       const open = st.lin.expandAll || c === "MET" || st.lin.open[k];
       const vis = open ? list : list.filter(t => inChain(t.short));
-      const card = { id: k, major: ci, order: gi + (t0.rt ? 50 : 0), L: c === "MET" ? "ADS" : c, icon: LAYICON[c], title,
+      const lane = !lanesOn ? 0 : c === "MET" ? (mc.list[0]?.mode === "实时" ? 1 : 0) : c === "SRC" ? (st.lin.mode === "only" ? 1 : 0) : (t0.rt ? 1 : 0);
+      const card = { id: k, major: ci, lane, order: gi + (t0.rt ? 50 : 0), L: c === "MET" ? "ADS" : c, icon: LAYICON[c], title,
         subt: subt + (vis.length < list.length ? (vis.length ? ` · 显示链路上 ${vis.length} 张` : " · 点标题展开") : ""),
         rows: vis.map(t => t.short), all: list.map(t => t.short), open,
         w: CW, h: vis.length ? HEADH + vis.length * ROWP + CPAD - 6 : HEADH + 4, inPort: c !== "SRC", outPort: c !== "MET" };
@@ -690,17 +711,18 @@ function layoutLineage() {
     if (t.layer === "SRC") t.down.forEach(d => all[d] && edges.push({ u: t.short, v: d, k: "flow" }));
     else if (t.layer === "MET") all[t.up[0]] && edges.push({ u: t.up[0], v: t.short, k: "met" });
     else t.up.forEach(u => all[u] && edges.push({ u, v: t.short, k: "flow" }));
-    if (st.lin.dims && !["DIM", "SRC", "MET"].includes(t.layer)) t.dims.forEach(d => all[d] && !t.up.includes(d) && edges.push({ u: d, v: t.short, k: "dimlink" }));
+    if (t.rt && lanesOn) (t.lookup || []).forEach(d => all[d] && edges.push({ u: d, v: t.short, k: "cross" }));
+    else if (st.lin.dims && !["DIM", "SRC", "MET"].includes(t.layer)) t.dims.forEach(d => all[d] && !t.up.includes(d) && edges.push({ u: d, v: t.short, k: "dimlink" }));
   });
   const gmap = new Map();
   edges.forEach(e => {
     const a = cardOf[e.u], b = cardOf[e.v]; if (!a || !b || a === b) return;
-    const k = a + ">" + b + ">" + (e.k === "dimlink" ? "d" : "f");
-    if (!gmap.has(k)) gmap.set(k, { u: a, v: b, k: e.k === "dimlink" ? "dimlink" : "", n: 0 });
+    const k = a + ">" + b + ">" + e.k;
+    if (!gmap.has(k)) gmap.set(k, { u: a, v: b, k: e.k === "flow" || e.k === "met" ? "" : e.k, n: 0 });
     gmap.get(k).n++;
   });
   const gedges = [...gmap.values()];
-  const { W, H, heads } = layoutCards(cards, gedges.filter(e => e.k !== "dimlink"));
+  const { W, H, heads, laneTops } = layoutCards(cards, gedges.filter(e => !e.k));
   const C = Object.fromEntries(cards.map(c => [c.id, c]));
   cards.forEach(c => { const m = MOVED[c.id]; if (m) { c.x = m.x; c.y = m.y; } });
   const pos = {};
@@ -711,7 +733,7 @@ function layoutLineage() {
   const adj = {}, cadj = {};
   edges.forEach((e, i) => { (adj[e.u] ||= []).push(i); (adj[e.v] ||= []).push(i); });
   gedges.forEach((e, i) => { (cadj[e.u] ||= []).push(i); (cadj[e.v] ||= []).push(i); });
-  LIN = { pos, edges, gedges, cards: C, cardOf, heads, W, H: Math.max(H, ...cards.map(c => c.y + c.h)) + 30, adj, cadj, cols, mc };
+  LIN = { pos, edges, gedges, cards: C, cardOf, heads, laneTops: lanesOn ? laneTops : [], W, H: Math.max(H, ...cards.map(c => c.y + c.h)) + 30, adj, cadj, cols, mc };
 }
 function pathOf(e) {
   const a = LIN.pos[e.u], b = LIN.pos[e.v];
@@ -745,6 +767,8 @@ function renderLineage() {
   out.push(LIN.heads.map(h => { const c = COLS[h.major], n = LIN.cols[c].length; return `<g class="L-${c === "MET" ? "ADS" : c}"><rect class="colline" x="${h.x}" y="22" width="4" height="26" fill="var(--c)"/>
     <text x="${h.x + 14}" y="40"><tspan class="colh">${COLNAME[c][0]}</tspan><tspan class="colh2" dx="10">${COLNAME[c][1]} · ${n}</tspan></text></g>`; }).join(""));
   if (!LIN.cols.MET.length) { const x = Math.max(...Object.values(LIN.cards).map(c => c.x + c.w)) + CCOLGAP; out.push(`<g class="L-ADS"><rect class="colline" x="${x}" y="22" width="4" height="26" fill="var(--c)"/><text x="${x + 14}" y="40"><tspan class="colh">指标</tspan><tspan class="colh2" dx="10">ADS 业务指标</tspan></text></g><text class="ph" x="${x}" y="${TOP + 20}">选中一张 ADS 表或一个指标，这里展开业务指标</text><text class="ph" x="${x}" y="${TOP + 40}">点指标只看它自己的链路</text>`); }
+  const LANECN = [st.lin.mode === "only" ? "离线依赖 · 实时作业 lookup 的维表（日调度产出）" : "离线链路 · Hive 日调度", "实时链路 · Flink CDC 直读 binlog → StarRocks（独立实时表，口径与离线一致）"];
+  out.push(LIN.laneTops.map(l => `<g class="lane"><line x1="10" x2="${LIN.W}" y1="${l.y - 10}" y2="${l.y - 10}" class="laneline"/><text class="lanet" x="20" y="${l.y + 14}">${LANECN[l.lane]}</text></g>`).join(""));
   out.push(`<g id="g-gedges">` + LIN.gedges.map((e, i) => `<path class="gedge ${e.k}" data-gi="${i}" d="${gPathOf(e)}" style="stroke-width:${Math.min(4, 1.2 + Math.log2(e.n) * .6).toFixed(2)}"><title>${esc(e.u + " → " + e.v + "：" + e.n + " 条依赖")}</title></path>`).join("") + `</g>`);
   out.push(`<g id="g-cards">` + Object.values(LIN.cards).map(c => cardSvg(c)).join("") + `</g>`);
   out.push(`<g id="g-edges">` + LIN.edges.map((e, i) => `<path class="edge ${e.k === "flow" ? "" : e.k}" data-i="${i}" d="${pathOf(e)}"/>`).join("") + `</g>`);
@@ -826,7 +850,8 @@ function linSets() {
     return { focus: "db:" + s.id, up: new Set(), down, path: null };
   }
   if (s.kind === "table") {
-    const up = addDbs(upClosure(s.id, st.lin.dims));
+    let up = addDbs(upClosure(s.id, st.lin.dims));
+    if (T[s.id]?.rt && st.lin.mode !== "off") [...up, s.id].forEach(x => (T[x]?.lookup || []).forEach(d => up.add(d)));   // 实时只依赖离线维表本身，不再向上展开离线链路
     const down = closure(s.id, "down", st.lin.dims ? "used_by" : null);
     LIN.cols.MET.forEach(m => { if (m.up[0] === s.id) down.add(m.short); });
     return { focus: s.id, up, down, path: null };
@@ -890,7 +915,7 @@ function paintLineage() {
   document.querySelectorAll("#lin-canvas .gedge").forEach(p => { const e = LIN.gedges[+p.dataset.gi]; p.classList.toggle("off", !!S || !(anyCards.has(e.u) && anyCards.has(e.v)) && !!dom); });
   renderLinInfo(S);
 }
-const legendHtml = `<div class="legend"><span><i style="--s:var(--dwd)"></i>上游 / 指标链路</span><span><i style="--s:var(--accent)"></i>下游</span><span><i class="dash" style="--s:var(--dim)"></i>维度关联</span></div>`;
+const legendHtml = `<div class="legend"><span><i style="--s:var(--dwd)"></i>上游 / 指标链路</span><span><i style="--s:var(--accent)"></i>下游</span><span><i class="dash" style="--s:var(--dim)"></i>维度关联（实时作业 lookup 离线维表）</span></div>`;
 function layerPills(arr) { return LAYERS.map(l => [l, arr.filter(x => T[x]?.layer === l).length]).filter(x => x[1]).map(([l, n]) => `<span class="pill L-${l}">${l} ${n}</span>`).join(""); }
 function metricList(list, cur) {
   return `<div class="mlist">${list.map(r => `<button data-linm="${r.code}" class="${cur === r.code ? "on" : ""}"><span>${esc(r.cn)}</span><span class="mono">${esc(r.period)}</span></button>`).join("")}</div>`;
@@ -912,6 +937,7 @@ function renderLinInfo(S) {
       <div class="sec"><span>业务口径</span></div><p style="margin:0">${esc(r.kou)}</p>
       <dl style="margin-top:8px"><dt>单位</dt><dd>${esc(r.unit)}</dd><dt>时间口径</dt><dd>${esc(r.time_basis)}</dd><dt>更新频率</dt><dd>${esc(r.freq)}</dd></dl>
       <div class="sec"><span>计算公式</span></div><pre class="code">${esc(r.formula)}</pre>
+      ${peersHtml(r)}
       <div class="sec"><span>取数示例</span><button class="btn" data-copy="${esc(r.sql)}">复制 SQL</button></div><pre class="code">${esc(r.sql)}</pre>
       <div class="sec"><span>指标血缘</span></div>
       <div class="chain">
@@ -1119,10 +1145,11 @@ function loadWF() {
   });
 }
 const dia = (cx, cy, r) => `M${cx},${cy - r} L${cx + r},${cy} L${cx},${cy + r} L${cx - r},${cy} Z`;
-const WMAJ = { start: 0, ODS: 1, DIM: 2, DWD: 3, DWS: 4, ADS: 5, recon: 6, mon: 6, end: 7 };
+const WMAJ = { start: 0, ext: 1, ODS: 1, DIM: 2, DWD: 3, DWS: 4, ADS: 5, recon: 6, mon: 6, end: 7 };
 const GATEH = 34;
 function wCardOf(n) {
   if (n.kind === "start" || n.kind === "end") return n.kind;
+  if (n.kind === "ext") return "ext";
   if (n.kind === "recon") return "recon";
   if (n.kind === "dq" && !n.table) return "mon";
   return n.layer + "|" + n.domain;
@@ -1148,7 +1175,7 @@ function wfLayout() {
   ns.forEach(n => {
     const k = wCardOf(n);
     if (!cmap.has(k)) cmap.set(k, []);
-    if (n.kind === "task" || n.kind === "recon" || (n.kind === "dq" && !n.table)) cmap.get(k).push(n);
+    if (n.kind === "task" || n.kind === "recon" || n.kind === "ext" || (n.kind === "dq" && !n.table)) cmap.get(k).push(n);
   });
   const cards = [];
   [...cmap.entries()].forEach(([k, list], gi) => {
@@ -1159,6 +1186,8 @@ function wfLayout() {
       const sn = WF.N[k + "." + wst.flow];
       major = WMAJ[k]; L = "SRC"; icon = k === "start" ? "▶" : "■"; title = sn.cn; subt = WF.F[wst.flow].name;
       body = sn.desc || "";
+    } else if (k === "ext") {
+      major = WMAJ.ext; L = "DIM"; icon = "外"; title = "离线维表（日调度产出）"; subt = `实时作业 lookup 关联 · ${list.length} 张`;
     } else if (k === "recon" || k === "mon") {
       major = 6; L = "ADS"; icon = k === "recon" ? "对" : "监"; title = k === "recon" ? "实时 / 离线对账" : "Flink 作业监控"; subt = `${list.length} 个${k === "recon" ? "对账" : "作业"}`;
     } else {
@@ -1169,7 +1198,7 @@ function wfLayout() {
       const dqs = list.map(n => WF.N["dq." + n.id]).filter(Boolean);
       gate = { strong: dqs.reduce((a, d) => a + d.strong, 0), weak: dqs.reduce((a, d) => a + d.weak, 0), blk: dqs.filter(d => d.block).length, mon: dqs.some(d => d.monitor) };
     }
-    const open = wst.expandAll || wst.open[k] || k === "recon" || k === "mon";
+    const open = wst.expandAll || wst.open[k] || k === "recon" || k === "mon" || k === "ext";
     const rows = (open ? list : list.filter(n => rowIn(n.id))).map(n => n.id);
     const bodyLines = body ? wrapText(body, 30).slice(0, 4) : [];
     const h = HEADH + bodyLines.length * 18 + (bodyLines.length ? 8 : 0) + rows.length * ROWP + (rows.length ? 4 : 0) + (gate ? GATEH : 6);
@@ -1217,6 +1246,10 @@ function wRow(p) {
     return `<g class="wn L-${n.layer}" data-w="${esc(n.id)}" transform="translate(${p.x},${p.y})"><rect class="bg" width="${NW}" height="${NH}" rx="6"/>
       <text class="n1" x="10" y="15">${esc(cut(t ? t.short : n.id, dq ? 31 : 40))}</text><text class="n2" x="10" y="29">${esc(cut(n.cn, dq ? 18 : 26))}${n.cut?.length ? " · 含 T-1 依赖" : ""}</text>${badge}
       <circle class="rowport" cx="${NW}" cy="${NH / 2}" r="2.6"/></g>`;
+  }
+  if (n.kind === "ext") {
+    return `<g class="wn ext L-DIM" data-w="${esc(n.id)}" transform="translate(${p.x},${p.y})"><rect class="bg" width="${NW}" height="${NH}" rx="6" style="stroke:var(--dim);stroke-dasharray:4 3"/>
+      <text class="n1" x="10" y="15">${esc(cut(n.table, 40))}</text><text class="n2" x="10" y="29">${esc(n.cn)} · 离线日调度产出</text><circle class="rowport" cx="${NW}" cy="${NH / 2}" r="2.6"/></g>`;
   }
   const cls = n.kind === "recon" ? "rec" : "mon";
   return `<g class="wn ${cls}" data-w="${esc(n.id)}" transform="translate(${p.x},${p.y})"><rect class="bg" width="${NW}" height="${NH}" rx="6"/>
@@ -1339,6 +1372,8 @@ function renderWfInfo(s) {
       <dt>执行</dt><dd class="mono" style="word-break:break-all">${esc(n.cmd)}</dd>
       ${wst.flow === "realtime" ? `<dt>作业</dt><dd class="mono">${esc(n.job || "—")}</dd>` : `<dt>重试/超时</dt><dd>${n.retries} 次 / ${n.timeout_min} 分钟</dd><dt>优先级</dt><dd>${esc(n.priority)}</dd>`}</dl>
       ${dq ? `<div class="sec"><span>本表质检</span><span>${dq.rules.length} 条</span></div><div class="links">${wl(dq.id)}</div>` : ""}`;
+  } else if (n.kind === "ext") {
+    body = `<p class="small" style="margin:6px 0">${esc(n.desc || "")}</p><p class="small">这是实时链路对离线的唯一依赖：维表由日调度产出，实时作业只读不写。</p>`;
   } else if (n.kind === "dq" || n.kind === "recon") {
     body = `<p class="small" style="margin:6px 0">${n.monitor ? "实时监控：异常时告警，不阻断作业" : n.block ? "<b style='color:var(--crit)'>阻断型</b>：任一强规则失败，本节点失败，下游任务不启动" : "<b style='color:var(--warn)'>告警型</b>：规则失败只推送告警，下游照常运行"}</p>
       ${n.desc ? `<p class="small">${esc(n.desc)}</p>` : ""}
@@ -1346,13 +1381,13 @@ function renderWfInfo(s) {
   } else {
     body = `<p class="small" style="margin:6px 0">${esc(n.desc || "")}</p>`;
   }
-  box.innerHTML = `<div class="top"><span>${n.kind === "task" ? `<span class="pill L-${n.layer}">${n.layer}</span>` : `<span class="fk">${{ dq: n.monitor ? "监控" : "质检", recon: "对账", start: "开始", end: "结束" }[n.kind]}</span>`}</span>
+  box.innerHTML = `<div class="top"><span>${n.kind === "task" ? `<span class="pill L-${n.layer}">${n.layer}</span>` : `<span class="fk">${{ dq: n.monitor ? "监控" : "质检", recon: "对账", start: "开始", end: "结束", ext: "外部依赖" }[n.kind]}</span>`}</span>
       <span class="actions">${t ? `<button class="btn" data-lin="${n.table}">看血缘</button><button class="btn" data-t="${n.table}">表详情</button>` : ""}<button class="btn" id="wf-clear">清除</button></span></div>
     <h3>${esc(n.kind === "task" && t ? t.name : n.id)}</h3><p class="small" style="margin:0">${esc(n.cn || "")}</p>
     ${body}
     <div class="sec"><span>等待（上游）</span><span>${n.deps.length}</span></div><div class="links">${n.deps.map(wl).join("") || "<span class='none'>无，流程起点</span>"}</div>
     ${n.cut?.length ? `<div class="sec"><span>依赖上一周期（T-1）</span></div><div class="links">${n.cut.map(wl).join("")}</div>` : ""}
-    ${n.cross?.length ? `<div class="sec"><span>跨流程依赖（等最近一次完成）</span></div><div class="links">${n.cross.map(x => `<span class="link" style="cursor:default">${esc(x)}</span>`).join("")}</div>` : ""}
+    ${n.cross?.length ? `<div class="sec"><span>${n.kind === "recon" ? "跨实时/离线依赖（读实时表）" : "跨流程依赖（等最近一次完成）"}</span></div><div class="links">${n.cross.map(x => T[x] ? `<button class="link" data-lin="${x}"><span class="pill L-${T[x].layer}">${T[x].layer}</span>${esc(T[x].name)}</button>` : `<span class="link" style="cursor:default">${esc(x)}</span>`).join("")}</div>` : ""}
     <div class="sec"><span>触发（下游）</span><span>${downs.length}</span></div><div class="links">${downs.map(wl).join("") || "<span class='none'>无</span>"}</div>${wfLegend}`;
   $("#wf-clear").onclick = () => { wst.sel = null; renderWorkflow(); };
   bindWf(box);
@@ -1614,6 +1649,14 @@ function traceAds(r) {
   const dbs = [...new Set(ods.map(o => T[o].db).filter(Boolean))];
   return { dws: dwsAll, dwd, ods, dbs };
 }
+function peersHtml(r) {
+  if (!r.peers?.length) return r.mode === "实时" ? `<div class="sec"><span>离线同口径指标</span></div><p class="small" style="margin:0">实时专属指标（分钟窗口或当前值），离线没有对应周期</p>` : "";
+  const ps = r.peers.map(c => ADSI[c]).filter(Boolean);
+  const head = r.mode === "实时" ? `离线同口径指标 · ${r.kou_same ? "<b style='color:var(--ok)'>口径一致</b>" : "<b style='color:var(--crit)'>口径不一致</b>"}` : "实时同口径指标";
+  return `<div class="sec"><span>${head}</span><span>${ps.length}</span></div>
+    <p class="small" style="margin:0 0 6px">同一原子口径 ${esc(BASE[r.base]?.code || "")}（${esc(r.base_cn)}），只差统计周期${r.mode === "实时" ? "；日调度做 T+1 对账，以离线为准" : ""}</p>
+    <div class="links">${ps.slice(0, 12).map(x => `<button class="link cnl" data-a="${x.code}">${esc(x.cn)}<span class="mono small">${esc(x.ads)}</span></button>`).join("")}${ps.length > 12 ? `<span class="small">等 ${ps.length} 个</span>` : ""}</div>`;
+}
 function drawAds() {
   const lay = $("#a-lay"), dr = $("#a-dr"), r = ADSI[st.a.sel];
   if (!r) { lay.classList.remove("open"); dr.innerHTML = ""; return; }
@@ -1630,6 +1673,7 @@ function drawAds() {
       <dt>时间口径</dt><dd>${esc(r.time_basis)}</dd><dt>数据类型</dt><dd class="mono">${esc(r.dtype)}</dd><dt>精度/展示</dt><dd>${esc(r.precision)}</dd>
       <dt>更新频率</dt><dd>${esc(r.freq)}</dd><dt>分析粒度</dt><dd class="mono">${esc(r.grain)}</dd><dt>使用端</dt><dd>${esc(r.end)}</dd></dl>
     <div class="sec"><span>取数示例</span><button class="btn" data-copy="${esc(r.sql)}">复制 SQL</button></div><pre class="code">${esc(r.sql)}</pre>
+    ${peersHtml(r)}
     <div class="sec"><span>追溯链路</span><button class="btn primary" data-linm="${r.code}">看指标血缘</button></div>
     <div class="chain">
       <div class="step L-ADS"><b>指标</b><div class="links"><button class="link cnl" data-adsb="${r.base}">${esc(r.cn)}</button></div></div>

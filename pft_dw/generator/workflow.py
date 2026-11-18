@@ -361,13 +361,16 @@ for r in ads_m:
              r["en"], TB[r["ads"]]["name"], r["base"], TB[dws]["name"]), "|ads_v − dws_v| ≤ 0.01", "报表与汇总层同口径同数", [[dws, r["base"]]])
 
 # ------------------------------------------------------------ 实时 vs 离线 对账（日调度里执行）
-RECON = [
-    ("dws_ord_tenant_sku_trade_rt", "pay_amt", "dws_sup_tenant_trade_di", "pay_amt"),
-    ("dws_ord_tenant_sku_trade_rt", "pay_order_qty", "dws_sup_tenant_trade_di", "pay_order_qty"),
-    ("dws_ord_tenant_sku_trade_rt", "refund_amt", "dws_sup_tenant_trade_di", "refund_amt"),
-    ("dws_ord_verify_point_flow_rt", "verify_person_qty", "dws_ord_verify_point_flow_hrs", "verify_person_qty"),
-    ("dws_opr_risk_rule_hit_rt", "risk_hit_qty", "dws_opr_risk_rule_hit_di", "risk_hit_qty"),
-]
+# 自动生成：实时 DWS 的每个口径，只要离线 DWS 里有同一口径，就做 T+1 对账（以离线为准）
+RECON = []
+for rt_t in [t for t in tables if t["rt"] and t["layer"] == "DWS"]:
+    cands = [t for t in tables if not t["rt"] and t["layer"] == "DWS" and set(t["metrics"]) & set(rt_t["metrics"])]
+    # 优先选覆盖本实时表口径最多的离线汇总表（全量对账，不选子集表如套票专表）
+    cands.sort(key=lambda t: (-len(set(t["metrics"]) & set(rt_t["metrics"])), "combo" in t["short"], t["short"]))
+    for m in rt_t["metrics"]:
+        off = next((t for t in cands if m in t["metrics"]), None)
+        if off:
+            RECON.append((rt_t["short"], m, off["short"], m))
 RECON_NODES = {}
 for rt_t, rt_c, off_t, off_c in RECON:
     if rt_t not in SCH or off_t not in SCH:
@@ -379,7 +382,7 @@ for rt_t, rt_c, off_t, off_c in RECON:
     rule(nid, "一致性", "实时 %s.%s 与离线 %s.%s 对账" % (rt_t, rt_c, off_t, off_c), "弱",
          ("-- StarRocks 实时\nSELECT SUM(%s) FROM %s WHERE travel_date = '${bizdate}';\n-- Hive 离线\nSELECT SUM(%s) FROM %s WHERE travel_date = '${bizdate}';") % (
              rt_c, TB[rt_t]["name"], off_c, TB[off_t]["name"]),
-         "|实时 − 离线| / 离线 ≤ 0.5%", "实时口径以离线为准；超阈值说明 CDC 丢数、乱序或窗口迟到数据未处理", [[rt_t, rt_c], [off_t, off_c]])
+         "|实时 − 离线| / 离线 ≤ 0.5%", "实时与离线是同一原子口径（%s），差异只能来自数据本身：CDC 丢数、乱序或窗口迟到数据未处理；以离线为准" % BASE[rt_c]["code"], [[rt_t, rt_c], [off_t, off_c]])
 
 # ------------------------------------------------------------ 实时作业：按连通分量划分 Flink 作业，挂监控
 rt_ids = [k for k, v in TASKS.items() if v["flow"] == "realtime"]
@@ -475,18 +478,24 @@ for fl in FLOWS:
     if fl == "daily":
         for nid, rc in RECON_NODES.items():
             add_node(id=nid, kind="recon", flow=fl, cn="实时/离线对账：" + TB[rc["rt"]]["cn"], table=rc["rt"], layer="DWS", domain=TB[rc["rt"]]["domain"],
-                     deps=sorted("dq." + o for o in rc["off"]), block=False, strong=0, weak=len(RULES[nid]))
+                     deps=sorted("dq." + o for o in rc["off"]), cross=[rc["rt"]], block=False, strong=0, weak=len(RULES[nid]),
+                     desc="跨实时/离线：读实时表 %s 的 ${bizdate} 分区，与离线同口径汇总对账" % TB[rc["rt"]]["name"])
     # 结束节点：本流程所有末端
     has_down = {d for n in NODES.values() if n["flow"] == fl for d in n["deps"]}
     ends = [n["id"] for n in NODES.values() if n["flow"] == fl and n["id"] not in has_down and n["kind"] != "start"]
     add_node(id="end." + fl, kind="end", flow=fl, cn="数据就绪 · 发布",
              desc="写就绪标记（_SUCCESS / 元数据就绪表），触发报表缓存刷新与下游订阅；任一强校验失败则不发布并电话告警", deps=sorted(ends))
 
-# 实时
+# 实时：Flink 作业 lookup 关联的离线维表（日调度产出，每天刷新进维表缓存）是实时对离线的唯一依赖
+EXT = sorted({d for v in TASKS.values() if v["flow"] == "realtime" for d in v["cross"] if TB[d]["layer"] == "DIM"})
+for d in EXT:
+    add_node(id="ext." + d, kind="ext", flow="realtime", table=d, layer="DIM", domain=TB[d]["domain"], cn=TB[d]["cn"], name=TB[d]["name"], deps=[],
+             desc="离线日调度产出（dq.%s 通过后），Flink 作业按主键 lookup 关联，缓存 1 小时刷新" % d)
 for v in TASKS.values():
     if v["flow"] != "realtime":
         continue
     deps = [dep_target(d) if d in TASKS and TASKS[d]["flow"] == "realtime" else d for d in v["deps"]] or []
+    deps += ["ext." + d for d in v["cross"] if d in EXT]
     add_node(id=v["id"], kind="task", flow="realtime", table=v["id"], layer=v["layer"], domain=v["domain"], cn=v["cn"], name=v["name"],
              stage=STAGE[v["layer"]], deps=deps, cut=[], cross=[], engine=SCH[v["id"]]["engine"], job=v.get("job") or "、".join(v.get("jobs", [])),
              priority="高", retries=0, timeout_min=0,
@@ -585,7 +594,7 @@ for i, (fl, meta) in enumerate(FLOWS.items(), 1):
     doc["tasks"] = []
     for n in ns:
         d = OrderedDict(name=n["id"], type={"task": "SQL" if n.get("layer") != "ODS" else "SYNC", "dq": "DATA_QUALITY", "recon": "DATA_QUALITY",
-                                             "start": "CHECK", "end": "NOTIFY"}[n["kind"]])
+                                             "start": "CHECK", "end": "NOTIFY", "ext": "EXTERNAL"}[n["kind"]])
         if fl == "realtime" and n["kind"] == "task":
             d["type"] = "FLINK_CDC_SOURCE" if n["layer"] == "ODS" else "FLINK_SINK"
         if fl == "realtime" and n["kind"] == "dq":

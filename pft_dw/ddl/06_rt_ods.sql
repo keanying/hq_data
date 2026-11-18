@@ -1,4 +1,4 @@
--- PFT 2.0 数仓 DDL：RT_ODS（9 张表）
+-- PFT 2.0 数仓 DDL：RT_ODS（17 张表）
 -- 由 generator/make_all.py 生成，请勿手改
 
 -- ========== ods.ods_ord_order_group_rt  聚合单 binlog 流 ==========
@@ -323,7 +323,6 @@ CREATE TABLE ods.ods_opr_risk_event_rt (
     `dimension_values`  STRING           COMMENT '触发维度值集合',
     `rule_id`           BIGINT           COMMENT '关联规则ID',
     `action`            STRING           COMMENT '执行动作：BLOCK-拦截，WARN-预警，FREEZE-冻结',
-    `detail`            STRING           COMMENT '详细描述',
     `audit_log_id`      BIGINT           COMMENT '关联审计日志ID',
     `tenant_id`         BIGINT           COMMENT '租户ID',
     `create_time`       TIMESTAMP(3)     COMMENT '创建时间',
@@ -344,6 +343,291 @@ WITH (
     'database-name' = 'pft-risk',
     'table-name' = 't_risk_event',
     'server-id' = '5433-5436',
+    'server-time-zone' = 'Asia/Shanghai',
+    'scan.startup.mode' = 'initial',
+    'scan.incremental.snapshot.enabled' = 'true'
+);
+
+-- ========== ods.ods_fin_account_rt  账户 binlog 流 ==========
+-- Flink CDC 源表：直读 MySQL binlog（先全量快照、再增量），不经 Kafka
+CREATE TABLE ods.ods_fin_account_rt (
+    `id`                 BIGINT           COMMENT '主键ID',
+    `account_no`         STRING           COMMENT '账户编号，由流水号生成器生成',
+    `subject_id`         BIGINT           COMMENT '主体ID（商户/分销商/平台）',
+    `account_kind`       STRING           COMMENT '账户类型：MERCHANT-商户，DISTRIBUTOR-分销商，PLATFORM-平台',
+    `available_balance`  BIGINT           COMMENT '可用余额（分）',
+    `frozen_balance`     BIGINT           COMMENT '冻结余额（分）',
+    `tenant_id`          BIGINT           COMMENT '租户ID（分库维度）',
+    `create_time`        TIMESTAMP(3)     COMMENT '创建时间',
+    `update_time`        TIMESTAMP(3)     COMMENT '更新时间',
+    `create_by`          STRING           COMMENT '创建人',
+    `update_by`          STRING           COMMENT '更新人',
+    `deleted`            TINYINT          COMMENT '软删除: 0未删/1已删',
+    `binlog_time`        TIMESTAMP_LTZ(3) METADATA FROM 'op_ts' VIRTUAL COMMENT 'binlog 变更时间（Flink CDC 元数据 op_ts；全量快照阶段为 0）',
+    `proc_time`          AS PROCTIME(),
+    PRIMARY KEY (`id`) NOT ENFORCED
+) COMMENT '账户 binlog 流（同源表，1行=1条源记录（CDC 变更流））'
+WITH (
+    'connector' = 'mysql-cdc',
+    'hostname' = '${mysql.pft-finance.host}',
+    'port' = '${mysql.pft-finance.port}',
+    'username' = '${cdc.username}',
+    'password' = '${cdc.password}',
+    'database-name' = 'pft-finance',
+    'table-name' = 't_account',
+    'server-id' = '5437-5440',
+    'server-time-zone' = 'Asia/Shanghai',
+    'scan.startup.mode' = 'initial',
+    'scan.incremental.snapshot.enabled' = 'true'
+);
+
+-- ========== ods.ods_fin_frozen_record_rt  冻结记录 binlog 流 ==========
+-- Flink CDC 源表：直读 MySQL binlog（先全量快照、再增量），不经 Kafka
+CREATE TABLE ods.ods_fin_frozen_record_rt (
+    `id`                  BIGINT           COMMENT '主键ID',
+    `frozen_no`           STRING           COMMENT '冻结记录编号，由流水号生成器生成',
+    `account_no`          STRING           COMMENT '归属账户编号',
+    `ticket_no`           STRING           COMMENT '关联票号（票级冻结）',
+    `amount`              BIGINT           COMMENT '冻结金额（分）= 利润/采购款/全款',
+    `freeze_type`         STRING           COMMENT '冻结类型:PROFIT-利润，SETTLEMENT-采购款，FULL-全款，供应商直销',
+    `frozen_status`       STRING           COMMENT '状态：FROZEN-冻结中，RELEASED-已释放',
+    `frozen_event`        STRING           COMMENT '冻结事件：VERIFY-核销，REFUND-退款',
+    `external_frozen`     TINYINT          COMMENT '是否外部渠道冻结:1=第三方冻结(解冻调第三方API-API 接口),0=平台内部冻结',
+    `external_channel`    STRING           COMMENT '外部渠道(external_frozen=1时):YEEPAY-易宝，UNIONPAY-银联等',
+    `external_frozen_no`  STRING           COMMENT '外部冻结单号(第三方返回的冻结流水号,解冻时用)',
+    `tenant_id`           BIGINT           COMMENT '租户ID（分库维度）',
+    `create_time`         TIMESTAMP(3)     COMMENT '创建时间',
+    `update_time`         TIMESTAMP(3)     COMMENT '更新时间',
+    `create_by`           STRING           COMMENT '创建人',
+    `update_by`           STRING           COMMENT '更新人',
+    `deleted`             TINYINT          COMMENT '软删除: 0未删/1已删',
+    `binlog_time`         TIMESTAMP_LTZ(3) METADATA FROM 'op_ts' VIRTUAL COMMENT 'binlog 变更时间（Flink CDC 元数据 op_ts；全量快照阶段为 0）',
+    `proc_time`           AS PROCTIME(),
+    PRIMARY KEY (`id`) NOT ENFORCED
+) COMMENT '冻结记录 binlog 流（同源表，1行=1条源记录（CDC 变更流））'
+WITH (
+    'connector' = 'mysql-cdc',
+    'hostname' = '${mysql.pft-finance.host}',
+    'port' = '${mysql.pft-finance.port}',
+    'username' = '${cdc.username}',
+    'password' = '${cdc.password}',
+    'database-name' = 'pft-finance',
+    'table-name' = 't_frozen_record',
+    'server-id' = '5441-5444',
+    'server-time-zone' = 'Asia/Shanghai',
+    'scan.startup.mode' = 'initial',
+    'scan.incremental.snapshot.enabled' = 'true'
+);
+
+-- ========== ods.ods_trf_distribution_relation_rt  分销关系 binlog 流 ==========
+-- Flink CDC 源表：直读 MySQL binlog（先全量快照、再增量），不经 Kafka
+CREATE TABLE ods.ods_trf_distribution_relation_rt (
+    `id`                     BIGINT           COMMENT '主键ID',
+    `relation_no`            STRING           COMMENT '分销关系编号，格式DR+yyyyMMdd+6位随机',
+    `supplier_tenant_id`     BIGINT           COMMENT '供应商租户ID',
+    `distributor_tenant_id`  BIGINT           COMMENT '分销商租户ID',
+    `parent_relation_id`     BIGINT           COMMENT '上级分销关系ID（4级采购链）',
+    `distribution_mode`      STRING           COMMENT '分销模式：PROFIT_SHARE-分润，PURCHASE-逐级采购',
+    `payment_mode`           STRING           COMMENT '支付模式：CREDIT-授信，BALANCE-余额',
+    `credit_limit`           BIGINT           COMMENT '授信额度（分，payment_mode=CREDIT-授信时）',
+    `credit_used`            BIGINT           COMMENT '已用授信（分）',
+    `relation_status`        STRING           COMMENT '状态：ACTIVE-有效，SUSPENDED-已暂停，TERMINATED-已终止',
+    `create_time`            TIMESTAMP(3)     COMMENT '创建时间',
+    `update_time`            TIMESTAMP(3)     COMMENT '更新时间',
+    `create_by`              STRING           COMMENT '创建人',
+    `update_by`              STRING           COMMENT '更新人',
+    `deleted`                TINYINT          COMMENT '软删除: 0未删/1已删',
+    `binlog_time`            TIMESTAMP_LTZ(3) METADATA FROM 'op_ts' VIRTUAL COMMENT 'binlog 变更时间（Flink CDC 元数据 op_ts；全量快照阶段为 0）',
+    `proc_time`              AS PROCTIME(),
+    PRIMARY KEY (`id`) NOT ENFORCED
+) COMMENT '分销关系 binlog 流（同源表，1行=1条源记录（CDC 变更流））'
+WITH (
+    'connector' = 'mysql-cdc',
+    'hostname' = '${mysql.pft-distribution.host}',
+    'port' = '${mysql.pft-distribution.port}',
+    'username' = '${cdc.username}',
+    'password' = '${cdc.password}',
+    'database-name' = 'pft-distribution',
+    'table-name' = 't_distribution_relation',
+    'server-id' = '5445-5448',
+    'server-time-zone' = 'Asia/Shanghai',
+    'scan.startup.mode' = 'initial',
+    'scan.incremental.snapshot.enabled' = 'true'
+);
+
+-- ========== ods.ods_cus_customer_rt  游客账号 binlog 流 ==========
+-- Flink CDC 源表：直读 MySQL binlog（先全量快照、再增量），不经 Kafka
+CREATE TABLE ods.ods_cus_customer_rt (
+    `id`                  BIGINT           COMMENT '主键ID',
+    `customer_no`         STRING           COMMENT '客户编号，格式CUS+yyyyMMdd+6位随机',
+    `customer_kind`       STRING           COMMENT '账号类型：REAL-真人注册账号，TENANT_DEFAULT-业务租户代下单占位买家；PLATFORM-平台 租户下不设占位买家，故无 PLATFORM_DEFAULT 值',
+    `gender`              STRING           COMMENT '性别：MALE-男，FEMALE-女，UNKNOWN-未知',
+    `auth_status`         STRING           COMMENT '认证状态：UNAUTHENTICATED-未认证，PHONE_VERIFIED-手机已验证，PERSON_CERTIFIED-已实名认证',
+    `customer_status`     STRING           COMMENT '状态：ACTIVE-有效，BANNED-已封禁，CANCELLED-已取消',
+    `register_source`     STRING           COMMENT '注册来源渠道编码（channel_code）',
+    `register_tenant_id`  BIGINT           COMMENT '所属租户ID（self-tenant 隔离：该 customer 仅归属此租户，不跨租户复用；unionid/alipay 唯一键均带此列，phone 非唯一；证件号收敛改走 t_customer_credential 唯一键）',
+    `create_time`         TIMESTAMP(3)     COMMENT '创建时间',
+    `update_time`         TIMESTAMP(3)     COMMENT '更新时间',
+    `create_by`           STRING           COMMENT '创建人',
+    `update_by`           STRING           COMMENT '更新人',
+    `deleted`             TINYINT          COMMENT '软删除: 0未删/1已删',
+    `binlog_time`         TIMESTAMP_LTZ(3) METADATA FROM 'op_ts' VIRTUAL COMMENT 'binlog 变更时间（Flink CDC 元数据 op_ts；全量快照阶段为 0）',
+    `proc_time`           AS PROCTIME(),
+    PRIMARY KEY (`id`) NOT ENFORCED
+) COMMENT '游客账号 binlog 流（同源表，1行=1条源记录（CDC 变更流））'
+WITH (
+    'connector' = 'mysql-cdc',
+    'hostname' = '${mysql.pft-identity.host}',
+    'port' = '${mysql.pft-identity.port}',
+    'username' = '${cdc.username}',
+    'password' = '${cdc.password}',
+    'database-name' = 'pft-identity',
+    'table-name' = 't_customer',
+    'server-id' = '5449-5452',
+    'server-time-zone' = 'Asia/Shanghai',
+    'scan.startup.mode' = 'initial',
+    'scan.incremental.snapshot.enabled' = 'true'
+);
+
+-- ========== ods.ods_opr_device_rt  设备 binlog 流 ==========
+-- Flink CDC 源表：直读 MySQL binlog（先全量快照、再增量），不经 Kafka
+CREATE TABLE ods.ods_opr_device_rt (
+    `id`               BIGINT           COMMENT '主键ID',
+    `device_no`        STRING           COMMENT '设备编号，格式DEV+yyyyMMdd+6位随机',
+    `tenant_id`        BIGINT           COMMENT '归属商户ID',
+    `device_type`      STRING           COMMENT '设备类型：GATE-闸机，POS-POS 机，HANDHELD-手持机，SELF_SERVICE-自助机，KIOSK-自助终端，FACE_RECOGNITION-人脸识别机',
+    `device_name`      STRING           COMMENT '设备名称（如"东门闸机#3"）',
+    `poi_id`           BIGINT           COMMENT '绑定POI ID',
+    `device_group_id`  BIGINT           COMMENT '设备分组ID',
+    `capabilities`     STRING           COMMENT '设备能力：[SELL-售票，PICKUP-取票，Verify，IDENTIFY-身份识别]',
+    `device_status`    STRING           COMMENT '状态：ACTIVE-有效，OFFLINE-线下或离线，MAINTENANCE-维护中，INACTIVE-停用',
+    `last_heartbeat`   TIMESTAMP(3)     COMMENT '最后心跳时间',
+    `create_time`      TIMESTAMP(3)     COMMENT '创建时间',
+    `update_time`      TIMESTAMP(3)     COMMENT '更新时间',
+    `create_by`        STRING           COMMENT '创建人',
+    `update_by`        STRING           COMMENT '更新人',
+    `deleted`          TINYINT          COMMENT '软删除: 0未删/1已删',
+    `binlog_time`      TIMESTAMP_LTZ(3) METADATA FROM 'op_ts' VIRTUAL COMMENT 'binlog 变更时间（Flink CDC 元数据 op_ts；全量快照阶段为 0）',
+    `proc_time`        AS PROCTIME(),
+    PRIMARY KEY (`id`) NOT ENFORCED
+) COMMENT '设备 binlog 流（同源表，1行=1条源记录（CDC 变更流））'
+WITH (
+    'connector' = 'mysql-cdc',
+    'hostname' = '${mysql.pft-device.host}',
+    'port' = '${mysql.pft-device.port}',
+    'username' = '${cdc.username}',
+    'password' = '${cdc.password}',
+    'database-name' = 'pft-device',
+    'table-name' = 't_device',
+    'server-id' = '5453-5456',
+    'server-time-zone' = 'Asia/Shanghai',
+    'scan.startup.mode' = 'initial',
+    'scan.incremental.snapshot.enabled' = 'true'
+);
+
+-- ========== ods.ods_opr_notify_record_rt  通知记录 binlog 流 ==========
+-- Flink CDC 源表：直读 MySQL binlog（先全量快照、再增量），不经 Kafka
+CREATE TABLE ods.ods_opr_notify_record_rt (
+    `id`                   BIGINT           COMMENT '主键ID',
+    `notify_no`            STRING           COMMENT '通知记录号，格式NR+yyyyMMdd+6位随机',
+    `template_id`          BIGINT           COMMENT '模板ID',
+    `recipient_id`         BIGINT           COMMENT '接收人ID',
+    `recipient_type`       STRING           COMMENT '接收人类型：CUSTOMER-C端游客，TENANT_STAFF-B端员工，SYSTEM-系统',
+    `notify_channel`       STRING           COMMENT '实际发送渠道',
+    `related_business_no`  STRING           COMMENT '关联业务号',
+    `send_status`          STRING           COMMENT '状态：PENDING-待处理，SUCCESS-成功，FAILED-失败',
+    `send_time`            TIMESTAMP(3)     COMMENT '发送时间',
+    `fail_reason`          STRING           COMMENT '失败原因',
+    `tenant_id`            BIGINT           COMMENT '租户ID',
+    `create_time`          TIMESTAMP(3)     COMMENT '创建时间',
+    `update_time`          TIMESTAMP(3)     COMMENT '更新时间',
+    `create_by`            STRING           COMMENT '创建人',
+    `update_by`            STRING           COMMENT '更新人',
+    `deleted`              TINYINT          COMMENT '软删除: 0未删/1已删',
+    `binlog_time`          TIMESTAMP_LTZ(3) METADATA FROM 'op_ts' VIRTUAL COMMENT 'binlog 变更时间（Flink CDC 元数据 op_ts；全量快照阶段为 0）',
+    `proc_time`            AS PROCTIME(),
+    PRIMARY KEY (`id`) NOT ENFORCED
+) COMMENT '通知记录 binlog 流（同源表，1行=1条源记录（CDC 变更流））'
+WITH (
+    'connector' = 'mysql-cdc',
+    'hostname' = '${mysql.pft-notification.host}',
+    'port' = '${mysql.pft-notification.port}',
+    'username' = '${cdc.username}',
+    'password' = '${cdc.password}',
+    'database-name' = 'pft-notification',
+    'table-name' = 't_notify_record',
+    'server-id' = '5457-5460',
+    'server-time-zone' = 'Asia/Shanghai',
+    'scan.startup.mode' = 'initial',
+    'scan.incremental.snapshot.enabled' = 'true'
+);
+
+-- ========== ods.ods_opr_complaint_rt  投诉工单 binlog 流 ==========
+-- Flink CDC 源表：直读 MySQL binlog（先全量快照、再增量），不经 Kafka
+CREATE TABLE ods.ods_opr_complaint_rt (
+    `id`                BIGINT           COMMENT '主键ID',
+    `complaint_no`      STRING           COMMENT '工单编号，格式CMP+yyyyMMdd+6位随机',
+    `complainant_type`  STRING           COMMENT '投诉方：VISITOR-游客，MERCHANT-商户',
+    `complainant_id`    BIGINT           COMMENT '投诉方ID',
+    `order_group_no`    STRING           COMMENT '关联订单号（游客投诉时）',
+    `complaint_type`    STRING           COMMENT '类型：ORDER_ISSUE-订单问题，SERVICE_ISSUE-服务问题，BUG-系统缺陷，OTHER-其他',
+    `handler_id`        BIGINT           COMMENT '处理人ID',
+    `sla_deadline`      TIMESTAMP(3)     COMMENT 'SLA截止时间',
+    `complaint_status`  STRING           COMMENT '状态：PENDING-待处理，ASSIGNED-已分派，PROCESSING-处理中，RESOLVED-已解决，CLOSED-已关闭',
+    `tenant_id`         BIGINT           COMMENT '租户ID',
+    `create_time`       TIMESTAMP(3)     COMMENT '创建时间',
+    `update_time`       TIMESTAMP(3)     COMMENT '更新时间',
+    `create_by`         STRING           COMMENT '创建人',
+    `update_by`         STRING           COMMENT '更新人',
+    `deleted`           TINYINT          COMMENT '软删除: 0未删/1已删',
+    `binlog_time`       TIMESTAMP_LTZ(3) METADATA FROM 'op_ts' VIRTUAL COMMENT 'binlog 变更时间（Flink CDC 元数据 op_ts；全量快照阶段为 0）',
+    `proc_time`         AS PROCTIME(),
+    PRIMARY KEY (`id`) NOT ENFORCED
+) COMMENT '投诉工单 binlog 流（同源表，1行=1条源记录（CDC 变更流））'
+WITH (
+    'connector' = 'mysql-cdc',
+    'hostname' = '${mysql.pft-platform.host}',
+    'port' = '${mysql.pft-platform.port}',
+    'username' = '${cdc.username}',
+    'password' = '${cdc.password}',
+    'database-name' = 'pft-platform',
+    'table-name' = 't_complaint',
+    'server-id' = '5461-5464',
+    'server-time-zone' = 'Asia/Shanghai',
+    'scan.startup.mode' = 'initial',
+    'scan.incremental.snapshot.enabled' = 'true'
+);
+
+-- ========== ods.ods_opr_code_pool_rt  码池 binlog 流 ==========
+-- Flink CDC 源表：直读 MySQL binlog（先全量快照、再增量），不经 Kafka
+CREATE TABLE ods.ods_opr_code_pool_rt (
+    `id`               BIGINT           COMMENT '主键ID',
+    `pool_no`          STRING           COMMENT '码池编号，格式CP+yyyyMMdd+6位随机',
+    `tenant_id`        BIGINT           COMMENT '归属商户ID',
+    `pool_type`        STRING           COMMENT '池类型：SINGLE_TICKET-单票池，COMBO_TICKET-套票池',
+    `credential_type`  STRING           COMMENT '凭证类型：QR_CODE-二维码，BAR_CODE-条形码',
+    `capacity`         BIGINT           COMMENT '池容量（最大并发码数）',
+    `allocated_count`  BIGINT           COMMENT '已分配码数',
+    `recycled_count`   BIGINT           COMMENT '已回收复用码数',
+    `pool_status`      STRING           COMMENT '状态：ACTIVE-有效，INACTIVE-停用',
+    `create_time`      TIMESTAMP(3)     COMMENT '创建时间',
+    `update_time`      TIMESTAMP(3)     COMMENT '更新时间',
+    `create_by`        STRING           COMMENT '创建人',
+    `update_by`        STRING           COMMENT '更新人',
+    `deleted`          TINYINT          COMMENT '软删除: 0未删/1已删',
+    `binlog_time`      TIMESTAMP_LTZ(3) METADATA FROM 'op_ts' VIRTUAL COMMENT 'binlog 变更时间（Flink CDC 元数据 op_ts；全量快照阶段为 0）',
+    `proc_time`        AS PROCTIME(),
+    PRIMARY KEY (`id`) NOT ENFORCED
+) COMMENT '码池 binlog 流（同源表，1行=1条源记录（CDC 变更流））'
+WITH (
+    'connector' = 'mysql-cdc',
+    'hostname' = '${mysql.pft-verification.host}',
+    'port' = '${mysql.pft-verification.port}',
+    'username' = '${cdc.username}',
+    'password' = '${cdc.password}',
+    'database-name' = 'pft-verification',
+    'table-name' = 't_code_pool',
+    'server-id' = '5465-5468',
     'server-time-zone' = 'Asia/Shanghai',
     'scan.startup.mode' = 'initial',
     'scan.incremental.snapshot.enabled' = 'true'
