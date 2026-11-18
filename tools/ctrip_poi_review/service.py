@@ -33,6 +33,7 @@ import cs_synth
 import guide_synth
 import db
 import review
+import td_view
 
 HERE = Path(__file__).resolve().parent
 WEB = HERE / "web"
@@ -657,27 +658,30 @@ def create_app(args):
                     data_dir_default=str(cs_synth.DATA_DIR) if cs_synth.DATA_DIR.exists() else "")
 
     def export_filters(q):
-        return {k: q.get(k) or "" for k in ("method", "scenic", "city", "review", "date_from", "date_to", "limit")}
+        return {k: q.get(k) or "" for k in ("method", "scenic", "city", "review", "date_from", "date_to", "gen_date", "sid", "limit")}
 
     @app.get("/api/gd/export/count")
-    def gd_export_count(task: str = "eval", scenic: str = "", city: str = "", review: str = "", verdict: str = ""):
+    def gd_export_count(task: str = "eval", scenic: str = "", city: str = "", review: str = "", verdict: str = "", gen_date: str = "", sid: str = ""):
         try:
-            return guide_synth.export_count("narr" if task == "narr" else "eval", dict(scenic=scenic, city=city, review=review, verdict=verdict))
+            return guide_synth.export_count("narr" if task == "narr" else "eval", dict(scenic=scenic, city=city, review=review, verdict=verdict,
+                                                                                    gen_date=gen_date, sid=sid))
         except Exception as e:  # noqa: BLE001
             raise HTTPException(400, f"{type(e).__name__}: {e}") from e
 
     @app.get("/api/gd/export")
-    def gd_export(task: str = "eval", fmt: str = "jsonl", scenic: str = "", city: str = "", review: str = "", verdict: str = "", limit: int = 0):
+    def gd_export(task: str = "eval", fmt: str = "jsonl", scenic: str = "", city: str = "", review: str = "", verdict: str = "", limit: int = 0,
+                  gen_date: str = "", sid: str = ""):
         """讲解评价 / 个性化讲解样本：从 MySQL 流式导出（JSONL / JSON 数组 / CSV）。"""
         t = "narr" if task == "narr" else "eval"
         fmt = fmt if fmt in ("l1_jsonl", "prov_jsonl", "jsonl", "json", "csv") else "l1_jsonl"
-        f = dict(scenic=scenic, city=city, review=review, verdict=verdict, limit=limit)
+        f = dict(scenic=scenic, city=city, review=review, verdict=verdict, limit=limit, gen_date=gen_date, sid=sid)
         name = f"guide_{t}_{fmt.replace('_jsonl', '')}_{time.strftime('%Y%m%d_%H%M%S')}.{'jsonl' if fmt.endswith('jsonl') else fmt}"
         mt = "text/csv; charset=utf-8" if fmt == "csv" else "application/json; charset=utf-8"
         return StreamingResponse(guide_synth.export_iter(t, f, fmt), media_type=mt, headers={"Content-Disposition": f"attachment; filename={name}"})
 
     @app.get("/api/cs/export/count")
-    def cs_export_count(method: str = "", scenic: str = "", city: str = "", review: str = "", date_from: str = "", date_to: str = ""):
+    def cs_export_count(method: str = "", scenic: str = "", city: str = "", review: str = "", date_from: str = "", date_to: str = "",
+                        gen_date: str = "", sid: str = ""):
         """从 MySQL 两张表按条件数一下：多少会话、多少轮。"""
         try:
             return cs_synth.export_count(export_filters(locals()))
@@ -686,7 +690,7 @@ def create_app(args):
 
     @app.get("/api/cs/export")
     def cs_export(fmt: str = "l1_jsonl", method: str = "", scenic: str = "", city: str = "", review: str = "", date_from: str = "", date_to: str = "",
-                  limit: int = 0):
+                  limit: int = 0, gen_date: str = "", sid: str = ""):
         """从 MySQL 两张表流式导出（会话 JSONL / JSON 数组 / 会话 CSV / 轮次 CSV），百万条也不占内存。"""
         if fmt not in cs_synth.EXPORT_FORMATS:
             raise HTTPException(400, f"不支持的格式 {fmt}")
@@ -700,6 +704,35 @@ def create_app(args):
         name = f"cs_mysql_{tag}{fmt}_{time.strftime('%Y%m%d_%H%M%S')}.{ext}"
         mt = "text/csv; charset=utf-8" if ext == "csv" else "application/json; charset=utf-8"
         return StreamingResponse(cs_synth.export_iter(f, fmt), media_type=mt, headers={"Content-Disposition": f"attachment; filename={name}"})
+
+    # ---------------- 数据查看：直接从 MySQL 分页看已生成的样本（「处理记录」只在内存里，刷新 / 重启后看不到）
+    @app.get("/api/td/summary")
+    def td_summary():
+        """每个数据集 MySQL 里有多少条、其中需复核多少（页签上的数字）。"""
+        return td_view.summary()
+
+    @app.get("/api/td/list")
+    def td_list(ds: str = "cs", method: str = "", city: str = "", scenic: str = "", review: str = "", verdict: str = "", date_from: str = "",
+                date_to: str = "", gen_date: str = "", sid: str = "", offset: int = 0, limit: int = 50):
+        """按条件分页列出（新的在前），筛选条件和导出接口完全一样。"""
+        f = dict(method=method, city=city, scenic=scenic, review=review, verdict=verdict, date_from=date_from, date_to=date_to, gen_date=gen_date, sid=sid)
+        try:
+            return td_view.list_page(ds if ds in td_view.DATASETS else "cs", f, offset, limit)
+        except RuntimeError as e:  # 表没建好
+            raise HTTPException(400, str(e)) from e
+        except Exception as e:  # noqa: BLE001
+            raise HTTPException(400, f"{type(e).__name__}: {e}") from e
+
+    @app.get("/api/td/item")
+    def td_item(ds: str = "cs", id: str = "", travel_date: str = ""):  # noqa: A002
+        """一条样本的完整 JSON（和「完整 JSONL」导出的那一行一样）。"""
+        try:
+            rec = td_view.get_record(ds if ds in td_view.DATASETS else "cs", id, travel_date)
+        except RuntimeError as e:
+            raise HTTPException(400, str(e)) from e
+        if not rec:
+            raise HTTPException(404, f"MySQL 里没有 {id}（可能已被清理）")
+        return rec
 
     @app.get("/api/cs/download")
     def cs_download(batch: str, file: str = "dialogs.jsonl", only: str = ""):

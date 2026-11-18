@@ -599,7 +599,21 @@ def _export_sql(f):
         if len(v) == 8:
             where.append(f"s.travel_date {op} %s")
             params.append(int(v))
+    gd = gen_day(f.get("gen_date"))
+    if gd:  # 生成日期：source.generated_at 是 "YYYY-MM-DD HH:MM:SS"（会话表没有入库时间）
+        where.append("t.source LIKE %s")
+        params.append(f'%"generated_at": "{gd}%')
+    ids = [x.strip() for x in re.split(r"[,，\s]+", str(f.get("sid") or "")) if x.strip()]
+    if ids:
+        where.append(f"s.session_id IN ({','.join(['%s'] * len(ids))})")
+        params += ids
     return sql + (" WHERE " + " AND ".join(where) if where else ""), params
+
+
+def gen_day(v):
+    """生成日期筛选：20261117 / 2026-11-17 → '2026-11-17'；不合法返回 None。"""
+    v = re.sub(r"\D", "", str(v or ""))[:8]
+    return f"{v[:4]}-{v[4:6]}-{v[6:]}" if len(v) == 8 else None
 
 
 def export_count(f):
@@ -614,6 +628,20 @@ def export_count(f):
 
 def _fmt_dt(v):
     return v.strftime("%Y-%m-%d %H:%M:%S") if hasattr(v, "strftime") else (str(v) if v is not None else None)
+
+
+def session_record(r, ts):
+    """会话表一行 + 这个会话的轮次行 → 目标格式（和生成时的 JSON 一样，带 source）。导出和「数据查看」共用。"""
+    try:
+        g = json.loads(r["source"] or "{}")
+    except ValueError:
+        g = {"raw": r["source"]}
+    return dict(session_id=r["session_id"], channel=r["channel"], visitor_id=r["visitor_id"], scenic_id=r["scenic_id"],
+                scenic_name=r["scenic_name"], start_time=_fmt_dt(r["start_time"]), related_order_id=r["related_order_id"],
+                turns=[{k: v for k, v in dict(turn=t["turn_no"], role=t["role"], msg_type=t["msg_type"], text=t["msg_text"],
+                                              ts=t["msg_ts"].strftime("%H:%M:%S") if hasattr(t["msg_ts"], "strftime") else str(t["msg_ts"])[-8:],
+                                              agent_id=t["agent_id"]).items() if not (k == "agent_id" and v is None)} for t in ts],
+                end_type=r["end_type"], satisfaction_score=r["satisfaction_score"], session_duration_sec=r["session_duration_sec"], source=g)
 
 
 def export_iter(f, fmt="jsonl", batch=500):
@@ -672,16 +700,7 @@ def export_iter(f, fmt="jsonl", batch=500):
                         out += [csv_line([t["session_id"], t["turn_no"], t["role"], t["msg_type"], t["msg_text"], t["agent_id"], _fmt_dt(t["msg_ts"]),
                                           t["travel_date"], t["source"] if t["turn_no"] == 1 else ""]) for t in ts]
                         continue
-                    try:
-                        g = json.loads(r["source"] or "{}")
-                    except ValueError:
-                        g = {"raw": r["source"]}
-                    rec = dict(session_id=r["session_id"], channel=r["channel"], visitor_id=r["visitor_id"], scenic_id=r["scenic_id"],
-                               scenic_name=r["scenic_name"], start_time=_fmt_dt(r["start_time"]), related_order_id=r["related_order_id"],
-                               turns=[{k: v for k, v in dict(turn=t["turn_no"], role=t["role"], msg_type=t["msg_type"], text=t["msg_text"],
-                                                             ts=t["msg_ts"].strftime("%H:%M:%S") if hasattr(t["msg_ts"], "strftime") else t["msg_ts"],
-                                                             agent_id=t["agent_id"]).items() if not (k == "agent_id" and v is None)} for t in ts],
-                               end_type=r["end_type"], satisfaction_score=r["satisfaction_score"], session_duration_sec=r["session_duration_sec"], source=g)
+                    rec = session_record(r, ts)
                     if fmt in ("l1_jsonl", "prov_jsonl"):
                         out.append(json.dumps(split_delivery(rec)[0 if fmt == "l1_jsonl" else 1], ensure_ascii=False) + "\n")
                         continue

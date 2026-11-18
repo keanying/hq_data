@@ -102,7 +102,7 @@
           : `已加载 ${fmt(l.items.length)} / ${fmt(l.total)} ${unit}，滚到底部自动加载`);
 
   /** 固定区域表格：表头固定，表体在区域内滚动，滚到底自动加载。 */
-  function InfiniteTable({ list, columns, rowKey, onRowClick, emptyText = '暂无数据', unit }) {
+  function InfiniteTable({ list, columns, rowKey, onRowClick, emptyText = '暂无数据', unit, rowSelection, rowClassName }) {
     const box = useRef(null);
     const h = useHeight(box);
     useEffect(() => {
@@ -117,8 +117,8 @@
       <div className="fill" ref=${box}>
         ${h > 0 && html`<${Table} size="small" columns=${columns} dataSource=${list.items} rowKey=${rowKey} pagination=${false}
           scroll=${{ y: Math.max(80, h - 41) }} loading=${list.loading && !list.items.length}
-          onRow=${onRowClick ? (r) => ({ onClick: () => onRowClick(r) }) : undefined}
-          empty=${html`<${Empty} description=${list.error || emptyText} />`} />`}
+          onRow=${onRowClick ? (r) => ({ onClick: (e) => { if (!(e.target.closest && e.target.closest('.semi-checkbox, .semi-table-column-selection'))) onRowClick(r); }, className: rowClassName ? rowClassName(r) : undefined }) : undefined}
+          rowSelection=${rowSelection} empty=${html`<${Empty} description=${list.error || emptyText} />`} />`}
       </div>
       <div className="table-foot">${listFoot(list, unit)}</div>
     </div>`;
@@ -769,6 +769,47 @@
       <div className=${'txt' + (t.msg_type === 'card' ? ' card' : '')}>${t.text}</div></div>`;
   }
 
+  /** 一条生成结果（客服会话 / 讲解评价 / 个性化讲解）：「处理记录」的数据交换和「数据查看」共用 */
+  function RecordView({ rec }) {
+    const src = rec.source || {};
+    const flags = src.check_flags || [];
+    const review = src.needs_review && html`<${Banner} type="warning" closeIcon=${null} style=${{ marginBottom: 8 }} description=${'需复核：' + (flags.join('；') || '质检未通过')} />`;
+    const json = (what) => html`<details style=${{ marginTop: 8 }}><summary className="muted">完整 JSON（${what}）</summary><pre className="log" style=${{ maxHeight: 320 }}>${JSON.stringify(rec, null, 2)}</pre></details>`;
+    const list = (x, sep = '、') => (x || []).join(sep) || '—';
+    if (rec.eval_result) {
+      const er = rec.eval_result, sc = er.scores, clip = rec.guide_clip || { asr_text: rec.guide_clip_txt }, dis = er.disfluency || {};
+      return html`<div>${review}
+        <div className="muted sm" style=${{ margin: '0 0 4px 2px' }}>guide_clip${clip.source ? ` · ${clip.source}` : ''}${clip.duration_sec != null ? ` · ${clip.duration_sec} 秒` : ''}${clip.asr_confidence != null ? ` · 置信度 ${clip.asr_confidence}` : ''}${clip.collect_time ? ` · 采集 ${clip.collect_time}` : ''}（合成文字）</div>
+        <div className="gd-txt">${clip.asr_text || '—'}</div>
+        <div className="muted sm" style=${{ margin: '10px 0 4px 2px' }}>以下为标准答案（eval_result），交付时在溯源 sidecar 里，不给标注员</div>
+        <div className="kv sm"><span>结论</span><div><${Tag} size="small" color=${{ 合格: 'green', 需改进: 'amber', 不合格: 'red', 拒答: 'grey' }[er.verdict] || 'grey'}>${er.verdict || '—'}<//>
+          ${sc ? html` 总分 <b>${sc.总分}</b> · 准确 ${sc.准确性} · 合规 ${sc.合规性} · 逻辑 ${sc.逻辑性} · 完整 ${sc.完整性} · 表达 ${sc.表达}` : html` ${(er.refusal || {}).reason || ''}`}</div>
+          <span>类别</span><div>${src.category || '—'}</div>
+          ${(er.issues || []).map((e, i) => html`<span key=${'e' + i} style=${{ color: '#c62828' }}>${e.category} · ${e.type}</span>
+            <div key=${'f' + i}>「${e.guide_said}」${e.guide_said_2 ? `／「${e.guide_said_2}」` : ''}${e.kb_value ? ` → ${e.kb_value}` : ''}（${e.severity}）</div>`)}
+          <span>讲对</span><div>${list(er.covered_facts)}</div><span>漏讲</span><div>${list(er.missed_facts)}</div>
+          <span>语气词</span><div>${dis.filler_count != null ? `${dis.filler_count} 处 · 每 100 字 ${dis.per_100_chars}` : '—'}</div>
+          <span>建议</span><div>${list(er.suggestions, '；')}</div></div>
+        ${json('样例结构 + 标准答案 + source')}</div>`;
+    }
+    if (rec.reference_narration) {
+      const rn = rec.reference_narration, tp = rec.task_params || {}, kb = rec.sub_poi_knowledge || {};
+      return html`<div>${review}
+        <div className="muted sm" style=${{ margin: '0 0 4px 2px' }}>reference_narration · ${rn.char_count} 字 / 上限 ${tp.字数上限 || '—'}${rn.style ? ' · ' + rn.style : ''}</div>
+        <div className="gd-txt">${rn.text}</div>
+        <div className="kv sm" style=${{ marginTop: 10 }}><span>位置</span><div>${tp.当前所处位置 || '—'}</div><span>用到的知识</span><div>${list(rn.used_facts)}</div>
+          <span>个性化</span><div>${list(rn.personalization, '；')}</div><span>禁忌</span><div>${list(kb.taboos, '；')}</div>
+          <span>参观须知</span><div>${list(kb.visit_rules, '；')}</div></div>
+        ${json('样例结构 + 标准答案 + source')}</div>`;
+    }
+    return html`<div>${review}
+      <div className="kv sm"><span>我们的景区</span><div>${rec.scenic_name} <span className="muted">${rec.scenic_id || '未对到'}</span></div>
+        <span>渠道 / 访客</span><div>${rec.channel} · ${rec.visitor_id}</div><span>开始 / 时长</span><div>${rec.start_time} · ${rec.session_duration_sec} 秒</div>
+        <span>订单 / 结束</span><div>${rec.related_order_id || '—'} · ${rec.end_type} · 满意度 ${rec.satisfaction_score ?? '未评'}</div></div>
+      <div className="chat">${(rec.turns || []).map((t) => html`<${Bubble} key=${t.turn} t=${t} />`)}</div>
+      ${json('目标格式 + source')}</div>`;
+  }
+
   function CsItemSheet({ jobId, n, onClose }) {
     const [d, setD] = useState(null);
     useEffect(() => { setD(null); if (n) api(`/api/cs/item/${jobId}/${n}`).then(setD).catch((e) => setD({ error: e.message })); }, [jobId, n]);
@@ -806,35 +847,7 @@
         </div>
         <div className="col">
           <h4>④ 生成结果 ${rec ? html`<span className="muted">${rec.session_id || rec.eval_task_id || rec.request_id}${d.mysql ? ' · 已写 MySQL' : ''}</span>` : ''}</h4>
-          ${rec && (rec.eval_result || rec.reference_narration) ? html`
-            ${rec.source.needs_review && html`<${Banner} type="warning" closeIcon=${null} style=${{ marginBottom: 8 }} description=${'需复核：' + rec.source.check_flags.join('；')} />`}
-            ${rec.eval_result ? html`
-              <div className="muted sm" style=${{ margin: '0 0 4px 2px' }}>guide_clip · ${rec.guide_clip.source} · ${rec.guide_clip.duration_sec} 秒 · 置信度 ${rec.guide_clip.asr_confidence} · 采集 ${rec.guide_clip.collect_time}（合成文字）</div>
-              <div className="gd-txt">${rec.guide_clip.asr_text}</div>
-              <div className="muted sm" style=${{ margin: '10px 0 4px 2px' }}>以下为标准答案（eval_result），交付时在溯源 sidecar 里，不给标注员</div>
-              <div className="kv sm"><span>结论</span><div><${Tag} size="small" color=${{ 合格: 'green', 需改进: 'amber', 不合格: 'red', 拒答: 'grey' }[rec.eval_result.verdict]}>${rec.eval_result.verdict}<//>
-                ${rec.eval_result.scores ? html` 总分 <b>${rec.eval_result.scores.总分}</b> · 准确 ${rec.eval_result.scores.准确性} · 合规 ${rec.eval_result.scores.合规性} · 逻辑 ${rec.eval_result.scores.逻辑性} · 完整 ${rec.eval_result.scores.完整性} · 表达 ${rec.eval_result.scores.表达}`
-                  : html` ${(rec.eval_result.refusal || {}).reason || ''}`}</div>
-                <span>类别</span><div>${rec.source.category || '—'}</div>
-                ${(rec.eval_result.issues || []).map((e, i) => html`<span key=${'e' + i} style=${{ color: '#c62828' }}>${e.category} · ${e.type}</span>
-                  <div key=${'f' + i}>「${e.guide_said}」${e.guide_said_2 ? `／「${e.guide_said_2}」` : ''}${e.kb_value ? ` → ${e.kb_value}` : ''}（${e.severity}）</div>`)}
-                <span>讲对</span><div>${(rec.eval_result.covered_facts || []).join('、') || '—'}</div><span>漏讲</span><div>${(rec.eval_result.missed_facts || []).join('、') || '—'}</div>
-                <span>语气词</span><div>${rec.eval_result.disfluency.filler_count} 处 · 每 100 字 ${rec.eval_result.disfluency.per_100_chars}</div>
-                <span>建议</span><div>${(rec.eval_result.suggestions || []).join('；') || '—'}</div></div>`
-            : html`
-              <div className="muted sm" style=${{ margin: '0 0 4px 2px' }}>reference_narration · ${rec.reference_narration.char_count} 字 / 上限 ${rec.task_params.字数上限} · ${rec.reference_narration.style || ''}</div>
-              <div className="gd-txt">${rec.reference_narration.text}</div>
-              <div className="kv sm" style=${{ marginTop: 10 }}><span>位置</span><div>${rec.task_params.当前所处位置}</div><span>用到的知识</span><div>${rec.reference_narration.used_facts.join('、') || '—'}</div>
-                <span>个性化</span><div>${rec.reference_narration.personalization.join('；') || '—'}</div><span>禁忌</span><div>${rec.sub_poi_knowledge.taboos.join('；')}</div>
-                <span>参观须知</span><div>${rec.sub_poi_knowledge.visit_rules.join('；') || '—'}</div></div>`}
-            <details style=${{ marginTop: 8 }}><summary className="muted">完整 JSON（样例结构 + 标准答案 + source）</summary><pre className="log" style=${{ maxHeight: 320 }}>${JSON.stringify(rec, null, 2)}</pre></details>`
-          : rec ? html`
-            ${rec.source.needs_review && html`<${Banner} type="warning" closeIcon=${null} style=${{ marginBottom: 8 }} description=${'需复核：' + rec.source.check_flags.join('；')} />`}
-            <div className="kv sm"><span>我们的景区</span><div>${rec.scenic_name} <span className="muted">${rec.scenic_id || '未对到'}</span></div>
-              <span>渠道 / 访客</span><div>${rec.channel} · ${rec.visitor_id}</div><span>开始 / 时长</span><div>${rec.start_time} · ${rec.session_duration_sec} 秒</div>
-              <span>订单 / 结束</span><div>${rec.related_order_id || '—'} · ${rec.end_type} · 满意度 ${rec.satisfaction_score ?? '未评'}</div></div>
-            <div className="chat">${rec.turns.map((t) => html`<${Bubble} key=${t.turn} t=${t} />`)}</div>
-            <details style=${{ marginTop: 8 }}><summary className="muted">完整 JSON（目标格式 + source）</summary><pre className="log" style=${{ maxHeight: 320 }}>${JSON.stringify(rec, null, 2)}</pre></details>`
+          ${rec ? html`<${RecordView} rec=${rec} />`
             : d.kind === 'skipped' ? html`<${Banner} type="info" closeIcon=${null}
                 description=${html`<div><b>跳过：不是在问这个景区</b></div><div style=${{ marginTop: 4 }}>${d.error}</div><div className="muted sm" style=${{ marginTop: 6 }}>我们只按真实问答改写；换成本景区的问题就得编答案，所以不生成。这条不算不合格，再次开始时也不会重复调用模型。</div>`} />`
             : html`<${Banner} type="danger" closeIcon=${null} description=${d.error || '没有生成结果'} />`}
@@ -1022,6 +1035,7 @@
   const CS_DEF = { data_type: '真实', split: 'train', city: '', intent: [], scenic: '', scenic_city: '', limit: 20, variants: 1, workers: 3, allow_unmapped: false,
     topics: [], grade: [], only_approved: false, kb: [], ai_model: '', ai_web_search: false };
   const CS_DS = { rewrite: 'cs_rewrite', expand: 'cs_expand', guide_eval: 'eval', guide_narr: 'narr' };
+  const CS_TD = { rewrite: { ds: 'cs', method: 'llm_rewrite' }, expand: { ds: 'cs', method: 'llm_expand' }, guide_eval: { ds: 'eval' }, guide_narr: { ds: 'narr' } };
 
   function CsPage({ cities }) {
     // 每种生成方式各是各的任务、各存各的参数（服务端记住，下次打开按方式恢复）；资料目录共用
@@ -1222,13 +1236,15 @@
         <//>
       </div>
       <div className="row2 fill">
-        <${Card} title="处理记录" sub=${st ? `${fmt(st.total_items)} 条 · 点一行看数据交换` : ''} bodyClass="flush"
+        <${Card} title="处理记录" sub=${st ? `本次任务最近 ${fmt(st.total_items)} 条 · 点一行看数据交换` : ''} bodyClass="flush"
+          help="这里是正在跑 / 刚跑完的任务在内存里的处理过程（最多 1000 条），服务重启后就没了。已生成的数据都写进了 MySQL，到「数据查看」看全部、筛选和导出。"
           extra=${html`<div style=${{ display: 'flex', gap: 8, alignItems: 'center' }}>${st && st.history && st.history.length > 1 && html`<${Select} size="small" value=${job && job.id} style=${{ width: 220 }} onChange=${setJobId}
             optionList=${st.history.map((x) => ({ value: x.id, label: `#${x.id} ${x.type_name} · ${(x.started || x.created || '').slice(5, 16)}` }))} />`}
-            <${Button} size="small" theme="solid" icon=${html`<${Ic.IconDownload} />`} onClick=${() => setExpOpen(true)}>导出数据<//>
+            <${Button} size="small" theme="solid" icon=${html`<${Ic.IconArticle} />`} onClick=${() => go('td', CS_TD[mode])}>查看已生成数据<//>
+            <${Button} size="small" icon=${html`<${Ic.IconDownload} />`} onClick=${() => setExpOpen(true)}>导出数据<//>
             <${Button} size="small" type="danger" theme="light" icon=${html`<${Ic.IconDelete} />`} onClick=${() => setCleanOpen(true)}>清理数据<//></div>`}>
           <div className="fill" ref=${box}>${h > 0 && html`<${Table} size="small" columns=${cols} dataSource=${(st && st.items) || []} rowKey="n" pagination=${false}
-            scroll=${{ y: h - 41 }} empty=${html`<${Empty} description="还没有处理记录" />`} onRow=${(r) => ({ onClick: () => setCur(r.n), style: { cursor: 'pointer' } })} />`}</div>
+            scroll=${{ y: h - 41 }} empty=${html`<${Empty} description=${html`<span>本次还没有处理记录。之前生成的数据在 <a onClick=${() => go('td', CS_TD[mode])}>数据查看</a> 里</span>`} />`} onRow=${(r) => ({ onClick: () => setCur(r.n), style: { cursor: 'pointer' } })} />`}</div>
         <//>
         <div className="page" style=${{ gap: 14 }}>
           <${Card} title="日志" className="fill" bodyClass="flush">
@@ -1514,6 +1530,200 @@
     </div>`;
   }
 
+  // ------------------------------------------------------------ 数据查看：MySQL 里已生成的训练数据（筛选、看完整内容、导出）
+  const TD_DS = [['cs', '智能客服对话'], ['eval', '讲解内容评价'], ['narr', '个性化讲解']];
+  const TD_KEYS = {
+    cs: ['method', 'city', 'scenic', 'review', 'gen_date', 'date_from', 'date_to', 'sid'],
+    eval: ['city', 'scenic', 'review', 'verdict', 'gen_date', 'sid'],
+    narr: ['city', 'scenic', 'review', 'gen_date', 'sid'],
+  };
+  const TD_FMT = {
+    cs: [['l1_jsonl', '标注交付 L1 JSONL（给标注员，不含结束方式 / 满意度 / source）'], ['prov_jsonl', '溯源 sidecar JSONL（结束方式 + 满意度 + source）'],
+      ['jsonl', '完整 JSONL（L1 + source）'], ['json', '完整 JSON 数组'], ['csv_sessions', '会话表 CSV（Excel 直接打开）'], ['csv_turns', '轮次表 CSV（一行一条消息）']],
+    gd: [['l1_jsonl', '标注交付 L1 JSONL（给标注员，不含标准答案）'], ['prov_jsonl', '溯源 sidecar JSONL（标准答案 + source）'],
+      ['jsonl', '完整 JSONL（L1 + 答案 + source）'], ['json', '完整 JSON 数组'], ['csv', '表 CSV（含 record_json，Excel 直接打开）']],
+  };
+  const TD_METHOD = { llm_rewrite: '改写真实对话', llm_expand: '按景区数据扩展', llm_eval: '讲解内容评价', llm_narr: '个性化讲解' };
+  const parseYmd = (v) => (v && /^\d{8}$/.test(v) ? new Date(+v.slice(0, 4), +v.slice(4, 6) - 1, +v.slice(6)) : null);
+  function tdExportUrl(ds, f, fmtKey) {
+    const pick = Object.fromEntries(TD_KEYS[ds].map((k) => [k, f[k] || '']));
+    return ds === 'cs' ? `/api/cs/export?${qs({ fmt: fmtKey, ...pick })}` : `/api/gd/export?${qs({ task: ds, fmt: fmtKey, ...pick })}`;
+  }
+  const tdReview = (r) => html`<${Tag} size="small" color=${r.needs_review ? 'amber' : 'green'}>${r.needs_review ? '需复核' : '通过'}<//>`;
+  const tdTime = (v) => html`<span className="num sm nw muted" title=${v || ''}>${(v || '').slice(5, 16) || '—'}</span>`;
+
+  function TdExportMenu({ ds, f, label, disabled, theme }) {
+    const items = TD_FMT[ds === 'cs' ? 'cs' : 'gd'];
+    return html`<${Dropdown} trigger="click" position="bottomRight" disabled=${disabled} render=${html`<${Dropdown.Menu}>
+        ${items.map(([k, t]) => html`<${Dropdown.Item} key=${k} onClick=${() => { window.location.href = tdExportUrl(ds, f, k); }}>${t}<//>`)}<//>`}>
+      <${Button} theme=${theme || 'light'} disabled=${disabled} icon=${html`<${Ic.IconDownload} />`}>${label}<//>
+    <//>`;
+  }
+
+  /** 一条样本：溯源信息 + 内容（和处理记录的「④ 生成结果」一样），可上一条 / 下一条、复制 / 下载 JSON */
+  function TdItemSheet({ ds, row, pos, onClose, onPrev, onNext }) {
+    const [rec, setRec] = useState(null);
+    const [err, setErr] = useState(null);
+    useEffect(() => {
+      setRec(null); setErr(null);
+      if (row) api(`/api/td/item?${qs({ ds, id: row.id, travel_date: row.travel_date })}`).then(setRec).catch((e) => setErr(e.message));
+    }, [ds, row && row.id, row && row.travel_date]);
+    useEffect(() => {
+      if (!row) return undefined;
+      const f = (e) => {
+        if (/^(INPUT|TEXTAREA|SELECT)$/.test((e.target && e.target.tagName) || '')) return;
+        if (e.key === 'ArrowUp' || e.key === 'ArrowLeft') { e.preventDefault(); onPrev(); }
+        if (e.key === 'ArrowDown' || e.key === 'ArrowRight') { e.preventDefault(); onNext(); }
+      };
+      window.addEventListener('keydown', f);
+      return () => window.removeEventListener('keydown', f);
+    });
+    const text = rec ? JSON.stringify(rec, null, 2) : '';
+    const copy = async () => { try { await navigator.clipboard.writeText(text); Toast.success('已复制'); } catch (e) { Toast.error('浏览器不让复制，用「下载 JSON」'); } };
+    const download = () => {
+      const a = document.createElement('a');
+      a.href = URL.createObjectURL(new Blob([text + '\n'], { type: 'application/json' }));
+      a.download = `${row.id}.json`; a.click(); setTimeout(() => URL.revokeObjectURL(a.href), 2000);
+    };
+    const g = (rec && rec.source) || {};
+    const kn = g.knowledge || {};
+    const basis = g.dialogue_id ? html`原始对话 <b>${g.dialogue_id}</b> · ${g.attraction_name || ''} · ${g.intent_type || ''}${g.source_url ? html` · <a href=${g.source_url} target="_blank" rel="noreferrer">原文</a>` : ''}`
+      : g.generate_method === 'llm_expand' ? html`${g.topic_name || g.topic || ''}${kn.spot ? ` · 讲解资料「${kn.spot}」（${kn.kind || ''} ${kn.unit_id || ''}）` : ''} · 景区表字段 ${(g.fact_fields || []).length} 个
+          ${(g.style_refs || []).length ? html`<div className="muted">参考问法：${g.style_refs.map((x) => x.dialogue_id + (x.dataset ? `（${x.dataset}）` : '')).join('、')}</div>` : ''}`
+        : g.kb_name ? html`${g.kb_name} · 知识单元 ${g.unit_id || '—'}${(g.fact_sources || []).length ? html`<div className="muted">出处：${g.fact_sources.map((x, i) => html`<span key=${i}>${i ? '；' : ''}${x.url
+          ? html`<a href=${x.url} target="_blank" rel="noreferrer">${x.publisher || x.title || x.url}</a>` : `${x.publisher || ''} ${x.title || ''}`}</span>`)}</div>` : ''}` : '—';
+    return html`<${SideSheet} visible=${!!row} onCancel=${onClose} closeOnEsc width=${780}
+      title=${row ? html`<span>${row.scenic_name || '—'} <span className="muted sm num" style=${{ fontWeight: 400, marginLeft: 6 }}>${row.id}</span></span>` : ''}
+      footer=${row && html`<div className="td-foot">
+        <${Button} icon=${html`<${Ic.IconChevronUp} />`} onClick=${onPrev} disabled=${!pos || pos.i <= 0}>上一条<//>
+        <${Button} icon=${html`<${Ic.IconChevronDown} />`} onClick=${onNext} disabled=${!pos || (pos.i >= pos.n - 1 && !pos.more)}>下一条<//>
+        <span className="muted sm">${pos ? `第 ${fmt(pos.i + 1)} / ${fmt(pos.total)} 条 · ↑↓ 翻页` : ''}</span>
+        <span className="grow"></span>
+        <${Button} icon=${html`<${Ic.IconCopy} />`} onClick=${copy} disabled=${!rec}>复制 JSON<//>
+        <${Button} theme="solid" icon=${html`<${Ic.IconDownload} />`} onClick=${download} disabled=${!rec}>下载这条 JSON<//>
+      </div>`}>
+      ${err ? html`<${Banner} type="danger" closeIcon=${null} description=${err} />` : !rec ? html`<div style=${{ padding: 40, textAlign: 'center' }}><${Spin} /></div>` : html`<div>
+        <div className="kv sm td-src">
+          <span>生成方式</span><div>${TD_METHOD[g.generate_method] || g.generate_method || '—'}${g.variant ? ` · 第 ${g.variant} 版` : ''}</div>
+          <span>依据</span><div>${basis}</div>
+          <span>模型</span><div>${g.model || '—'}${g.prompt_version ? html` <span className="muted">· 提示词 ${g.prompt_version}</span>` : ''}</div>
+          <span>生成时间</span><div>${g.generated_at || '—'}</div>
+        </div>
+        ${g.facts && Object.keys(g.facts).length ? html`<details className="td-facts"><summary className="muted sm">用到的景区资料（${Object.keys(g.facts).length} 项）</summary>
+          <div className="kv sm">${Object.entries(g.facts).map(([k, v]) => html`<span key=${'k' + k}>${k}</span><div key=${'v' + k}>${String(v)}</div>`)}</div></details>` : ''}
+        <${RecordView} rec=${rec} />
+      </div>`}
+    <//>`;
+  }
+
+  function TdPage({ query, cities }) {
+    const ds = TD_DS.some(([k]) => k === query.ds) ? query.ds : 'cs';
+    const f = Object.fromEntries(TD_KEYS[ds].map((k) => [k, query[k] || '']));
+    const fkey = qs({ ds, ...f });
+    // 筛选条件放在地址栏里：刷新、收藏、发链接给别人都还是这批数据
+    const setQ = (patch) => go('td', { ds, ...f, ...patch });
+    const setK = (k) => (v) => setQ({ [k]: v || '' });
+    const [kw, setKw] = useState(f.scenic);
+    const [sidKw, setSidKw] = useState(f.sid);
+    const [sel, setSel] = useState([]);
+    const [cur, setCur] = useState(-1);
+    useEffect(() => { setKw(query.scenic || ''); setSidKw(query.sid || ''); setSel([]); setCur(-1); }, [fkey]); // eslint-disable-line
+    const [sum, refreshSum] = usePoll(() => api('/api/td/summary'), 0);
+    const list = useInfinite('/api/td/list', { ds, ...f }, 50);
+    const row = cur >= 0 ? list.items[cur] : null;
+    const filtered = TD_KEYS[ds].some((k) => f[k]);
+    const scenicCol = (sub) => ({ title: '景区', dataIndex: 'scenic_name', width: 200, render: (v, r) => html`<div className="cell-2"><div className="t ell">${v || '—'}</div>
+      <div className="d ell">${sub(r)}</div></div>` });
+    const preview = (title) => ({ title, dataIndex: 'preview', render: (v, r) => html`<div className="cell-2"><div className="ell sm" title=${v}>${v || '—'}</div>
+      ${r.needs_review && r.flags.length ? html`<div className="d ell" style=${{ color: '#9a5b00' }} title=${r.flags.join('；')}>${r.flags.join('；')}</div>` : ''}</div>` });
+    const cols = {
+      cs: [
+        { title: '质检', dataIndex: 'needs_review', width: 74, render: (v, r) => tdReview(r) },
+        scenicCol((r) => [shortCity(r.city), r.scenic_id].filter(Boolean).join(' · ')),
+        { title: '方式 / 主题', dataIndex: 'topic', width: 150, render: (v, r) => html`<div className="cell-2"><div className="ell">${r.method_name} · ${v || '—'}</div>
+          <div className="d">${r.variant ? `第 ${r.variant} 版 · ` : ''}${r.channel || ''}</div></div>` },
+        preview('游客首句'),
+        { title: '消息', dataIndex: 'turns', width: 58, align: 'right', render: (v) => html`<span className="num">${v}</span>` },
+        { title: '结束 / 满意度', dataIndex: 'end_type', width: 132, render: (v, r) => html`<div className="cell-2"><div className="ell sm">${v || '—'}</div><div className="d">${r.satisfaction != null ? `${r.satisfaction} 分` : '未评'}</div></div>` },
+        { title: '会话时间', dataIndex: 'start_time', width: 104, render: tdTime },
+        { title: '生成时间', dataIndex: 'generated_at', width: 104, render: tdTime },
+      ],
+      eval: [
+        { title: '质检', dataIndex: 'needs_review', width: 74, render: (v, r) => tdReview(r) },
+        scenicCol((r) => r.spot && r.spot !== r.scenic_name ? r.spot : [shortCity(r.city), r.scenic_id].filter(Boolean).join(' · ')),
+        { title: '结论 / 总分', dataIndex: 'verdict', width: 116, render: (v, r) => html`<span className="nw"><${Tag} size="small" color=${{ 合格: 'green', 需改进: 'amber', 不合格: 'red' }[v] || 'grey'}>${v || '—'}<//>
+          ${r.score != null ? html` <b className="num">${r.score}</b>` : ''}</span>` },
+        { title: '放进的问题', dataIndex: 'issues', width: 86, align: 'right', render: (v) => html`<span className="num">${v ?? '—'}</span>` },
+        preview('讲解文字'),
+        { title: '知识来源', dataIndex: 'kb_kind', width: 120, render: (v) => html`<span className="ell sm">${v || '—'}</span>` },
+        { title: '生成时间', dataIndex: 'generated_at', width: 104, render: tdTime },
+      ],
+      narr: [
+        { title: '质检', dataIndex: 'needs_review', width: 74, render: (v, r) => tdReview(r) },
+        scenicCol((r) => r.spot || [shortCity(r.city), r.scenic_id].filter(Boolean).join(' · ')),
+        { title: '游客客群', dataIndex: 'visitor_group', width: 96, render: (v) => v || '—' },
+        { title: '字数', dataIndex: 'char_count', width: 86, align: 'right', render: (v, r) => html`<span className="num nw">${v ?? '—'}<span className="muted"> / ${r.char_limit ?? '—'}</span></span>` },
+        preview('参考讲解词'),
+        { title: '知识来源', dataIndex: 'kb_kind', width: 120, render: (v) => html`<span className="ell sm">${v || '—'}</span>` },
+        { title: '生成时间', dataIndex: 'generated_at', width: 104, render: tdTime },
+      ],
+    }[ds];
+    const s = sum && sum[ds];
+    const tabLabel = (k, n) => {
+      const x = sum && sum[k];
+      return html`<span>${n}${x ? (x.total == null ? html` <${Tooltip} content=${x.error}><span style=${{ color: '#c62828' }}>!</span><//>` : html` <b className="num">${fmt(x.total)}</b>`) : ''}</span>`;
+    };
+    const go2 = (i) => {
+      if (i < 0) return;
+      if (i < list.items.length) setCur(i);
+      else if (list.hasMore) { list.loadMore(); Toast.info('正在加载下一页，稍后再按一次'); }
+    };
+    return html`<div className="page">
+      <${Card} title="已生成的训练数据" style=${{ flex: 'none' }}
+        help="直接查 MySQL 里已经生成的样本：服务重启、刷新页面都还在。「训练数据」页的「处理记录」只是当前任务最近 1000 条（内存里），这里是全部。筛选条件和导出完全一致，看到的就是导出的那一批；筛选条件保存在地址栏，刷新不丢。"
+        sub=${s && s.total != null ? `MySQL 里共 ${fmt(s.total)} 条${s.review ? `，需复核 ${fmt(s.review)}` : ''}${ds === 'cs' && s.rewrite != null ? `（改写 ${fmt(s.rewrite)} · 扩展 ${fmt(s.expand)}）` : ''}` : ''}
+        extra=${html`<span className="toolbar">
+          <${Button} icon=${html`<${Ic.IconRefresh} />`} onClick=${() => { list.reload(); refreshSum(); }}>刷新<//>
+          <${TdExportMenu} ds=${ds} f=${f} theme="solid" label=${`导出${filtered ? '筛选结果' : '全部'}${list.total != null ? ` ${fmt(list.total)} 条` : ''}`} disabled=${!list.total} />
+        </span>`}>
+        <div className="td-bar">
+          <${RadioGroup} type="button" value=${ds} onChange=${(e) => go('td', { ds: e.target.value })}>
+            ${TD_DS.map(([k, n]) => html`<${Radio} key=${k} value=${k}>${tabLabel(k, n)}<//>`)}
+          <//>
+          ${ds === 'cs' && html`<${Select} value=${f.method} onChange=${setK('method')} style=${{ width: 140 }}
+            optionList=${[{ value: '', label: '全部生成方式' }, { value: 'llm_rewrite', label: '改写真实对话' }, { value: 'llm_expand', label: '按景区数据扩展' }]} />`}
+          <${CitySelect} value=${f.city} onChange=${setK('city')} cities=${cities} style=${{ width: 120 }} />
+          <${Input} value=${kw} onChange=${setKw} onEnterPress=${() => setK('scenic')(kw.trim())} onClear=${() => setK('scenic')('')} showClear
+            placeholder="景区ID 或名称，逗号分隔，回车" prefix=${html`<${Ic.IconSearch} />`} style=${{ width: 220 }} />
+          <${Select} value=${f.review} onChange=${setK('review')} style=${{ width: 110 }}
+            optionList=${[{ value: '', label: '全部质检' }, { value: 'ok', label: '质检通过' }, { value: 'review', label: '需复核' }]} />
+          ${ds === 'eval' && html`<${Select} value=${f.verdict} onChange=${setK('verdict')} style=${{ width: 110 }}
+            optionList=${[{ value: '', label: '全部结论' }, ...['合格', '需改进', '不合格', '拒答'].map((x) => ({ value: x, label: x }))]} />`}
+          <${DatePicker} value=${parseYmd(f.gen_date)} onChange=${(d) => setK('gen_date')(d ? ymd(d) : '')} placeholder="生成日期" style=${{ width: 140 }} density="compact" />
+          ${ds === 'cs' && html`<${DatePicker} type="dateRange" value=${f.date_from && f.date_to ? [parseYmd(f.date_from), parseYmd(f.date_to)] : null}
+            onChange=${(v) => setQ({ date_from: v && v[0] ? ymd(v[0]) : '', date_to: v && v[1] ? ymd(v[1]) : '' })}
+            placeholder=${['会话开始', '会话结束']} style=${{ width: 230 }} density="compact" />`}
+          <${Input} value=${sidKw} onChange=${setSidKw} onEnterPress=${() => setK('sid')(sidKw.trim())} onClear=${() => setK('sid')('')} showClear
+            placeholder=${ds === 'cs' ? 'session_id，回车' : ds === 'eval' ? 'eval_task_id，回车' : 'request_id，回车'} style=${{ width: 190 }} />
+          ${filtered && html`<a className="sm" onClick=${() => go('td', { ds })}>清空筛选</a>`}
+        </div>
+      <//>
+      <${Card} title=${TD_DS.find((x) => x[0] === ds)[1]} className="fill" bodyClass="flush"
+        sub=${list.total != null ? `${filtered ? '符合条件' : '共'} ${fmt(list.total)} 条${ds === 'cs' && list.turns ? ` · ${fmt(list.turns)} 条消息` : ''} · 新生成的在前 · 点一行看完整内容` : ''}
+        extra=${sel.length ? html`<span className="toolbar"><span className="muted sm">已选 ${sel.length} 条</span>
+          <${TdExportMenu} ds=${ds} f=${{ sid: sel.join(',') }} label="导出选中" />
+          <${Button} theme="borderless" onClick=${() => setSel([])}>取消选择<//></span>` : null}>
+        <${InfiniteTable} list=${list} columns=${cols} rowKey="id" unit="条"
+          onRowClick=${(r) => setCur(list.items.indexOf(r))} rowClassName=${(r) => (row && r.id === row.id ? 'td-cur' : '')}
+          rowSelection=${{ selectedRowKeys: sel, onChange: (keys) => setSel(keys) }}
+          emptyText=${filtered ? '没有符合条件的数据，换个筛选条件试试' : 'MySQL 里还没有这类数据：到「训练数据」页生成（工作台生成的数据只写 MySQL）'} />
+      <//>
+      <${TdItemSheet} ds=${ds} row=${row} onClose=${() => setCur(-1)}
+        pos=${row ? { i: cur, n: list.items.length, total: list.total, more: list.hasMore } : null}
+        onPrev=${() => go2(cur - 1)} onNext=${() => go2(cur + 1)} />
+    </div>`;
+  }
+
   // ------------------------------------------------------------ 顶栏 / 侧栏
   const PAGES = {
     overview: ['总览', '审核与图片采集进度'],
@@ -1523,11 +1733,12 @@
     gallery: ['图片预览', '按城市 / 景区 / POI 筛选，点开看大图和图片信息'],
     jobs: ['任务中心', '任务按提交顺序逐个执行；遇到登录 / 验证会停在「需要人工」'],
     cs: ['训练数据', '智能客服对话、讲解内容评价、个性化讲解：基于真实数据用大模型生成，可追溯'],
+    td: ['数据查看', '已生成的训练数据（MySQL）：筛选、看完整内容、导出；刷新 / 重启都还在'],
     settings: ['设置', 'AI 判断、核对、图片采集的开关和参数'],
   };
   const NAV = [
     ['overview', '总览', Ic.IconHome], ['review', '核对', Ic.IconCheckboxTick], ['images', '图片采集', Ic.IconCamera],
-    ['data', '数据预览', Ic.IconGridView], ['gallery', '图片预览', Ic.IconGallery], ['cs', '训练数据', Ic.IconComment], ['jobs', '任务中心', Ic.IconList],
+    ['data', '数据预览', Ic.IconGridView], ['gallery', '图片预览', Ic.IconGallery], ['cs', '训练数据', Ic.IconComment], ['td', '数据查看', Ic.IconArticle], ['jobs', '任务中心', Ic.IconList],
   ];
 
   /** 左侧深色图标栏：导航 + 搜索 / 提醒 / 核对人（不再单独占一行顶栏，页面用满高度） */
@@ -1600,6 +1811,7 @@
     else if (route === 'gallery') page = html`<${GalleryPage} ...${props} />`;
     else if (route === 'jobs') page = html`<${JobsPage} ...${props} />`;
     else if (route === 'cs') page = html`<${CsPage} ...${props} />`;
+    else if (route === 'td') page = html`<${TdPage} ...${props} />`;
     else if (route === 'settings') page = html`<${SettingsPage} refreshHealth=${refreshHealth} />`;
     useEffect(() => { document.title = `${PAGES[route][0]} · 景区 POI 数据工作台`; }, [route]);
     return html`<div className="frame">
