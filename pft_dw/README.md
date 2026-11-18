@@ -22,6 +22,10 @@ pft_dw/
 │   ├── data.json       模型数据（由 generator 生成）
 │   ├── schema.json     全表字段 + 字段级血缘 + DDL（网页按需加载）
 │   └── workflow.json   调度工作流与质检规则（网页「调度工作流」页）
+├── source/             客户文档提取：源库表与字段（可阅览）
+│   ├── PFT2.0_源库表与字段.xlsx   说明 / 表清单（83 张）/ 字段清单（1,184 个）/ 文档间差异 / 领域模型字段
+│   ├── source_tables.json         同一份数据的 JSON
+│   └── extract_source.py          提取脚本：python3 source/extract_source.py <文档目录>
 ├── workflow/           调度工作流定义（调度器无关 YAML，可转 DolphinScheduler / Airflow）
 │   ├── 01_pft_dw_daily.yaml … 04_pft_dw_yearly.yaml   日 / 周 / 月 / 年调度：任务、依赖、重试、质检规则
 │   ├── 05_pft_dw_realtime.yaml                       实时：Flink CDC 源、写入表、监控项
