@@ -1,0 +1,56 @@
+/* 开发页数仓信息标签 */
+.meta-tabs{display:flex;align-items:center;gap:4px;padding:0 22px;border-bottom:1px solid var(--line);background:#fff;min-height:42px;overflow-x:auto}
+.meta-tab{border:0;background:none;padding:11px 12px;font-size:12px;color:#77849a;position:relative;white-space:nowrap}
+.meta-tab span{font-size:10px;background:#f0f3f8;color:#8c97a9;border-radius:4px;padding:1px 5px;margin-left:4px}
+.meta-tab.active{color:#3268ef;font-weight:500}
+.meta-tab.active:after{content:"";position:absolute;left:8px;right:8px;bottom:-1px;height:2px;background:#3268ef;border-radius:2px}
+.meta-tabs-info{margin-left:auto;font:11px Consolas,monospace;color:#9aa5b6;white-space:nowrap}
+.meta-panel{display:none;flex:1;min-height:0;overflow:auto;padding:20px 28px 28px;background:#fbfcfe}
+#codeView.meta-mode .meta-panel{display:block}
+#codeView.meta-mode #textEditor,#codeView.meta-mode #jarEditor,#codeView.meta-mode #codeTools,#codeView.meta-mode #formatStatus{display:none!important}
+.meta-head{display:flex;justify-content:space-between;align-items:flex-start;gap:16px;margin-bottom:14px}
+.meta-head h3{margin:0;font-size:16px;font-weight:600;color:#2a3953}
+.meta-head p{margin:6px 0 0;font-size:12px;color:#8d97a8}
+.meta-note{font-size:12px;color:#5d6a80;margin:6px 0;line-height:1.7}
+.meta-note b{display:inline-block;min-width:44px;color:#8d97a8;font-weight:500;margin-right:8px}
+.meta-code{background:#fff;border:1px solid #e4e9f2;border-radius:8px;padding:16px 18px;font:12.5px/1.75 Consolas,"Microsoft YaHei",monospace;color:#33507e;overflow:auto;white-space:pre;margin:12px 0 0;tab-size:4}
+.meta-code.small{font-size:12px;padding:10px 14px;margin-top:8px}
+.sq-kw{color:#3268ef;font-weight:600}.sq-str{color:#b2723b}.sq-cm{color:#98a3b5}
+.meta-filter{border:1px solid #dbe2ef;border-radius:6px;padding:8px 10px;font-size:12px;width:240px}
+.meta-lineage{display:grid;gap:8px;background:#fff;border:1px solid #e4e9f2;border-radius:8px;padding:12px 14px;margin-bottom:14px}
+.meta-lineage>div{display:flex;flex-wrap:wrap;align-items:center;gap:6px;font-size:12px}
+.meta-lineage b{min-width:64px;color:#8d97a8;font-weight:500}
+.meta-chip{border:1px solid #d9e3f6;background:#f4f7ff;color:#3d66c9;border-radius:5px;padding:3px 7px;font:11px Consolas,monospace;white-space:nowrap}
+.meta-chip:hover{border-color:#7fa2f0;background:#eaf0ff}
+.meta-chip i{font-style:normal;color:#7d8ca2}
+.meta-chip.small{padding:1px 5px;font-size:10.5px;margin:1px 3px 1px 0}
+.meta-table-wrap{background:#fff;border:1px solid #e4e9f2;border-radius:8px;overflow:auto}
+.meta-table{border-collapse:collapse;width:100%;font-size:12px}
+.meta-table th{position:sticky;top:0;background:#f6f8fc;color:#7d889b;font-weight:500;text-align:left;padding:9px 10px;border-bottom:1px solid #e8ecf3;white-space:nowrap}
+.meta-table td{padding:8px 10px;border-bottom:1px solid #f0f2f7;vertical-align:top;color:#3d4b63;line-height:1.55}
+.meta-table td.mono,.mono{font-family:Consolas,monospace}
+.meta-table td.muted,.meta-muted{color:#9aa5b6;font-size:11px}
+.meta-src{color:#6b7891;max-width:280px}
+.meta-kind{display:inline-block;font-size:10.5px;background:#f0f3f8;color:#6f7d94;border-radius:4px;padding:1px 6px;white-space:nowrap;margin-right:6px}
+.meta-rule{background:#fff;border:1px solid #e4e9f2;border-radius:8px;padding:12px 14px;margin-bottom:10px}
+.meta-rule header{display:flex;align-items:center;gap:8px;font-size:12px;flex-wrap:wrap}
+.meta-rule header b{font-weight:500;color:#2f3d57}
+.meta-rule header .text-btn{margin-left:auto}
+.meta-rule p{margin:8px 0 0;font-size:12px;color:#4f5d75}
+.meta-rule p b{color:#8d97a8;font-weight:500;margin-right:8px}
+.meta-level{font-size:10.5px;border-radius:4px;padding:1px 6px}
+.meta-level.strong{background:#fdecec;color:#c25555}.meta-level.weak{background:#fff6e5;color:#b8863a}
+.meta-kv{display:grid;grid-template-columns:repeat(auto-fill,minmax(260px,1fr));gap:10px 18px;background:#fff;border:1px solid #e4e9f2;border-radius:8px;padding:14px 16px;margin:0 0 14px}
+.meta-kv div{font-size:12px}.meta-kv dt{color:#8d97a8;margin-bottom:4px}.meta-kv dd{margin:0;color:#34425a;word-break:break-all}
+.meta-cron{font-size:12px;background:#f0f3f8;border-radius:5px;padding:5px 9px;color:#5b6b85}
+.meta-deps{display:grid;grid-template-columns:1fr 1fr;gap:14px}
+.meta-deps section{background:#fff;border:1px solid #e4e9f2;border-radius:8px;padding:12px 14px}
+.meta-deps h4{margin:0 0 10px;font-size:12px;color:#7d889b;font-weight:500}
+.meta-dep{display:flex;align-items:center;gap:6px;width:100%;text-align:left;border:0;background:none;padding:7px 6px;border-radius:5px;font-size:12px;color:#34425a}
+.meta-dep:hover{background:#f4f7ff}
+.meta-dep i{margin-left:auto;font:10.5px Consolas,monospace;color:#a0aabb;font-style:normal}
+@media(max-width:900px){.meta-deps{grid-template-columns:1fr}.meta-filter{width:160px}.meta-tabs-info{display:none}}
+/* 分层标签 */
+.layer-pill.ODS{background:#f1f4f8;color:#6c7a90}
+.layer-pill.DIM{background:#f3eefc;color:#8a6bc9}
+.meta-table td:nth-child(5){min-width:160px;max-width:260px}.meta-table td:nth-child(7),.meta-table td:nth-child(8){min-width:190px}

@@ -1,0 +1,55 @@
+export const layers=['ODS','DIM','DWD','DWS','ADS'];
+export function migrate(old){
+ const data={version:2,folders:[],tasks:[],flows:[]};
+ old.forEach((d,i)=>{const root='domain-'+i,flowFolder=root+'-flows';data.folders.push({id:root,name:d.name,parentId:null},{id:flowFolder,name:'工作流',parentId:root});layers.forEach(l=>data.folders.push({id:root+'-'+l,name:l,parentId:root}));
+ const ids=new Map(d.tasks.map(t=>[t.id,root+'-'+t.id]));
+ data.tasks.push(...d.tasks.map(t=>({id:ids.get(t.id),name:t.name,table:t.table,layer:t.layer,folderId:root+'-'+(layers.includes(t.layer)?t.layer:'DIM'),code:t.code||''})));
+ data.flows.push({id:root+'-flow',name:d.flow||d.name+'工作流',folderId:flowFolder,nodes:d.tasks.map(t=>({taskId:ids.get(t.id),x:Number.isFinite(t.x)?t.x:70,y:Number.isFinite(t.y)?t.y:160})),edges:d.edges.filter(e=>e.every(id=>ids.has(id))).map(e=>e.map(id=>ids.get(id))),groups:d.groups.map((g,j)=>({id:root+'-g'+j,name:g.name,ids:g.ids.filter(id=>ids.has(id)).map(id=>ids.get(id))}))});});return data;
+}
+export function seed(){const rows=[['景区基础信息','dim_scenic_info','DIM',70,160],['游客基础信息','dim_visitor_info','DIM',70,360],['景区客流明细','dwd_scenic_flow','DWD',345,160],['游客行为明细','dwd_visitor_behavior','DWD',345,360],['景区客流日汇总','dws_scenic_flow_day','DWS',620,160],['游客画像汇总','dws_visitor_profile','DWS',620,360],['文旅运营看板','ads_tourism_dashboard','ADS',895,160],['游客画像分析','ads_visitor_analysis','ADS',895,360]];return migrate([{name:'文旅数据',flow:'文旅数据工作流',tasks:rows.map((t,i)=>({id:'t'+i,name:t[0],table:t[1],layer:t[2],x:t[3],y:t[4],code:`-- ${t[0]}\n-- 文旅数据 / ${t[2]}\n\nINSERT OVERWRITE TABLE ${t[1]}\nPARTITION (dt = '\${bizdate}')\nSELECT\n    scenic_id,\n    scenic_name,\n    city_name\nFROM ods_scenic_source\nWHERE dt = '\${bizdate}';\n`})),edges:[['t0','t2'],['t1','t3'],['t2','t4'],['t3','t5'],['t4','t6'],['t5','t7'],['t0','t3']],groups:[{name:'景区运营分析',ids:['t2','t4','t6']},{name:'游客洞察分析',ids:['t3','t5','t7']}]},{name:'交通数据',flow:'交通数据工作流',tasks:[],edges:[],groups:[]}]);}
+export function worldPoint(camera,p){return {x:(p.x-camera.x)/camera.scale,y:(p.y-camera.y)/camera.scale};}
+export function zoomAt(camera,scale,point){const w=worldPoint(camera,point),s=Math.min(2.5,Math.max(.25,scale));return {x:point.x-w.x*s,y:point.y-w.y*s,scale:s};}
+export function canLink(edges,from,to){if(from===to||edges.some(e=>e[0]===from&&e[1]===to))return false;const visited=new Set();function reaches(id){if(id===from)return true;if(visited.has(id))return false;visited.add(id);return edges.filter(e=>e[0]===id).some(e=>reaches(e[1]));}return !reaches(to);}
+export function removeNodes(flow,ids){flow.nodes=flow.nodes.filter(n=>!ids.has(n.taskId));flow.edges=flow.edges.filter(e=>e.every(id=>!ids.has(id)));flow.groups.forEach(g=>g.ids=g.ids.filter(id=>!ids.has(id)));flow.groups=flow.groups.filter(g=>g.ids.length);}
+export function groupBounds(flow,group){const ns=flow.nodes.filter(n=>group.ids.includes(n.taskId));if(!ns.length)return null;const x=Math.min(...ns.map(n=>n.x))-18,y=Math.min(...ns.map(n=>n.y))-47;return {x,y,w:group.collapsed?240:Math.max(...ns.map(n=>n.x))+210-x,h:group.collapsed?82:Math.max(...ns.map(n=>n.y))+113-y};}
+// Projection changes only what is drawn; task positions, code and dependency edges stay intact.
+export function projectFlow(flow){const hidden=new Map(),items=[],byTask=new Map();for(const g of flow.groups){if(!g.collapsed)continue;const b=groupBounds(flow,g);if(!b)continue;const item={key:'group:'+g.id,groupId:g.id,ids:g.ids.filter(id=>flow.nodes.some(n=>n.taskId===id)),...b};items.push(item);for(const id of item.ids){hidden.set(id,g.id);byTask.set(id,item)}}for(const n of flow.nodes){if(hidden.has(n.taskId))continue;const item={key:'task:'+n.taskId,ids:[n.taskId],x:n.x,y:n.y,w:192,h:96};items.push(item);byTask.set(n.taskId,item)}const edges=[],seen=new Set();for(const [a,b]of flow.edges){const from=byTask.get(a),to=byTask.get(b);if(!from||!to||from.key===to.key)continue;const key=JSON.stringify([from.key,to.key]);if(seen.has(key))continue;seen.add(key);edges.push({from,to})}return {items,hidden,edges};}
+
+export function connectionPairs(flow,fromKey,toKey){
+ const items=projectFlow(flow).items,from=items.find(i=>i.key===fromKey),to=items.find(i=>i.key===toKey);
+ if(!from||!to||fromKey===toKey)throw Error('请选择不同的上游和下游');
+ const leaves=from.ids.filter(id=>!flow.edges.some(([a,b])=>a===id&&from.ids.includes(b)));
+ const roots=to.ids.filter(id=>!flow.edges.some(([a,b])=>b===id&&to.ids.includes(a)));
+ const next=[...flow.edges],pairs=[];
+ for(const a of leaves)for(const b of roots){if(next.some(e=>e[0]===a&&e[1]===b))continue;if(!canLink(next,a,b))throw Error('不能形成循环依赖');pairs.push([a,b]);next.push([a,b])}
+ if(!pairs.length)throw Error('这些任务已连接');return pairs;
+}
+
+export function layerFolder(data,baseId,layer){
+ let root=data.folders.find(f=>f.id===baseId);const seen=new Set();
+ while(root?.parentId&&!seen.has(root.id)){seen.add(root.id);root=data.folders.find(f=>f.id===root.parentId)}
+ if(!root)return null;
+ const matches=data.folders.filter(f=>f.name===layer&&f.parentId===root.id);return matches.length===1?matches[0].id:null;
+}
+export function registerTask(data,task,workflowId=null,point=null){
+ if(!data.folders.some(f=>f.id===task.folderId))throw Error('目标文件夹不存在');
+ if(data.tasks.some(t=>t.id===task.id||t.table===task.table))throw Error('任务标识已存在');
+ const workflow=workflowId?data.flows.find(f=>f.id===workflowId):null;
+ if(workflowId&&(!workflow||!point||!Number.isFinite(point.x)||!Number.isFinite(point.y)))throw Error('工作流或画布位置无效');
+ data.tasks.push(task);if(workflow)workflow.nodes.push({taskId:task.id,x:point.x,y:point.y});
+}
+
+// 泳道自动排布：flow.layout 由 PFT 项目种子写入。分组折叠/展开后按列重新堆叠，
+// 主线 ODS→DWD→DWS→ADS 横向排列，DIM 等分支放在主线下方，不与展开的分组重叠。
+export function relayout(flow){
+ const L=flow?.layout;if(!L)return false;
+ const pos=new Map(flow.nodes.map(n=>[n.taskId,n]));
+ const place=(gid,gx,gy)=>{const g=flow.groups.find(g=>g.id===gid);if(!g)return [0,0];const b=groupBounds(flow,g);if(!b)return [0,0];
+  const dx=gx-b.x,dy=gy-b.y;for(const id of g.ids){const n=pos.get(id);if(n){n.x+=dx;n.y+=dy}}return [b.w,b.h]};
+ const colGap=L.colGap??150,rowGap=L.rowGap??36;let x=L.x0;const heights=[],xs=[];
+ for(const col of L.columns){xs.push(x);let y=L.y0,wmax=240;for(const gid of col){const [w,h]=place(gid,x,y);if(!w)continue;y+=h+rowGap;wmax=Math.max(wmax,w)}heights.push(y-L.y0);x+=wmax+colGap}
+ if(L.branch){const b=L.branch;let bx=xs[b.col]??L.x0;const by=L.y0+Math.max(0,...heights)+(L.branchGap??150);for(const gid of b.groups){const [w]=place(gid,bx,by);if(w)bx+=w+colGap}}
+ if(L.start&&pos.has(L.start))Object.assign(pos.get(L.start),{x:L.x0-300,y:L.y0+20});
+ if(L.end&&pos.has(L.end))Object.assign(pos.get(L.end),{x,y:L.y0+20});
+ return true;
+}

@@ -23,6 +23,8 @@ pft_dw/
 │   ├── schema.json     全表字段 + 字段级血缘 + DDL（网页按需加载）
 │   ├── workflow.json   调度工作流与质检规则（网页「调度工作流」页）
 │   └── source.json     客户文档提取的源库表与字段（网页「源库表与字段」页，由 source/extract_source.py 生成）
+├── devui/              数据开发平台（Python + SQLite 后端）：PFT 项目的任务、工作流（ODS→DWD→DWS→ADS，DIM 分支）、
+│                       开发页看 DDL / 字段血缘 / 质量规则 / 调度依赖。启动：python3 devui/server/app.py，见 devui/README.md
 ├── source/             客户文档提取：源库表与字段（可阅览）
 │   ├── PFT2.0_源库表与字段.xlsx   说明 / 表清单（83 张）/ 字段清单（1,184 个）/ 文档间差异 / 领域模型字段
 │   ├── source_tables.json         同一份数据的 JSON
