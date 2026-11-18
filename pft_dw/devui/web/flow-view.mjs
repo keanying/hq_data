@@ -131,13 +131,20 @@ export function edgeView(flow, projected) {
 export function highlight(svg, keys, root) {
   const on = keys.size > 0, near = new Set();
   svg.classList.toggle('hl-on', on);
+  let ins = 0, outs = 0;
   svg.querySelectorAll('[data-edge]').forEach(el => {
-    const hit = on && (keys.has(el.dataset.from) || keys.has(el.dataset.to));
+    const out = on && keys.has(el.dataset.from), inn = on && keys.has(el.dataset.to), hit = out || inn;
     el.classList.toggle('edge-hl', hit);
-    el.querySelector('.edge')?.setAttribute('marker-end', hit ? 'url(#arrowHl)' : 'url(#arrow)');
+    el.classList.toggle('edge-out', out);              // 从选中节点流出（下游）
+    el.classList.toggle('edge-in', inn && !out);       // 流入选中节点（上游）
+    el.querySelector('.edge')?.setAttribute('marker-end', out ? 'url(#arrowOut)' : inn ? 'url(#arrowIn)' : 'url(#arrow)');
+    if (out) outs++; if (inn && !out) ins++;
     if (hit) { near.add(el.dataset.from); near.add(el.dataset.to); }
   });
   keys.forEach(k => near.delete(k));
+  let legend = root.closest('.canvas')?.querySelector('.flow-legend');
+  if (!legend && root.closest('.canvas')) { legend = document.createElement('div'); legend.className = 'flow-legend'; root.closest('.canvas').append(legend); }
+  if (legend) { legend.hidden = !on; legend.innerHTML = `<span class="lg-in">上游流入 ${ins}</span><span class="lg-out">下游流出 ${outs}</span>`; }
   root.querySelectorAll('.node[data-id]').forEach(el => el.classList.toggle('hl-near', near.has('task:' + el.dataset.id)));
   root.querySelectorAll('[data-group-box]').forEach(el => el.classList.toggle('hl-near', near.has('group:' + el.dataset.groupBox)));
 }
