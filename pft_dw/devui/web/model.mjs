@@ -39,17 +39,27 @@ export function registerTask(data,task,workflowId=null,point=null){
  data.tasks.push(task);if(workflow)workflow.nodes.push({taskId:task.id,x:point.x,y:point.y});
 }
 
-// 泳道自动排布：flow.layout 由 PFT 项目种子写入。分组折叠/展开后按列重新堆叠，
-// 主线 ODS→DWD→DWS→ADS 横向排列，DIM 等分支放在主线下方，不与展开的分组重叠。
+// 泳道自动排布（flow.layout 由 PFT 项目种子写入，与 server/seed_pft.py 的 relayout 同一算法）
+// 网格：泳道（分层）沿流向排列，行=数据域；dir=LR 时流向从左到右、TB 时从上到下。
+// 分支（如 DIM）贴在锚定泳道一侧的网格外，按 cols 列排布。分组折叠/展开后重新计算，展开的分组不会与相邻分组重叠。
 export function relayout(flow){
- const L=flow?.layout;if(!L)return false;
- const pos=new Map(flow.nodes.map(n=>[n.taskId,n]));
- const place=(gid,gx,gy)=>{const g=flow.groups.find(g=>g.id===gid);if(!g)return [0,0];const b=groupBounds(flow,g);if(!b)return [0,0];
-  const dx=gx-b.x,dy=gy-b.y;for(const id of g.ids){const n=pos.get(id);if(n){n.x+=dx;n.y+=dy}}return [b.w,b.h]};
- const colGap=L.colGap??150,rowGap=L.rowGap??36;let x=L.x0;const heights=[],xs=[];
- for(const col of L.columns){xs.push(x);let y=L.y0,wmax=240;for(const gid of col){const [w,h]=place(gid,x,y);if(!w)continue;y+=h+rowGap;wmax=Math.max(wmax,w)}heights.push(y-L.y0);x+=wmax+colGap}
- if(L.branch){const b=L.branch;let bx=xs[b.col]??L.x0;const by=L.y0+Math.max(0,...heights)+(L.branchGap??150);for(const gid of b.groups){const [w]=place(gid,bx,by);if(w)bx+=w+colGap}}
- if(L.start&&pos.has(L.start))Object.assign(pos.get(L.start),{x:L.x0-300,y:L.y0+20});
- if(L.end&&pos.has(L.end))Object.assign(pos.get(L.end),{x,y:L.y0+20});
+ const L=flow?.layout;if(!L||!L.lanes)return false;
+ const TB=L.dir==='TB',pos=new Map(flow.nodes.map(n=>[n.taskId,n])),G=new Map(flow.groups.map(g=>[g.id,g]));
+ const ext=gid=>{const g=G.get(gid),b=g&&groupBounds(flow,g);return b?{b,la:TB?b.h:b.w,lc:TB?b.w:b.h}:null};
+ const put=(gid,a,c)=>{const e=ext(gid);if(!e)return;const x=TB?c:a,y=TB?a:c,dx=x-e.b.x,dy=y-e.b.y;for(const id of G.get(gid).ids){const n=pos.get(id);if(n){n.x+=dx;n.y+=dy}}};
+ const laneGap=L.laneGap??150,rowGap=L.rowGap??40,A0=L.a0??380,C0=L.c0??160,rows=L.rows||[],ri=r=>Math.max(0,rows.indexOf(r));
+ const laneSize=L.lanes.map(()=>0),rowSize=rows.length?rows.map(()=>0):[0];
+ L.lanes.forEach((lane,i)=>{for(const [r,gid] of Object.entries(L.cells[lane]||{})){const e=ext(gid);if(!e)continue;laneSize[i]=Math.max(laneSize[i],e.la);rowSize[ri(r)]=Math.max(rowSize[ri(r)],e.lc)}});
+ const lanePos=[];let a=A0;laneSize.forEach((s,i)=>{lanePos[i]=a;if(s)a+=s+laneGap});
+ const rowPos=[];let c=C0;rowSize.forEach((s,i)=>{rowPos[i]=c;if(s)c+=s+rowGap});
+ L.lanes.forEach((lane,i)=>{for(const [r,gid] of Object.entries(L.cells[lane]||{}))put(gid,lanePos[i],rowPos[ri(r)])});
+ if(L.branch){const B=L.branch,cols=B.cols||2,ai=Math.max(0,L.lanes.indexOf(B.anchor)),es=B.groups.map(ext),sub=Array(cols).fill(0),brow=[];
+  es.forEach((e,i)=>{if(!e)return;sub[i%cols]=Math.max(sub[i%cols],e.la);const r=Math.floor(i/cols);brow[r]=Math.max(brow[r]||0,e.lc)});
+  const subPos=[];let sa=lanePos[ai];sub.forEach((s,k)=>{subPos[k]=sa;sa+=s+90});
+  const bPos=[];let bc=c-rowGap+(B.gap??150);brow.forEach((s,r)=>{bPos[r]=bc;bc+=s+rowGap});
+  B.groups.forEach((gid,i)=>put(gid,subPos[i%cols],bPos[Math.floor(i/cols)]))}
+ const node=(id,na,nc)=>{const n=pos.get(id);if(n){n.x=TB?nc:na;n.y=TB?na:nc}};
+ if(L.start)node(L.start,A0-(TB?96:192)-laneGap,C0);
+ if(L.end)node(L.end,a,C0);
  return true;
 }

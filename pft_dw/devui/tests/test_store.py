@@ -64,3 +64,36 @@ class StoreTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class LayoutParityTest(unittest.TestCase):
+    """前端 model.mjs 与后端 seed_pft.py 的泳道排布结果一致（需要本机有 node，否则跳过）"""
+
+    def test_js_python_same(self):
+        import copy, shutil, subprocess
+        if not shutil.which("node"):
+            self.skipTest("未安装 node")
+        web = Path(__file__).resolve().parents[1] / "web" / "model.mjs"
+        script = ("import {relayout} from %s;import fs from 'node:fs';const fl=JSON.parse(fs.readFileSync(0,'utf8'));"
+                  "console.log(JSON.stringify(fl.map(f=>{relayout(f);return f.nodes.map(n=>[n.taskId,Math.round(n.x),Math.round(n.y)])})))"
+                  % json.dumps(web.as_uri()))
+        draft = seed_pft.build()[0]
+        cases = []
+        for f in draft["flows"]:
+            if not f.get("layout"):
+                continue
+            for d in ("LR", "TB"):
+                for expand in (None, f["groups"][3]["id"], f["layout"]["branch"]["groups"][0]):
+                    g = copy.deepcopy(f)
+                    g["layout"]["dir"] = d
+                    for x in g["groups"]:
+                        if x["id"] == expand:
+                            x["collapsed"] = False
+                    cases.append(g)
+        py = []
+        for g in copy.deepcopy(cases):
+            seed_pft.relayout(g)
+            py.append([[n["taskId"], round(n["x"]), round(n["y"])] for n in g["nodes"]])
+        r = subprocess.run(["node", "--input-type=module", "-e", script], input=json.dumps(cases), capture_output=True, text=True)
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertEqual(py, json.loads(r.stdout))

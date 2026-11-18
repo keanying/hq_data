@@ -54,3 +54,17 @@
 .layer-pill.ODS{background:#f1f4f8;color:#6c7a90}
 .layer-pill.DIM{background:#f3eefc;color:#8a6bc9}
 .meta-table td:nth-child(5){min-width:160px;max-width:260px}.meta-table td:nth-child(7),.meta-table td:nth-child(8){min-width:190px}
+/* 工作流显示层 */
+#edges g.edge-redundant{display:none}
+#edges g.edge-redundant.edge-hl{display:inline}
+#edges g.edge-branch .edge{stroke-dasharray:5 4;stroke:#c3b5e6}
+#edges .edge{transition:opacity .15s,stroke .15s}
+#edges.hl-on .edge{opacity:.12}
+#edges.hl-on g.edge-hl .edge{opacity:1;stroke:#3268ef;stroke-width:2.4;stroke-dasharray:none}
+.node.hl-near,.group-box.hl-near{border-color:#7fa2f0;box-shadow:0 0 0 3px #3268ef22}
+.canvas .zoom{width:auto;padding-left:4px}
+.dir-toggle{width:auto!important;font-size:12px!important;padding:0 10px;border-right:1px solid #e4e9f2!important;white-space:nowrap}
+.canvas.dir-tb .port{top:auto;left:50%;transform:translateX(-50%)}
+.canvas.dir-tb .port-in{top:-7px;left:50%}
+.canvas.dir-tb .port-out{bottom:-7px;right:auto;left:50%}
+.canvas.dir-tb .node:before,.canvas.dir-tb .node:after{display:none}

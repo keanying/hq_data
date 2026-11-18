@@ -24,7 +24,7 @@ WEB = next(p for p in [Path(os.environ["PFT_SEED_DIR"]) if os.environ.get("PFT_S
 LAYERS = ["ODS", "DIM", "DWD", "DWS", "ADS"]
 TASK_W, TASK_H = 192, 96
 PAIR_DX, PITCH_X, PITCH_Y = 222, 470, 128
-COL_GAP, ROW_GAP, BRANCH_GAP = 150, 36, 150
+COL_GAP, ROW_GAP, BRANCH_GAP = 150, 40, 150
 
 
 def load():
@@ -47,10 +47,11 @@ def task_key(node):
     return i.replace(".", "_")    # start_daily / end_daily
 
 
-# ---------- 泳道排布（与前端 model.mjs 的 relayout 同一算法） ----------
-def bounds(flow, gid):
-    g = next(g for g in flow["groups"] if g["id"] == gid)
+# ---------- 泳道排布（与前端 web/model.mjs 的 relayout 同一算法） ----------
+def bounds(flow, g):
     ns = [n for n in flow["nodes"] if n["taskId"] in g["ids"]]
+    if not ns:
+        return None
     x = min(n["x"] for n in ns) - 18
     y = min(n["y"] for n in ns) - 47
     if g.get("collapsed"):
@@ -59,42 +60,86 @@ def bounds(flow, gid):
 
 
 def relayout(flow):
+    """网格：泳道（分层）沿流向排列，行=数据域；dir=LR 从左到右，TB 从上到下；分支贴在锚定泳道一侧的网格外。"""
     L = flow.get("layout")
-    if not L:
-        return
+    if not L or not L.get("lanes"):
+        return False
+    TB = L.get("dir") == "TB"
     pos = {n["taskId"]: n for n in flow["nodes"]}
+    G = {g["id"]: g for g in flow["groups"]}
 
-    def place(gid, gx, gy):
-        x, y, w, h = bounds(flow, gid)
-        g = next(g for g in flow["groups"] if g["id"] == gid)
-        for i in g["ids"]:
+    def ext(gid):
+        g = G.get(gid)
+        b = g and bounds(flow, g)
+        if not b:
+            return None
+        return b, (b[3] if TB else b[2]), (b[2] if TB else b[3])
+
+    def put(gid, a, c):
+        e = ext(gid)
+        if not e:
+            return
+        x, y = (c, a) if TB else (a, c)
+        dx, dy = x - e[0][0], y - e[0][1]
+        for i in G[gid]["ids"]:
             if i in pos:
-                pos[i]["x"] += gx - x
-                pos[i]["y"] += gy - y
-        return w, h
+                pos[i]["x"] += dx
+                pos[i]["y"] += dy
 
-    x = L["x0"]
-    heights, xs = [], []
-    for col in L["columns"]:
-        xs.append(x)
-        y, wmax = L["y0"], 240
-        for gid in col:
-            w, h = place(gid, x, y)
-            y += h + L.get("rowGap", ROW_GAP)
-            wmax = max(wmax, w)
-        heights.append(y - L["y0"])
-        x += wmax + L.get("colGap", COL_GAP)
-    if L.get("branch"):
-        b = L["branch"]
-        bx = xs[b["col"]]
-        by = L["y0"] + max(heights[:max(1, b.get("below", len(heights)))] or [0]) + L.get("branchGap", BRANCH_GAP)
-        for gid in b["groups"]:
-            w, h = place(gid, bx, by)
-            bx += w + L.get("colGap", COL_GAP)
-    if L.get("start") in pos:
-        pos[L["start"]].update(x=L["x0"] - 300, y=L["y0"] + 20)
-    if L.get("end") in pos:
-        pos[L["end"]].update(x=x, y=L["y0"] + 20)
+    lane_gap, row_gap = L.get("laneGap", 150), L.get("rowGap", 40)
+    A0, C0, rows = L.get("a0", 380), L.get("c0", 160), L.get("rows", [])
+    ri = lambda r: rows.index(r) if r in rows else 0
+    lane_size = [0] * len(L["lanes"])
+    row_size = [0] * max(1, len(rows))
+    for i, lane in enumerate(L["lanes"]):
+        for r, gid in L["cells"].get(lane, {}).items():
+            e = ext(gid)
+            if e:
+                lane_size[i] = max(lane_size[i], e[1])
+                row_size[ri(r)] = max(row_size[ri(r)], e[2])
+    lane_pos, a = [], A0
+    for s in lane_size:
+        lane_pos.append(a)
+        if s:
+            a += s + lane_gap
+    row_pos, c = [], C0
+    for s in row_size:
+        row_pos.append(c)
+        if s:
+            c += s + row_gap
+    for i, lane in enumerate(L["lanes"]):
+        for r, gid in L["cells"].get(lane, {}).items():
+            put(gid, lane_pos[i], row_pos[ri(r)])
+    B = L.get("branch")
+    if B:
+        cols = B.get("cols", 2)
+        ai = L["lanes"].index(B["anchor"]) if B.get("anchor") in L["lanes"] else 0
+        es = [ext(g) for g in B["groups"]]
+        sub, brow = [0] * cols, {}
+        for i, e in enumerate(es):
+            if e:
+                sub[i % cols] = max(sub[i % cols], e[1])
+                brow[i // cols] = max(brow.get(i // cols, 0), e[2])
+        sub_pos, sa = [], lane_pos[ai]
+        for s in sub:
+            sub_pos.append(sa)
+            sa += s + 90
+        b_pos, bc = {}, c - row_gap + B.get("gap", 150)
+        for r in sorted(brow):
+            b_pos[r] = bc
+            bc += brow[r] + row_gap
+        for i, gid in enumerate(B["groups"]):
+            put(gid, sub_pos[i % cols], b_pos.get(i // cols, bc))
+
+    def node(i, na, nc):
+        if i in pos:
+            pos[i]["x"], pos[i]["y"] = (nc, na) if TB else (na, nc)
+
+    if L.get("start"):
+        node(L["start"], A0 - (96 if TB else 192) - lane_gap, C0)
+    if L.get("end"):
+        node(L["end"], a, C0)
+    return True
 
 
 def build():
@@ -197,7 +242,8 @@ def build():
         flow = {"id": "flow_" + fid, "name": name, "folderId": "wf", "nodes": [], "edges": [], "groups": [],
                 "parameters": params if fid != "realtime" else [], "env": ""}
         flow["env"] = "\n".join(p["name"] + "=" + p["value"] for p in flow["parameters"])
-        layout = {"x0": 380, "y0": 120, "colGap": COL_GAP, "rowGap": ROW_GAP, "branchGap": BRANCH_GAP, "columns": []}
+        layout = {"dir": "LR", "a0": 380, "c0": 160, "laneGap": COL_GAP, "rowGap": ROW_GAP,
+                  "lanes": [], "rows": [], "cells": {}}
         placed = set()
 
         def make_group(gid, gname, items):
@@ -223,8 +269,16 @@ def build():
             return None
 
         dq_of = {n["table"]: n for n in fnodes if n["kind"] == "dq"}
-        for cname, cnodes in columns_spec:
-            col = []
+        doms = set()
+        for cname, cnodes, by_domain in columns_spec:
+            layout["lanes"].append(cname)
+            cells = layout["cells"].setdefault(cname, {})
+            if not by_domain:       # 整列一个分组（如对账）
+                items = [(n, None) for n in cnodes]
+                g = make_group(f"g_{fid}_{cname}", cname, items)
+                if g:
+                    cells["_"] = g
+                continue
             by_dom = {}
             for n in cnodes:
                 by_dom.setdefault(n.get("domain", ""), []).append(n)
@@ -233,10 +287,11 @@ def build():
                 label = f"{cname} · {dom_cn.get(dom, dom)}" if dom else cname
                 g = make_group(f"g_{fid}_{cname}_{dom or 'x'}", label, items)
                 if g:
-                    col.append(g)
-            layout["columns"].append(col)
+                    cells[dom] = g
+                    doms.add(dom)
+        layout["rows"] = [d for d in dom_order if d in doms] + sorted(d for d in doms if d not in dom_order)
         if branch_spec:
-            bcol, bname, bnodes = branch_spec
+            anchor, bname, bnodes = branch_spec
             by_dom = {}
             for n in bnodes:
                 by_dom.setdefault(n.get("domain", ""), []).append(n)
@@ -246,7 +301,7 @@ def build():
                 g = make_group(f"g_{fid}_{bname}_{dom}", f"{bname} · {dom_cn.get(dom, dom)}", items)
                 if g:
                     gids.append(g)
-            layout["branch"] = {"col": bcol, "groups": gids, "label": bname}
+            layout["branch"] = {"anchor": anchor, "groups": gids, "label": bname, "cols": 2, "gap": BRANCH_GAP}
         for n in fnodes:
             if n["kind"] in ("start", "end"):
                 k = task_key(n)
@@ -263,27 +318,16 @@ def build():
     L = lambda layer: [n for n in daily if n["kind"] == "task" and n["layer"] == layer]
     recon = [n for n in daily if n["kind"] == "recon"]
     lane_flow("daily", "日调度 · 主流程", daily,
-              [("ODS", L("ODS")), ("DWD", L("DWD")), ("DWS", L("DWS")), ("ADS", L("ADS"))] +
-              ([("实时/离线对账", recon)] if recon else []),
-              branch_spec=(1, "DIM", L("DIM")))
-    # 对账节点不按域拆组：合并为一个分组
-    fl = flows[-1]
-    rg = [g for g in fl["groups"] if g["id"].startswith("g_daily_实时/离线对账")]
-    if len(rg) > 1:
-        keep = rg[0]
-        for g in rg[1:]:
-            keep["ids"] += g["ids"]
-            fl["groups"].remove(g)
-        keep["name"] = "实时/离线对账"
-        fl["layout"]["columns"][-1] = [keep["id"]]
-        relayout(fl)
+              [("ODS", L("ODS"), True), ("DWD", L("DWD"), True), ("DWS", L("DWS"), True), ("ADS", L("ADS"), True)] +
+              ([("实时/离线对账", recon, False)] if recon else []),
+              branch_spec=("ODS", "DIM", L("DIM")))
 
     rtn = [n for n in nodes if n["flow"] == "realtime"]
     R = lambda layer: [n for n in rtn if n["kind"] == "task" and n["layer"] == layer]
     lane_flow("realtime", "实时 · Flink 作业", rtn,
-              [("ODS 实时", R("ODS")), ("DWD 实时", R("DWD")), ("DWS 实时", R("DWS")), ("ADS 实时", R("ADS")),
-               ("Flink 作业监控", [n for n in rtn if n["kind"] == "dq" and not n.get("table")])],
-              branch_spec=(1, "离线维表 lookup", [n for n in rtn if n["kind"] == "ext"]))
+              [("ODS 实时", R("ODS"), True), ("DWD 实时", R("DWD"), True), ("DWS 实时", R("DWS"), True), ("ADS 实时", R("ADS"), True),
+               ("Flink 作业监控", [n for n in rtn if n["kind"] == "dq" and not n.get("table")], False)],
+              branch_spec=("DWD 实时", "离线维表 lookup", [n for n in rtn if n["kind"] == "ext"]))
 
     for fid, nm in (("weekly", "周调度"), ("monthly", "月调度"), ("yearly", "年调度")):
         fn = [n for n in nodes if n["flow"] == fid]
