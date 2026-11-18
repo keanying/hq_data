@@ -10,6 +10,8 @@ from openpyxl.styles import Font, PatternFill, Alignment
 
 with contextlib.redirect_stdout(io.StringIO()):
     import model as M
+import spec
+import formulas as F
 
 A, D, C = M.A, M.D, M.C
 PER_SNAPSHOT = "取快照日值"
@@ -70,8 +72,15 @@ seq = {A: 0, D: 0, C: 0}
 pref = {A: "A", D: "D", C: "C"}
 for en, cn, tp, dom, kou, calc, unit, src in M.BASE:
     seq[tp] += 1
-    bases.append(dict(code="%s%03d" % (pref[tp], seq[tp]), en=en, cn=cn, type=tp, domain=dom, kou=kou, calc=calc,
-                      unit=unit, src=src, dws=M.base_tables.get(en, []), ads=sorted(M.ads_by_base.get(en, []))))
+    bases.append(dict(code="%s%03d" % (pref[tp], seq[tp]), en=en, cn=cn, type=tp, domain=dom, kou=spec.KOU_BIZ.get(en, kou), calc=calc,
+                      unit=unit, src=src, dws=M.base_tables.get(en, []), ads=sorted(M.ads_by_base.get(en, [])),
+                      time_basis=spec.TIME_BASIS[en], dtype=spec.dtype(en, unit)[0], precision=spec.dtype(en, unit)[1]))
+BOBJ = {b["en"]: b for b in bases}
+CN_OF = {b["en"]: b["cn"] for b in bases}
+missing_f = [b["en"] for b in bases if b["en"] not in F.ATOM and b["en"] not in F.COMP]
+assert not missing_f, missing_f
+for b in bases:
+    b["formula"] = F.base_formula(b["en"], CN_OF)
 code_of = {b["en"]: b["code"] for b in bases}
 
 ads_m = []
@@ -80,9 +89,17 @@ for r in M.ADS_M:
     if r["period"] == "截至当日" and r["type"] == A:
         r["formula"] = "取 DWS 原子口径 %s 的快照日值（%s）" % (r["base"], M.BNAME[r["base"]][5])
     r["base_code"] = code_of[r["base"]]
+    r["kou"] = spec.ads_kou(r, BOBJ[r["base"]])
+    r["mod_cn"] = r["mod"].split("=", 1)[1] if r["mod"] != "—" else ""
+    r["formula"] = F.ads_formula(r, CN_OF, spec.TIME_BASIS[r["base"]])
+    r["time_basis"] = spec.TIME_BASIS[r["base"]]
+    r["dtype"], r["precision"] = spec.dtype(r["en"], r["unit"])
+    r["freq"] = spec.freq(r["ads"])
     ads_m.append(r)
 
-issues = [dict(no=r[0], cat=r[1], q=r[2], a=r[3], impact=r[4]) for r in M.ISSUES]
+_iss = [list(r) for r in M.ISSUES]
+_iss.append([len(_iss) + 1, "口径", "比率精度与除零规则", "比率类统一 分子*100/分母，保留 6 位小数，存百分数数值；金额、平均值保留 2 位小数；分母为 0 时结果为空（NULL）", "影响全部 _rate 与 avg_ 指标"])
+issues = [dict(no=r[0], cat=r[1], q=r[2], a=r[3], impact=r[4]) for r in _iss]
 dbs = OrderedDict()
 for t in tables:
     if t["layer"] == "ODS" and t["db"]:
@@ -95,10 +112,47 @@ summary = dict(
     ads=len(ads_m), ads_by=dict(Counter(r["mode"] for r in ads_m)))
 for r in ads_m:
     r["sql"] = sample_sql(r)
+# ---------------- 字段 + DDL
+exec(open(os.path.join(HERE, "build_schema.py"), encoding="utf-8").read())
+for t in tables:
+    t["col_qty"] = len(SCH[t["short"]]["cols"])
+    t["engine"] = SCH[t["short"]]["engine"]
+json.dump({k: dict(cols=v["cols"], ddl=v["ddl"], engine=v["engine"]) for k, v in SCH.items()},
+          open(os.path.join(OUT, "web", "schema.json"), "w", encoding="utf-8"), ensure_ascii=False, separators=(",", ":"))
+DDL_DIR = os.path.join(OUT, "ddl")
+os.makedirs(DDL_DIR, exist_ok=True)
+for f in os.listdir(DDL_DIR):
+    os.remove(os.path.join(DDL_DIR, f))
+_lay = OrderedDict()
+for t in tables:
+    _lay.setdefault(("rt_" if t["rt"] else "") + t["layer"].lower(), []).append(t)
+for i, (k, ts) in enumerate(_lay.items(), 1):
+    with open(os.path.join(DDL_DIR, "%02d_%s.sql" % (i, k)), "w", encoding="utf-8") as fh:
+        fh.write("-- PFT 2.0 数仓 DDL：%s（%d 张表）\n-- 由 generator/make_all.py 生成，请勿手改\n\n" % (k.upper(), len(ts)))
+        for t in ts:
+            fh.write("-- ========== %s  %s ==========\n%s\n\n" % (t["name"], t["cn"], SCH[t["short"]]["ddl"]))
+
 data = dict(tables=tables, bases=bases, ads=ads_m, issues=issues, quality=build_quality(tables, bases, ads_m), bus=BUS,
             domains=[dict(k=k, v=v) for k, v in M.DOMAIN.items()],
             dbs=[dict(db=k, tables=v) for k, v in dbs.items()], summary=summary,
             mods=M.MOD_DESC)
+_nc = sum(len(v["cols"]) for v in SCH.values())
+_cm = sum(1 for v in SCH.values() for c in v["cols"] if c["c"])
+_enum = [(k, c["n"]) for k, v in SCH.items() for c in v["cols"] if c["k"] == "状态类型" and TB[k]["layer"] != "ODS"
+         and not re.search(r"[A-Z0-9_]+-|[0-9]-|[0-9]=|：|:", c["c"])]
+_kw = [(k, c["n"]) for k, v in SCH.items() if TB[k]["layer"] != "ODS" for c in v["cols"]
+       if not re.search(r"_(id|no|code|name|type|status|date|time|amt|qty|rate|desc|num)$", c["n"])]
+_lin = [(k, c["n"]) for k, v in SCH.items() if TB[k]["layer"] != "ODS" for c in v["cols"] if not c["r"] and c["k"] not in ("ETL", "拉链") and "常量" not in c["s"] and k != "dim_opr_date_f"]
+def _qadd(key, name, ok, value, detail):
+    for dm in data["quality"]["dims"]:
+        if dm["key"] == key:
+            dm["checks"].append(dict(name=name, value=value, status="通过" if ok else "待改进", detail=detail))
+            dm["total"] += 1
+            dm["pass"] += 1 if ok else 0
+_qadd("std", "字段与表全部带注释", _cm == _nc, "%d/%d" % (_cm, _nc), "242 张表 DDL 均含 COMMENT；类型/状态字段逐值写明含义")
+_qadd("std", "字段名以规范关键词结尾（DWD 及以上）", not _kw, "%d 处" % len(_kw), "_id/_no/_code/_name/_type/_status/_date/_time/_amt/_qty/_rate；文本类统一 _desc")
+_qadd("std", "类型/状态字段注释列明取值", not _enum, "%d 处缺失" % len(_enum), "如 pay_status：UNPAID-未支付，PAID-已支付" + ("；缺：" + "、".join("%s.%s" % x for x in _enum[:8]) if _enum else ""))
+_qadd("full", "字段级血缘覆盖（DWD 及以上）", not _lin, "%d 个字段无上游" % len(_lin), "每个非 ETL 字段都能追到上游表.字段，ODS 字段追到业务库源字段")
 json.dump(data, open(os.path.join(OUT, "web", "data.json"), "w", encoding="utf-8"), ensure_ascii=False, separators=(",", ":"))
 
 # ---------------- xlsx
@@ -170,18 +224,34 @@ for i, t in enumerate(tables, 1):
 sheet(ws, ["序号", "分层", "业务域", "表名（库.表）", "表中文名", "粒度", "后缀含义", "分区", "来源", "度量 / 口径 / 关键字段",
            "上游表", "下游表", "备注"], rows, [6, 10, 7, 44, 26, 40, 12, 22, 40, 60, 40, 40, 28], wrap=(6, 9, 10, 11, 12, 13))
 
+ws = wb.create_sheet("字段清单")
+rows = []
+for t in tables:
+    for i, c in enumerate(SCH[t["short"]]["cols"], 1):
+        rows.append([t["layer"] + ("（实时）" if t["rt"] else ""), t["name"], t["cn"], i, c["n"], c["t"], c["k"], c["c"], c["s"],
+                     "、".join("%s.%s" % (TB[a]["name"] if a in TB else a, b) for a, b in c["r"])])
+sheet(ws, ["分层", "表名（库.表）", "表中文名", "序号", "字段名", "类型", "字段类别", "字段注释", "加工 / 来源", "上游字段"], rows,
+      [10, 42, 22, 6, 30, 15, 10, 60, 50, 60], wrap=(8, 9, 10))
+ws.auto_filter.ref = ws.dimensions
+wb2 = Workbook(); w2 = wb2.active; w2.title = "字段清单"
+sheet(w2, ["分层", "表名（库.表）", "表中文名", "序号", "字段名", "类型", "字段类别", "字段注释", "加工 / 来源", "上游字段"], rows,
+      [10, 42, 22, 6, 30, 15, 10, 60, 50, 60], wrap=(8, 9, 10))
+w2.auto_filter.ref = w2.dimensions
+wb2.save(os.path.join(OUT, "output", "pft_dw_fields.xlsx"))
+
 ws = wb.create_sheet("DWS口径")
-rows = [[b["code"], b["en"], b["cn"], b["type"], b["domain"], b["kou"], b["calc"], b["unit"], b["src"],
-         "、".join(b["dws"]), "、".join(b["ads"])] for b in bases]
-sheet(ws, ["口径编码", "英文名", "中文名", "口径类型", "业务域", "业务口径", "计算逻辑", "单位", "来源明细表", "落地 DWS 表", "被哪些 ADS 表使用"],
-      rows, [9, 30, 22, 10, 7, 46, 46, 7, 32, 44, 50], wrap=(6, 7, 10, 11))
+rows = [[b["code"], b["en"], b["cn"], b["type"], b["domain"], b["kou"], b["formula"], b["unit"], b["time_basis"], b["dtype"], b["precision"],
+         b["src"], "、".join(b["dws"]), "、".join(b["ads"])] for b in bases]
+sheet(ws, ["口径编码", "英文名", "中文名", "口径类型", "业务域", "业务口径", "计算公式", "单位", "时间口径", "数据类型", "精度/展示",
+           "来源明细表", "落地 DWS 表", "被哪些 ADS 表使用"],
+      rows, [9, 30, 22, 10, 7, 46, 46, 7, 28, 14, 26, 32, 44, 50], wrap=(6, 7, 9, 11, 13, 14))
 
 ws = wb.create_sheet("ADS业务指标")
-rows = [[r["code"], r["mode"], r["ads"], r["ads_cn"], r["cn"], r["en"], r["period"], r["mod"], r["base_code"] + " " + r["base_cn"],
-         r["type"], r["formula"], r["unit"], r["grain"], r["src"], r["end"]] for r in ads_m]
-sheet(ws, ["指标编码", "离线/实时", "ADS表", "ADS表中文名", "业务指标名", "字段名", "统计周期", "修饰词", "基础口径", "口径类型",
-           "计算公式", "单位", "分析粒度", "来源 DWS", "使用端"], rows,
-      [9, 8, 34, 20, 30, 34, 10, 22, 26, 10, 56, 7, 34, 40, 14], wrap=(5, 11, 13, 14))
+rows = [[r["code"], r["cn"], r["en"], r["kou"], r["formula"], r["unit"], r["period"], r["mod"], r["time_basis"], r["dtype"], r["precision"],
+         r["freq"], r["mode"], r["base_code"] + " " + r["base_cn"], r["type"], r["ads"], r["ads_cn"], r["grain"], r["src"], r["end"]] for r in ads_m]
+sheet(ws, ["指标编码", "业务指标名", "字段名", "业务口径", "计算公式", "单位", "统计周期", "修饰词", "时间口径", "数据类型", "精度/展示",
+           "更新频率", "离线/实时", "基础口径", "口径类型", "ADS表", "ADS表中文名", "分析粒度", "来源 DWS", "使用端"], rows,
+      [9, 30, 34, 56, 50, 7, 10, 22, 28, 14, 26, 16, 8, 26, 10, 34, 20, 34, 40, 14], wrap=(2, 4, 5, 9, 11, 18, 19))
 
 ws = wb.create_sheet("总线矩阵")
 hdr = ["分层", "表名", "中文名"] + [BUS["dim_cn"][d] for d in BUS["dims"]]
@@ -201,3 +271,6 @@ sheet(ws, ["序号", "类别", "问题", "当前处理 / 建议", "影响"], row
 wb.save(os.path.join(OUT, "output", "pft_dw_v2.xlsx"))
 print(summary)
 print("data.json KB", round(len(json.dumps(data, ensure_ascii=False).encode()) / 1024))
+if os.environ.get("SCHEMA_DEBUG"):
+    for k, v in SCHEMA_CHECK.items():
+        print(k, v if not isinstance(v, list) else (len(v), v[:60]))
