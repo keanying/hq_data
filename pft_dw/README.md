@@ -32,7 +32,9 @@ pft_dw/
 │   └── 07_rt_dwd.sql … 09_rt_ads.sql  实时明细 / 汇总：StarRocks 主键模型
 ├── output/
 │   ├── pft_dw_v2.xlsx      表格版：分层汇总、表清单、字段清单、DWS口径、ADS业务指标、总线矩阵、质量体检、待确认事项
-│   └── pft_dw_fields.xlsx  只含字段清单（4,243 行），便于单独分发
+│   ├── PFT2.0_数仓分层表清单与指标字典.xlsx  与在线表格同一份：上面 10 页 + v1 历史 4 页
+│   ├── pft_dw_v1.xlsx      v1 历史版本（表清单 / 指标字典）
+│   └── pft_dw_fields.xlsx  只含字段清单，便于单独分发
 └── generator/          生成脚本（Python 3 + openpyxl）
     ├── base_data.py    基础数据：ODS/DWD/DIM/DWS/ADS 表定义、原始口径、待确认事项
     ├── model.py        v2 模型：度量/退化维度、补充口径、维度关联、ADS 指标生成规则（周期、修饰词）

@@ -344,3 +344,24 @@ if os.environ.get("WF_DEBUG"):
 if os.environ.get("SCHEMA_DEBUG"):
     for k, v in SCHEMA_CHECK.items():
         print(k, v if not isinstance(v, list) else (len(v), v[:60]))
+
+# ---------------- 在线表格同款：v2 全部页 + v1 历史页，合成一个工作簿（与在线 Sheet「PFT 2.0 数仓分层表清单与指标字典」一致）
+import subprocess, copy
+subprocess.run([sys.executable, os.path.join(HERE, "base_data.py")], check=True, stdout=subprocess.DEVNULL)
+from openpyxl import load_workbook
+_book = Workbook(); _book.remove(_book.active)
+for path, prefix in [(os.path.join(OUT, "output", "pft_dw_v2.xlsx"), ""), (os.path.join(OUT, "output", "pft_dw_v1.xlsx"), "v1 ")]:
+    _src = load_workbook(path)
+    for ws0 in _src.worksheets:
+        ws1 = _book.create_sheet(prefix + ws0.title)
+        for row in ws0.iter_rows():
+            for c in row:
+                d = ws1.cell(row=c.row, column=c.column, value=c.value)
+                if c.has_style:
+                    d.font, d.fill, d.alignment, d.border = copy.copy(c.font), copy.copy(c.fill), copy.copy(c.alignment), copy.copy(c.border)
+        for k, v in ws0.column_dimensions.items():
+            ws1.column_dimensions[k].width = v.width
+        ws1.freeze_panes = ws0.freeze_panes
+        if ws0.auto_filter.ref:
+            ws1.auto_filter.ref = ws0.auto_filter.ref
+_book.save(os.path.join(OUT, "output", "PFT2.0_数仓分层表清单与指标字典.xlsx"))
