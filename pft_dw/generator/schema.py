@@ -165,10 +165,34 @@ SENS_MASK = {"ods_ord_order_group_di": {"contact_id_number", "contact_phone"}, "
 for k in list(SENS_MASK):
     SENS_MASK[k.replace("_di", "_rt")] = SENS_MASK[k]
 
+def flink_type(mysql):
+    """MySQL → Flink CDC 类型映射（mysql-cdc 连接器要求声明类型与源端兼容）"""
+    t = mysql.upper()
+    uns = "UNSIGNED" in t
+    if t.startswith("BIGINT"):
+        return "DECIMAL(20,0)" if uns else "BIGINT"
+    if t.startswith("INT"):
+        return "BIGINT" if uns else "INT"
+    if t.startswith("TINYINT"):
+        return "SMALLINT" if uns else "TINYINT"
+    if t.startswith("DECIMAL"):
+        return t.replace(" ", "")
+    if t.startswith("DATETIME"):
+        return "TIMESTAMP(3)"
+    if t.startswith("TIMESTAMP"):
+        return "TIMESTAMP_LTZ(3)"
+    if t.startswith("DATE"):
+        return "DATE"
+    return "STRING"
+
 def ods_cols(short, db, st, rt):
+    """离线 ODS：Hive 贴源表；实时 ODS：Flink CDC 源表（直读 MySQL binlog，不经 Kafka）"""
     src = SRC[st]
-    base = short.rsplit("_", 1)[0] + ("_di" if rt else "")
+    base = short.rsplit("_", 1)[0] + "_di"
     drop, mask = SENS_DROP.get(short, set()), SENS_MASK.get(short, SENS_MASK.get(base, set()))
+    if rt:  # 实时只声明需要的列：敏感列不声明即不读取
+        drop = drop | mask | {"contact_name"}
+        mask = set()
     uk = {u[0] for u in src.get("uks", []) if len(u) == 1}
     out = []
     for n, t, c in src["cols"]:
@@ -178,13 +202,18 @@ def ods_cols(short, db, st, rt):
         if n in mask:
             cc += "（脱敏）"
         k = "主键" if n == "id" else ("业务主键" if n in uk else None)
-        out.append(col(n, htype(t), cc, k, "%s.%s.%s%s" % (db, st, n, "，脱敏" if n in mask else ""), []))
+        how = "%s.%s.%s%s" % (db, st, n, "，脱敏" if n in mask else "") + ("，Flink CDC 读 binlog" if rt else "")
+        out.append(col(n, flink_type(t) if rt else htype(t), cc, k, how, []))
     if short == "ods_fin_bank_card_df":
         out.append(col("card_tail_no", "STRING", "卡号后 4 位（抽取时由 card_number 截取，完整卡号不落仓）", None, "%s.%s.card_number 截取后 4 位" % (db, st)))
-    if short.endswith(("_di", "_rt")):
-        out.append(col("binlog_op_type", "STRING", "变更类型：I-新增，U-更新，D-删除（取自 binlog）", "ETL", "CDC 采集"))
-        out.append(col("binlog_time", "STRING", "binlog 变更时间，格式 yyyy-MM-dd HH:mm:ss", "ETL", "CDC 采集"))
-    if not rt:
+    if rt:
+        c = col("binlog_time", "TIMESTAMP_LTZ(3)", "binlog 变更时间（Flink CDC 元数据 op_ts；全量快照阶段为 0）", "ETL", "Flink CDC 元数据 op_ts")
+        c["meta"] = "op_ts"
+        out.append(c)
+    else:
+        if short.endswith("_di"):
+            out.append(col("binlog_op_type", "STRING", "变更类型：I-新增，U-更新，D-删除（取自 binlog）", "ETL", "增量采集"))
+            out.append(col("binlog_time", "STRING", "binlog 变更时间，格式 yyyy-MM-dd HH:mm:ss", "ETL", "增量采集"))
         out += ETL()
     return out, src["comment"]
 
@@ -868,13 +897,25 @@ def ddl_hive(name, cn, cols, part=True):
         s += "PARTITIONED BY (travel_date STRING COMMENT '数据日期分区，格式 YYYYMMDD')\n"
     return s + "STORED AS ORC\nTBLPROPERTIES ('orc.compress' = 'SNAPPY');"
 
-def ddl_flink(name, cn, cols, topic):
+def ddl_flink_cdc(name, cn, cols, db, st, server_id):
     w = max(len(c["n"]) for c in cols) + 3
-    body = ",\n".join("    %s %s COMMENT '%s'" % (("`%s`" % c["n"]).ljust(w), c["t"].ljust(14), c["c"]) for c in cols)
-    return ("-- Flink SQL（Kafka 源/汇表）\nCREATE TABLE %s (\n%s,\n    %s AS PROCTIME()\n) COMMENT '%s'\nWITH (\n"
-            "    'connector' = 'kafka',\n    'topic' = '%s',\n    'properties.bootstrap.servers' = '${kafka.servers}',\n"
-            "    'properties.group.id' = 'pft_dw_%s',\n    'scan.startup.mode' = 'group-offsets',\n    'format' = 'json'\n);"
-            ) % (name, body, "`proc_time`".ljust(w), cn.replace("'", "’"), topic, name.split(".")[-1])
+    body = []
+    for c in cols:
+        if c.get("meta"):
+            body.append("    %s %s METADATA FROM '%s' VIRTUAL COMMENT '%s'" % (("`%s`" % c["n"]).ljust(w), c["t"], c["meta"], c["c"]))
+        else:
+            body.append("    %s %s COMMENT '%s'" % (("`%s`" % c["n"]).ljust(w), c["t"].ljust(16), c["c"]))
+    body.append("    %s AS PROCTIME()" % "`proc_time`".ljust(w))
+    body.append("    PRIMARY KEY (`id`) NOT ENFORCED")
+    return ("-- Flink CDC 源表：直读 MySQL binlog（先全量快照、再增量），不经 Kafka\n"
+            "CREATE TABLE %s (\n%s\n) COMMENT '%s'\nWITH (\n"
+            "    'connector' = 'mysql-cdc',\n"
+            "    'hostname' = '${mysql.%s.host}',\n    'port' = '${mysql.%s.port}',\n"
+            "    'username' = '${cdc.username}',\n    'password' = '${cdc.password}',\n"
+            "    'database-name' = '%s',\n    'table-name' = '%s',\n"
+            "    'server-id' = '%s',\n    'server-time-zone' = 'Asia/Shanghai',\n"
+            "    'scan.startup.mode' = 'initial',\n    'scan.incremental.snapshot.enabled' = 'true'\n);"
+            ) % (name, ",\n".join(body), cn.replace("'", "’"), db, db, db, st, server_id)
 
 def ddl_starrocks(name, cn, cols, keys):
     tmap = {c["n"]: c["t"] for c in cols}

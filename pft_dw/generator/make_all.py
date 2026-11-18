@@ -99,6 +99,13 @@ for r in M.ADS_M:
 
 _iss = [list(r) for r in M.ISSUES]
 _iss.append([len(_iss) + 1, "口径", "比率精度与除零规则", "比率类统一 分子*100/分母，保留 6 位小数，存百分数数值；金额、平均值保留 2 位小数；分母为 0 时结果为空（NULL）", "影响全部 _rate 与 avg_ 指标"])
+_iss.append([len(_iss) + 1, "实时采集", "实时链路用 Flink CDC 直读 MySQL binlog（不经 Kafka），源库需满足的前提",
+             "binlog_format=ROW、binlog_row_image=FULL；CDC 只读账号需 SELECT、RELOAD、SHOW DATABASES、REPLICATION SLAVE、REPLICATION CLIENT 权限；"
+             "每张 CDC 源表一段独立 server-id（已按 5401 起每表 4 个分配）；同一库的多张源表建议放在一个 Flink 作业（STATEMENT SET）里，避免重复拉 binlog；"
+             "实时明细与汇总落 StarRocks", "影响 9 张实时 ODS 源表与全部实时作业"])
+_iss.append([len(_iss) + 1, "离线采集", "离线 ODS 的同步工具与增量方式",
+             "当前设计：_di 表按 binlog 增量（带 binlog_op_type / binlog_time），_df 表每日全量；离线是否也用 Flink CDC（如 CDC 快照模式每日全量 + 增量入湖）待确认",
+             "影响 81 张离线 ODS 的采集作业与 binlog 字段来源"])
 issues = [dict(no=r[0], cat=r[1], q=r[2], a=r[3], impact=r[4]) for r in _iss]
 dbs = OrderedDict()
 for t in tables:

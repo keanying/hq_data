@@ -23,8 +23,8 @@ pft_dw/
 │   └── schema.json     全表字段 + 字段级血缘 + DDL（网页按需加载）
 ├── ddl/                全部 242 张表的建表语句，按分层一个文件
 │   ├── 01_ods.sql … 05_ads.sql        离线：Hive ORC，PARTITIONED BY (travel_date)
-│   ├── 06_rt_ods.sql 07_rt_dwd.sql    实时明细：Flink SQL Kafka 表
-│   └── 08_rt_dws.sql 09_rt_ads.sql    实时汇总：StarRocks 主键模型
+│   ├── 06_rt_ods.sql                  实时源：Flink CDC（mysql-cdc）源表，直读 binlog，不经 Kafka
+│   └── 07_rt_dwd.sql … 09_rt_ads.sql  实时明细 / 汇总：StarRocks 主键模型
 ├── output/
 │   ├── pft_dw_v2.xlsx      表格版：分层汇总、表清单、字段清单、DWS口径、ADS业务指标、总线矩阵、质量体检、待确认事项
 │   └── pft_dw_fields.xlsx  只含字段清单（4,243 行），便于单独分发
@@ -67,7 +67,8 @@ cd pft_dw/web && python3 -m http.server 8000
 - **DWS / ADS**：粒度键 + 指标列；ADS 额外补维度名称（如 `seller_tenant_name`）方便业务直接用
 - 每个字段都有注释；`_type / _status` 字段逐值写明含义，如 `pay_status：UNPAID-未支付，PARTIAL_PAID-部分支付，PAID-已支付`
 - 每个字段都记录上游 `表.字段` 与加工说明，网页里点字段可看字段级全链路（ODS 字段追到业务库源字段）
-- 实时：ODS/DWD 为 Flink Kafka 表，DWS/ADS 为 StarRocks 主键模型，主键 = `travel_date` + 窗口 + 粒度键
+- 实时：**Flink CDC 直读 MySQL binlog，不经 Kafka**。实时 ODS 是 `mysql-cdc` 源表（先全量快照再增量，`binlog_time` 取 CDC 元数据 `op_ts`，敏感列不声明即不读取），同一作业内加工成 DWD 并写入 StarRocks；DWD/DWS/ADS 均为 StarRocks 主键模型，按 `travel_date` 分区。DWD 主键 = `travel_date` + 实体ID（变动类表再加 `change_time`），DWS/ADS 主键 = `travel_date` + 窗口 + 粒度键
+- 源库前提：`binlog_format=ROW`、`binlog_row_image=FULL`，CDC 账号需 REPLICATION SLAVE / REPLICATION CLIENT 等权限，每张源表独立 `server-id` 段；同库源表建议合并在一个作业里
 
 ## 命名约定
 
@@ -76,9 +77,10 @@ cd pft_dw/web && python3 -m http.server 8000
 - 字段以 `_id / _no / _code / _name / _type / _status / _date / _time / _amt / _qty / _rate` 结尾，文本类统一 `_desc`；ADS 指标周期插在关键字前、修饰词作前缀，如 `api_pay_7d_amt`
 - 分区字段统一 `travel_date`（YYYYMMDD），按数据日期分区；业务游玩日期为 `play_date`
 
-## 待确认（摘要，完整 20 条见网页「待确认」页）
+## 待确认（摘要，完整 22 条见网页「待确认」页）
 
 - 实时表后缀：规范最细到 `_hrs`，当前用 `_rt`，需规范补充
+- 离线 ODS 的同步工具是否也用 Flink CDC
 - 公共维度（日期/地区/币种/码表）暂挂 `opr_`，建议规范补公共域前缀
 - 金额单位：源库为分，DWD 起转元
 - 毛利口径：当前按支付口径，未扣退款

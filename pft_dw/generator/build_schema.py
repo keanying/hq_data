@@ -66,8 +66,19 @@ for rt, off in RT_DWD.items():
                 r2.append([a.replace("_di", "_rt"), b] if a.replace("_di", "_rt") in TB else [a, b])
         s = re.sub(r"\bods_([a-z_]+?)_d[if]\b", lambda m: "ods_%s_rt" % m.group(1) if "ods_%s_rt" % m.group(1) in ODS else m.group(0), c["s"])
         cols.append(dict(c, r=r2, s=s))
-    cols.append(S.col("event_time", "STRING", "事件时间（binlog 时间），用于窗口计算与乱序处理，格式 yyyy-MM-dd HH:mm:ss", "ETL", "binlog_time"))
+    main_ods = next(u for u in TB[rt]["up"] if u in ODS)
+    for c in cols:  # 实时源表未声明的列（敏感列）不再引用
+        c["r"] = [[a, b] for a, b in c["r"] if a not in ODS or any(x["n"] == b for x in ODS[a]["cols"])]
+    ent = S.DWD[off]["entity"]
+    is_event = "change" in rt
+    dt_src = "change_time" if is_event else "create_time"
+    cols.insert(0, S.col("travel_date", "STRING", "数据日期，格式 YYYYMMDD；取%s日期，保证同一主键始终落在同一分区" % ("变动时间" if is_event else "创建时间"),
+                         "分区", "%s.%s 取日期" % (main_ods, "binlog_time" if is_event else "create_time"),
+                         [[main_ods, "binlog_time" if is_event else "create_time"]]))
+    cols.append(S.col("event_time", "STRING", "事件时间（binlog 时间），用于窗口计算与乱序处理，格式 yyyy-MM-dd HH:mm:ss", "ETL",
+                      "%s.binlog_time" % main_ods, [[main_ods, "binlog_time"]]))
     finish(rt, cols)
+    SCH[rt]["keys"] = ["travel_date", ent + "_id"] + (["change_time"] if is_event else [])
 
 # ------------------------------------------------ DWS / ADS
 def find_src(up_tables, name):
@@ -232,8 +243,24 @@ for t in tables:
 for r in ads_m:
     r["grain"] = TB[r["ads"]]["grain"]
 
+# ------------------------------------------------ 实时链路说明：Flink CDC 直读 binlog，不经 Kafka
+for t in tables:
+    if not t["rt"]:
+        continue
+    if t["layer"] == "ODS":
+        st_ = ODS[t["short"]]["st"]
+        t["src"] = "%s.%s（Flink CDC 读 binlog）" % (t["db"], st_)
+        t["part"] = "不落地：Flink CDC 源表，作业内直读 binlog"
+        t["grain"] = "同源表，1行=1条源记录（CDC 变更流）"
+    else:
+        t["part"] = "StarRocks 按 travel_date 分区"
+        if t["layer"] == "DWD":
+            t["grain"] = TB[RT_DWD[t["short"]]]["grain"]
+
 # ------------------------------------------------ DDL
-TOPIC = lambda short: "pft_dw." + short
+RT_SERVER_ID = {}
+for i, t in enumerate([t for t in tables if t["rt"] and t["layer"] == "ODS"]):
+    RT_SERVER_ID[t["short"]] = "%d-%d" % (5401 + i * 4, 5404 + i * 4)
 for short, v in SCH.items():
     t = TB[short]
     cols = v["cols"]
@@ -243,11 +270,12 @@ for short, v in SCH.items():
         part = "无分区" not in t["part"]
         v["ddl"] = S.ddl_hive(name, cn, cols, part)
         v["engine"] = "Hive（ORC）"
-    elif t["layer"] in ("ODS", "DWD"):
-        v["ddl"] = S.ddl_flink(name, cn, cols, TOPIC(short))
-        v["engine"] = "Flink SQL / Kafka"
+    elif t["layer"] == "ODS":
+        db, st = t["db"], ODS[short]["st"]
+        v["ddl"] = S.ddl_flink_cdc(name, cn, cols, db, st, RT_SERVER_ID[short])
+        v["engine"] = "Flink CDC（mysql-cdc 源表）"
     else:
-        keys = [c["n"] for c in cols if c["k"] == "粒度键"]
+        keys = v.get("keys") or [c["n"] for c in cols if c["k"] == "粒度键"]
         # 主键列必须排在最前
         cols2 = [c for c in cols if c["n"] in keys] + [c for c in cols if c["n"] not in keys]
         v["cols"] = cols2

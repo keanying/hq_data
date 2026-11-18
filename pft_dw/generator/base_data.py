@@ -32,7 +32,7 @@ def part_of(name):
     if name.endswith("_hrs"):
         return PART + " + 小时（子分区待确认）"
     if name.endswith("_rt"):
-        return "实时（Kafka/StarRocks，不分区）"
+        return "实时（Flink CDC 直读 binlog / StarRocks）"
     return PART
 
 # ---------------------------------------------------------------- ODS
