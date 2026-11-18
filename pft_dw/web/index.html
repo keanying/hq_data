@@ -1,0 +1,1006 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>PFT 2.0 数仓蓝图</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Noto+Sans+SC:wght@400;500;700&family=Noto+Serif+SC:wght@600;700&family=IBM+Plex+Mono:wght@400;500&display=swap" rel="stylesheet">
+<style>
+/* 布局：顶部分层计数条 → 七个视图（血缘全景为默认），列表类视图点行开右侧抽屉，抽屉内的表名/口径都能点穿 */
+:root {
+  --bg: #f4f5f2; --surface: #ffffff; --ink: #1d2328; --muted: #5f6a72; --line: #dde1dc; --faint: #eceee9;
+  --accent: #1f5f6b; --accent-soft: #e2eef0;
+  --src: #4b5563; --src-bg: #e9eaec;
+  --ods: #6b7280; --ods-bg: #eef0f2; --dwd: #2563a8; --dwd-bg: #e4eefa; --dim: #a8650f; --dim-bg: #fbf0dc;
+  --dws: #2f7d4a; --dws-bg: #e2f2e7; --ads: #7a3fa0; --ads-bg: #f1e6f8;
+  --ok: #2f7d4a; --warn: #b7791f; --crit: #b4372f; --info: #2563a8;
+  --display: "Noto Serif SC", "Songti SC", serif;
+  --body: "Noto Sans SC", "PingFang SC", "Microsoft YaHei", sans-serif;
+  --mono: "IBM Plex Mono", ui-monospace, "SFMono-Regular", Menlo, monospace;
+  color-scheme: light;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg: #14181b; --surface: #1c2125; --ink: #e6e9eb; --muted: #9aa5ad; --line: #2e353a; --faint: #232a2e;
+    --accent: #6fb7c2; --accent-soft: #1f3337; --src: #b8c0c8; --src-bg: #2a2f34;
+    --ods: #aab2bb; --ods-bg: #262b30; --dwd: #7fb1ea; --dwd-bg: #1d2c3d; --dim: #e3a95a; --dim-bg: #3a2c18;
+    --dws: #79c793; --dws-bg: #1b3324; --ads: #c497e3; --ads-bg: #2f2239;
+    --ok: #79c793; --warn: #e2b05a; --crit: #ec7d74; --info: #7fb1ea; color-scheme: dark;
+  }
+}
+:root[data-theme="dark"] {
+  --bg: #14181b; --surface: #1c2125; --ink: #e6e9eb; --muted: #9aa5ad; --line: #2e353a; --faint: #232a2e;
+  --accent: #6fb7c2; --accent-soft: #1f3337; --src: #b8c0c8; --src-bg: #2a2f34;
+  --ods: #aab2bb; --ods-bg: #262b30; --dwd: #7fb1ea; --dwd-bg: #1d2c3d; --dim: #e3a95a; --dim-bg: #3a2c18;
+  --dws: #79c793; --dws-bg: #1b3324; --ads: #c497e3; --ads-bg: #2f2239;
+  --ok: #79c793; --warn: #e2b05a; --crit: #ec7d74; --info: #7fb1ea; color-scheme: dark;
+}
+* { box-sizing: border-box; }
+html, body { margin: 0; background: var(--bg); color: var(--ink); font-family: var(--body); font-size: 14px; line-height: 1.55; }
+button, input, select { font: inherit; color: inherit; }
+:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.wrap { max-width: 1440px; margin: 0 auto; padding: 22px 20px 64px; }
+header { display: flex; flex-wrap: wrap; align-items: end; justify-content: space-between; gap: 12px; }
+header h1 { font-family: var(--display); font-size: 26px; margin: 0; letter-spacing: .02em; text-wrap: balance; }
+header p { margin: 2px 0 0; color: var(--muted); font-size: 13px; }
+.mono { font-family: var(--mono); font-size: 12.5px; }
+.muted { color: var(--muted); }
+
+.strip { display: grid; grid-template-columns: repeat(5, 1fr) 1.3fr 1.3fr; gap: 8px; margin-top: 16px; }
+.cell { background: var(--surface); border: 1px solid var(--line); border-top: 3px solid var(--c, var(--line)); border-radius: 8px; padding: 8px 12px; display: grid; }
+.cell .k { font-family: var(--mono); font-size: 12px; color: var(--c, var(--muted)); }
+.cell .n { font-size: 22px; font-weight: 700; font-variant-numeric: tabular-nums; line-height: 1.2; }
+.cell .d { font-size: 12px; color: var(--muted); }
+.L-SRC { --c: var(--src); --cbg: var(--src-bg); } .L-ODS { --c: var(--ods); --cbg: var(--ods-bg); }
+.L-DWD { --c: var(--dwd); --cbg: var(--dwd-bg); } .L-DIM { --c: var(--dim); --cbg: var(--dim-bg); }
+.L-DWS { --c: var(--dws); --cbg: var(--dws-bg); } .L-ADS { --c: var(--ads); --cbg: var(--ads-bg); }
+.T-原子指标 { --c: var(--dwd); --cbg: var(--dwd-bg); } .T-派生指标 { --c: var(--dim); --cbg: var(--dim-bg); } .T-计算指标 { --c: var(--ads); --cbg: var(--ads-bg); }
+
+nav.tabs { display: flex; flex-wrap: wrap; gap: 2px; margin: 20px 0 0; border-bottom: 1px solid var(--line); }
+nav.tabs a { padding: 8px 14px; color: var(--muted); text-decoration: none; border-bottom: 2px solid transparent; margin-bottom: -1px; font-weight: 500; }
+nav.tabs a[aria-current="page"] { color: var(--ink); border-color: var(--accent); }
+nav.tabs a .c { font-family: var(--mono); font-size: 11px; margin-left: 4px; color: var(--muted); }
+
+.toolbar { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; padding: 12px 0; }
+.toolbar input[type=search], .toolbar select { padding: 7px 11px; border: 1px solid var(--line); border-radius: 6px; background: var(--surface); }
+.toolbar input[type=search] { flex: 1 1 240px; min-width: 200px; }
+.chips { display: flex; flex-wrap: wrap; gap: 5px; }
+.chip { border: 1px solid var(--line); background: var(--surface); border-radius: 999px; padding: 2px 10px; font-size: 12px; cursor: pointer; }
+.chip[aria-pressed="true"] { background: var(--ink); color: var(--bg); border-color: var(--ink); }
+.chip.mono { font-family: var(--mono); }
+.count { white-space: nowrap; color: var(--muted); font-size: 12px; margin-left: auto; font-variant-numeric: tabular-nums; }
+.sep { width: 1px; height: 20px; background: var(--line); }
+
+.panel { background: var(--surface); border: 1px solid var(--line); border-radius: 8px; }
+.grid-wrap { background: var(--surface); border: 1px solid var(--line); border-radius: 8px; overflow: auto; max-height: 76vh; }
+table { border-collapse: collapse; width: 100%; }
+th, td { text-align: left; padding: 7px 11px; border-bottom: 1px solid var(--line); vertical-align: top; }
+th { white-space: nowrap; font-size: 12px; color: var(--muted); font-weight: 500; position: sticky; top: 0; background: var(--surface); z-index: 1; }
+tbody tr.click { cursor: pointer; }
+tbody tr.click:hover { background: var(--accent-soft); }
+tbody tr.sel { background: var(--accent-soft); box-shadow: inset 3px 0 0 var(--accent); }
+td.num { text-align: right; font-variant-numeric: tabular-nums; }
+td.dim, .small { color: var(--muted); font-size: 12.5px; }
+td.cn { min-width: 9em; }
+.pill { display: inline-block; font-family: var(--mono); font-size: 11px; font-weight: 500; padding: 1px 7px; border-radius: 4px; color: var(--c); background: var(--cbg); white-space: nowrap; }
+.rt { font-size: 10px; margin-left: 4px; padding: 0 5px; border: 1px solid var(--c); border-radius: 3px; color: var(--c); white-space: nowrap; }
+.empty { padding: 28px; text-align: center; color: var(--muted); }
+
+.layout { display: grid; grid-template-columns: minmax(0, 1fr); gap: 14px; }
+.layout.open { grid-template-columns: minmax(0, 1fr) 440px; }
+.layout.open .col-hide { display: none; }
+aside.drawer { display: none; background: var(--surface); border: 1px solid var(--line); border-radius: 8px; padding: 16px 18px; align-self: start; position: sticky; top: 10px; max-height: calc(100vh - 20px); overflow: auto; }
+.layout.open aside.drawer { display: block; }
+.drawer h2 { font-size: 16px; margin: 6px 0 0; font-family: var(--mono); font-weight: 500; word-break: break-all; }
+.drawer .sub { color: var(--muted); margin: 0 0 12px; }
+.top { display: flex; justify-content: space-between; align-items: center; gap: 8px; }
+.actions { display: flex; gap: 6px; flex-wrap: wrap; }
+.btn { border: 1px solid var(--line); background: var(--surface); border-radius: 6px; padding: 3px 10px; font-size: 12px; cursor: pointer; }
+.btn:hover { border-color: var(--accent); color: var(--accent); }
+.btn.primary { background: var(--accent); border-color: var(--accent); color: var(--surface); }
+dl { display: grid; grid-template-columns: 76px 1fr; gap: 6px 10px; margin: 0 0 8px; }
+dt { color: var(--muted); font-size: 12px; padding-top: 1px; }
+dd { margin: 0; word-break: break-word; }
+.sec { font-size: 12px; color: var(--muted); margin: 14px 0 6px; display: flex; justify-content: space-between; border-top: 1px solid var(--line); padding-top: 10px; }
+.links { display: flex; flex-wrap: wrap; gap: 5px; }
+.link { border: 1px solid var(--line); background: var(--bg); border-radius: 4px; padding: 1px 7px; font-family: var(--mono); font-size: 12px; cursor: pointer; display: inline-flex; gap: 5px; align-items: center; text-align: left; }
+.link.cnl { font-family: var(--body); }
+.link:hover { border-color: var(--accent); color: var(--accent); }
+.link .pill { padding: 0 4px; font-size: 10px; }
+.none { color: var(--muted); font-size: 12px; }
+.code { font-family: var(--mono); font-size: 12px; background: var(--bg); border: 1px solid var(--line); border-radius: 6px; padding: 8px 10px; white-space: pre-wrap; word-break: break-word; margin: 0; }
+.chain { display: grid; gap: 4px; }
+.chain .step { display: grid; grid-template-columns: 44px 1fr; gap: 8px; align-items: start; }
+.chain .step b { font-family: var(--mono); font-size: 11px; color: var(--c); background: var(--cbg); border-radius: 3px; text-align: center; padding: 1px 0; }
+
+/* 血缘画布 */
+.lin-head { display: grid; grid-template-columns: minmax(0, 1fr) 360px; gap: 14px; }
+.canvas { position: relative; height: 78vh; min-height: 520px; overflow: hidden; border: 1px solid var(--line); border-radius: 8px; cursor: grab; touch-action: none; user-select: none;
+  background-color: var(--surface); background-image: radial-gradient(var(--line) 1px, transparent 1.2px); }
+.canvas.panning { cursor: grabbing; }
+.canvas svg { display: block; width: 100%; height: 100%; }
+.cv-tools { position: absolute; top: 10px; right: 10px; display: flex; gap: 4px; align-items: center; background: var(--surface); border: 1px solid var(--line); border-radius: 8px; padding: 4px; box-shadow: 0 2px 8px rgb(0 0 0 / .06); }
+.cv-tools button { border: 0; background: none; border-radius: 5px; padding: 3px 9px; cursor: pointer; font-size: 12px; }
+.cv-tools button:hover { background: var(--accent-soft); color: var(--accent); }
+.cv-tools .z { font-family: var(--mono); font-size: 11px; color: var(--muted); min-width: 40px; text-align: center; }
+.cv-hint { position: absolute; left: 10px; bottom: 8px; font-size: 11.5px; color: var(--muted); background: var(--surface); padding: 2px 8px; border-radius: 4px; border: 1px solid var(--line); pointer-events: none; }
+svg .colh { font-family: var(--mono); font-size: 15px; font-weight: 500; fill: var(--c); }
+svg .colh2 { font-size: 12px; fill: var(--muted); font-family: var(--body); }
+svg .colline { stroke: var(--c); stroke-width: 3; }
+svg .edge { fill: none; stroke: var(--muted); stroke-opacity: .22; stroke-width: 1; }
+svg .edge.dimlink { stroke-dasharray: 4 4; stroke: var(--dim); stroke-opacity: .3; }
+svg .edge.met { stroke: var(--ads); stroke-opacity: .25; }
+svg .edge.on { stroke: var(--accent); stroke-opacity: .95; stroke-width: 1.8; }
+svg .edge.on.up { stroke: var(--dwd); }
+svg .edge.on.dimlink { stroke: var(--dim); stroke-opacity: .9; }
+svg .edge.on.met { stroke: var(--ads); }
+svg .edge.off { stroke-opacity: .05; }
+svg .node { cursor: pointer; }
+svg .node rect.bg { fill: var(--cbg); stroke: var(--line); }
+svg .node rect.bar { fill: var(--c); }
+svg .node text.n1 { font-family: var(--mono); font-size: 11.5px; fill: var(--ink); }
+svg .node text.n2 { font-family: var(--body); font-size: 11px; fill: var(--muted); }
+svg .node text.cnt { fill: var(--muted); font-family: var(--mono); font-size: 10.5px; text-anchor: end; }
+svg .node:hover rect.bg { stroke: var(--c); stroke-width: 1.5; }
+svg .node.sel rect.bg { stroke: var(--accent); stroke-width: 2.5; }
+svg .node.hit rect.bg { stroke: var(--c); stroke-width: 1.5; }
+svg .node.off { opacity: .32; }
+svg .node.match rect.bg { stroke: var(--accent); stroke-dasharray: 4 3; stroke-width: 2; }
+svg .grp { font-family: var(--mono); font-size: 12px; fill: var(--muted); }
+svg .ph { font-size: 12.5px; fill: var(--muted); font-family: var(--body); }
+.lin-info { padding: 14px 16px; align-self: start; position: sticky; top: 10px; max-height: 78vh; overflow: auto; }
+.lin-info h3 { margin: 0 0 4px; font-size: 14px; font-family: var(--mono); font-weight: 500; word-break: break-all; }
+.kpis { display: grid; grid-template-columns: repeat(3, 1fr); gap: 6px; margin: 10px 0; }
+.kpis div { background: var(--bg); border-radius: 6px; padding: 6px 8px; }
+.kpis b { display: block; font-size: 18px; font-variant-numeric: tabular-nums; }
+.kpis span { font-size: 11.5px; color: var(--muted); }
+.legend { display: flex; flex-wrap: wrap; gap: 12px; font-size: 12px; color: var(--muted); margin-top: 10px; }
+.legend i { display: inline-block; width: 18px; height: 0; border-top: 2px solid var(--s); vertical-align: middle; margin-right: 5px; }
+.legend i.dash { border-top-style: dashed; }
+.sugg { position: absolute; top: 100%; z-index: 5; background: var(--surface); border: 1px solid var(--line); border-radius: 6px; box-shadow: 0 6px 20px rgb(0 0 0 / .12); max-height: 320px; overflow: auto; min-width: 420px; }
+.sugg button { display: flex; gap: 8px; width: 100%; border: 0; background: none; text-align: left; padding: 6px 10px; cursor: pointer; align-items: center; }
+.sugg button:hover, .sugg button.act { background: var(--accent-soft); }
+.searchwrap { position: relative; flex: 1 1 280px; display: flex; }
+.searchwrap input { flex: 1; }
+.mlist { display: grid; gap: 3px; max-height: 260px; overflow: auto; }
+.mlist button { display: grid; grid-template-columns: 1fr auto; gap: 6px; text-align: left; border: 1px solid var(--line); background: var(--bg); border-radius: 4px; padding: 3px 8px; cursor: pointer; font-size: 12.5px; }
+.mlist button:hover, .mlist button.on { border-color: var(--ads); color: var(--ads); }
+.mlist button span:last-child { color: var(--muted); font-size: 11px; }
+td.lnk { width: 52px; }
+#view-lineage.max { position: fixed; inset: 0; z-index: 50; background: var(--bg); padding: 10px 14px; display: flex; flex-direction: column; }
+#view-lineage.max .toolbar { padding: 0 0 8px; flex: none; }
+#view-lineage.max .lin-head { flex: 1; min-height: 0; }
+#view-lineage.max .canvas { height: 100%; min-height: 0; }
+#view-lineage.max .lin-info { max-height: 100%; }
+.lin-head.nopanel { grid-template-columns: minmax(0, 1fr); }
+.lin-head.nopanel .lin-info { display: none; }
+body.locked { overflow: hidden; }
+.cv-tools .sepv { width: 1px; height: 18px; background: var(--line); margin: 0 2px; }
+.cv-tools button.on { background: var(--accent); color: var(--surface); }
+.lin-info .link, .drawer .link { max-width: 100%; white-space: normal; word-break: break-all; }
+
+/* 体检 */
+.qcards { display: grid; grid-template-columns: repeat(5, 1fr); gap: 10px; padding-top: 14px; }
+.qcard { background: var(--surface); border: 1px solid var(--line); border-radius: 8px; padding: 12px 14px; cursor: pointer; text-align: left; display: grid; gap: 6px; }
+.qcard[aria-pressed="true"] { border-color: var(--accent); box-shadow: inset 0 0 0 1px var(--accent); }
+.qcard .t { font-weight: 700; font-size: 15px; }
+.qcard .s { font-family: var(--mono); font-size: 12px; color: var(--muted); }
+.bar { height: 6px; background: var(--faint); border-radius: 3px; overflow: hidden; display: flex; }
+.bar i { display: block; height: 100%; }
+.st { display: inline-block; font-size: 11px; padding: 1px 7px; border-radius: 3px; white-space: nowrap; color: var(--surface); background: var(--s); }
+.S-通过 { --s: var(--ok); } .S-提示 { --s: var(--warn); } .S-待定 { --s: var(--info); } .S-不通过 { --s: var(--crit); }
+.qlist td:first-child { width: 70px; }
+.qlist td:nth-child(3) { white-space: nowrap; font-family: var(--mono); font-size: 12px; }
+h3.blk { font-size: 14px; margin: 22px 0 8px; }
+.ck { color: var(--ok); font-weight: 700; }
+.cx { color: var(--crit); }
+
+/* 总线矩阵 */
+.bus th.v { writing-mode: vertical-rl; text-orientation: mixed; white-space: nowrap; padding: 8px 4px; font-size: 12px; vertical-align: bottom; cursor: pointer; height: 150px; }
+.bus th.v.hi, .bus td.hi { background: var(--accent-soft); }
+.bus td.dot { text-align: center; padding: 6px 2px; width: 26px; }
+.bus td.dot i { display: inline-block; width: 9px; height: 9px; border-radius: 50%; background: var(--c); }
+.bus tr:hover td { background: var(--accent-soft); }
+.bus tfoot td { font-family: var(--mono); font-size: 11px; color: var(--muted); text-align: center; position: sticky; bottom: 0; background: var(--surface); }
+
+.issues { display: grid; grid-template-columns: repeat(auto-fill, minmax(320px, 1fr)); gap: 12px; padding-top: 14px; }
+.issue { background: var(--surface); border: 1px solid var(--line); border-left: 4px solid var(--s); border-radius: 8px; padding: 12px 14px; display: grid; gap: 6px; }
+.issue .h { display: flex; justify-content: space-between; font-size: 12px; color: var(--muted); }
+.issue .h b { color: var(--s); font-weight: 500; }
+.issue .q { font-weight: 500; }
+.issue .a { color: var(--muted); font-size: 13px; }
+.issue .i { font-size: 12px; }
+.V-crit { --s: var(--crit); } .V-warn { --s: var(--warn); } .V-info { --s: var(--info); }
+.toast { position: fixed; bottom: 20px; left: 50%; transform: translateX(-50%); background: var(--ink); color: var(--bg); padding: 6px 14px; border-radius: 6px; font-size: 13px; opacity: 0; transition: opacity .2s; pointer-events: none; z-index: 10; }
+.toast.on { opacity: 1; }
+.loading { padding: 60px; text-align: center; color: var(--muted); }
+@media (prefers-reduced-motion: reduce) { .toast { transition: none; } }
+@media (max-width: 1100px) {
+  .strip { grid-template-columns: repeat(4, 1fr); }
+  .qcards { grid-template-columns: repeat(2, 1fr); }
+  .lin-head { grid-template-columns: minmax(0, 1fr); }
+  .lin-info { position: static; order: -1; }
+  .layout.open { grid-template-columns: minmax(0, 1fr); }
+  aside.drawer { position: static; max-height: none; order: -1; }
+}
+@media (max-width: 560px) { .strip { grid-template-columns: repeat(2, 1fr); } }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <div>
+      <h1>PFT 2.0 数仓蓝图</h1>
+      <p>依据客户 6 份架构文档展开 · 表名按「分层_业务域_实体名_粒度」 · 指标按「原子口径 × 统计周期 × 修饰词」生成</p>
+    </div>
+  </header>
+  <section class="strip" id="strip"><div class="loading">正在载入模型数据…</div></section>
+
+  <nav class="tabs" aria-label="视图">
+    <a href="#lineage" id="tab-lineage">血缘全景</a>
+    <a href="#quality" id="tab-quality">质量体检</a>
+    <a href="#bus" id="tab-bus">总线矩阵<span class="c" id="c-bus"></span></a>
+    <a href="#tables" id="tab-tables">表清单<span class="c" id="c-tables"></span></a>
+    <a href="#ads" id="tab-ads">ADS 业务指标<span class="c" id="c-ads"></span></a>
+    <a href="#base" id="tab-base">DWS 口径<span class="c" id="c-base"></span></a>
+    <a href="#issues" id="tab-issues">待确认<span class="c" id="c-issues"></span></a>
+  </nav>
+
+  <!-- 血缘全景 -->
+  <section id="view-lineage">
+    <div class="toolbar">
+      <div class="searchwrap">
+        <input type="search" id="lin-q" placeholder="找表或指标：输入规范表名、中文名或指标名，回车定位" aria-label="在血缘中查找" autocomplete="off">
+        <div class="sugg" id="lin-sugg" hidden></div>
+      </div>
+      <div class="chips" id="lin-mode" aria-label="链路"></div>
+      <span class="sep"></span>
+      <div class="chips" id="lin-opt"></div>
+      <span class="sep"></span>
+      <div class="chips" id="lin-dom" aria-label="业务域"></div>
+    </div>
+    <div class="lin-head">
+      <div class="canvas" id="lin-canvas"></div>
+      <aside class="panel lin-info" id="lin-info"></aside>
+    </div>
+  </section>
+
+  <section id="view-quality" hidden>
+    <div class="qcards" id="qcards"></div>
+    <div id="qdetail"></div>
+  </section>
+
+  <section id="view-bus" hidden>
+    <div class="toolbar">
+      <div class="chips" id="bus-layer"></div>
+      <span class="sep"></span>
+      <div class="chips" id="bus-dom"></div>
+      <span class="count" id="bus-n"></span>
+    </div>
+    <div class="grid-wrap"><table class="bus" id="bus-t"></table></div>
+  </section>
+
+  <section id="view-tables" hidden>
+    <div class="toolbar">
+      <input type="search" id="t-q" placeholder="搜索表名 / 中文名 / 来源 / 口径，如 verify、退款、t_order" aria-label="搜索表">
+      <div class="chips" id="t-layer"></div>
+      <div class="chips" id="t-dom"></div>
+      <span class="count" id="t-n"></span>
+    </div>
+    <div class="layout" id="t-lay">
+      <div class="grid-wrap"><table>
+        <thead><tr><th>分层</th><th>表名</th><th>中文名</th><th class="col-hide">粒度</th><th>上游</th><th>下游</th><th>维度</th><th>指标</th><th>血缘</th></tr></thead>
+        <tbody id="t-body"></tbody></table></div>
+      <aside class="drawer" id="t-dr" aria-live="polite"></aside>
+    </div>
+  </section>
+
+  <section id="view-ads" hidden>
+    <div class="toolbar">
+      <input type="search" id="a-q" placeholder="搜索业务指标，如 近7日OTA、退款率、pay_7d_amt" aria-label="搜索 ADS 指标">
+      <select id="a-table" aria-label="ADS 表"></select>
+      <div class="chips" id="a-mode"></div>
+      <div class="chips" id="a-period"></div>
+      <span class="count" id="a-n"></span>
+    </div>
+    <div class="layout" id="a-lay">
+      <div class="grid-wrap"><table>
+        <thead><tr><th>编码</th><th>业务指标名</th><th>字段名</th><th>周期</th><th class="col-hide">修饰词</th><th class="col-hide">ADS 表</th><th>血缘</th></tr></thead>
+        <tbody id="a-body"></tbody></table></div>
+      <aside class="drawer" id="a-dr" aria-live="polite"></aside>
+    </div>
+  </section>
+
+  <section id="view-base" hidden>
+    <div class="toolbar">
+      <input type="search" id="b-q" placeholder="搜索口径，如 支付金额、pay_amt、核销" aria-label="搜索口径">
+      <div class="chips" id="b-type"></div>
+      <div class="chips" id="b-dom"></div>
+      <span class="count" id="b-n"></span>
+    </div>
+    <div class="layout" id="b-lay">
+      <div class="grid-wrap"><table>
+        <thead><tr><th>编码</th><th>英文名</th><th>中文名</th><th>类型</th><th>单位</th><th>落地 DWS</th><th>生成 ADS 指标</th><th>血缘</th></tr></thead>
+        <tbody id="b-body"></tbody></table></div>
+      <aside class="drawer" id="b-dr" aria-live="polite"></aside>
+    </div>
+  </section>
+
+  <section id="view-issues" hidden>
+    <div class="legend">
+      <span class="V-crit"><i style="--s:var(--crit)"></i>源系统缺口 / 合规：需客户补表或确认</span>
+      <span class="V-warn"><i style="--s:var(--warn)"></i>命名规范：影响表名</span>
+      <span class="V-info"><i style="--s:var(--info)"></i>口径 / 文档：我方先按假设处理</span>
+    </div>
+    <div class="issues" id="issues"></div>
+  </section>
+</div>
+<div class="toast" id="toast" role="status"></div>
+
+<script>
+const $ = s => document.querySelector(s);
+const esc = s => String(s ?? "").replace(/[&<>"]/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));
+let DATA, T, BASE, BASEC, ADSBY, ADSI;
+const st = {
+  lin: { mode: "off", dims: false, dom: null, sel: { kind: "table", id: "ads_ord_channel_sales_structure_di" } },
+  t: { q: "", layer: null, dom: null, sel: null },
+  a: { q: "", table: "", mode: null, period: null, base: null, sel: null },
+  b: { q: "", type: null, dom: null, sel: null },
+  bus: { layer: null, dom: null, col: null },
+  q: { dim: "std" },
+};
+const LAYERS = ["ODS", "DWD", "DIM", "DWS", "ADS"];
+
+fetch("data.json").then(r => r.json()).then(d => { DATA = d; init(); }).catch(() => {
+  $("#strip").innerHTML = `<div class="loading">模型数据载入失败，请刷新页面重试</div>`;
+});
+
+function init() {
+  T = Object.fromEntries(DATA.tables.map(t => [t.short, t]));
+  BASE = Object.fromEntries(DATA.bases.map(b => [b.en, b]));
+  BASEC = Object.fromEntries(DATA.bases.map(b => [b.code, b]));
+  ADSI = Object.fromEntries(DATA.ads.map(r => [r.code, r]));
+  ADSBY = {};
+  DATA.ads.forEach(r => (ADSBY[r.base] ||= []).push(r));
+  const S = DATA.summary;
+  $("#strip").innerHTML = LAYERS.map(l => `
+    <div class="cell L-${l}"><span class="k">${l}</span><span class="n">${S.layers[l]}</span><span class="d">${{ODS:"原始数据层",DWD:"明细层 · 度量+退化维度",DIM:"维度层 · 一致性维度",DWS:"汇总层 · 原子口径",ADS:"应用层 · 业务指标"}[l]}</span></div>`).join("") + `
+    <div class="cell"><span class="k">离线 / 实时</span><span class="n">${S.total} <span class="small">+ ${S.rt}</span></span><span class="d">实时 ODS ${S.rt_layers.ODS} · DWD ${S.rt_layers.DWD} · DWS ${S.rt_layers.DWS} · ADS ${S.rt_layers.ADS}</span></div>
+    <div class="cell"><span class="k">指标</span><span class="n">${S.ads} <span class="small">业务指标</span></span><span class="d">离线 ${S.ads_by["离线"]} · 实时 ${S.ads_by["实时"]} · DWS 口径 ${S.base}</span></div>`;
+  $("#c-tables").textContent = DATA.tables.length;
+  $("#c-ads").textContent = DATA.ads.length;
+  $("#c-base").textContent = DATA.bases.length;
+  $("#c-issues").textContent = DATA.issues.length;
+  $("#c-bus").textContent = DATA.bus.dims.length + "维";
+  bindStatic();
+  renderLineage(); renderQuality(); renderBus(); renderTables(); renderAds(); renderBase(); renderIssues();
+  show(location.hash.slice(1));
+}
+
+/* ================= 通用 ================= */
+const VIEWS = ["lineage", "quality", "bus", "tables", "ads", "base", "issues"];
+function go(v) { if (location.hash !== "#" + v) history.replaceState(null, "", "#" + v); show(v); }
+function show(v) {
+  if (!VIEWS.includes(v)) v = "lineage";
+  VIEWS.forEach(x => { $("#view-" + x).hidden = x !== v; $("#tab-" + x).setAttribute("aria-current", x === v ? "page" : "false"); });
+  if (v === "lineage") requestAnimationFrame(() => { if (!window.__fit) { window.__fit = 1; VP.k = .62; focusSel(true); } });
+}
+window.addEventListener("hashchange", () => show(location.hash.slice(1)));
+function chips(el, items, cur, set, cls = "") {
+  el.innerHTML = items.map(([v, label]) => `<button class="chip ${cls}" aria-pressed="${cur === v}" data-v="${v ?? ""}">${label}</button>`).join("");
+  el.querySelectorAll(".chip").forEach(b => b.onclick = () => set(b.dataset.v === "" ? null : b.dataset.v));
+}
+const domItems = () => [[null, "全部域"], ...DATA.domains.map(d => [d.k, d.k + "_"])];
+function lt(s) { const t = T[s]; return t ? `<button class="link" data-t="${s}" title="${esc(t.cn)}"><span class="pill L-${t.layer}">${t.layer}</span>${esc(s)}</button>` : `<span class="mono">${esc(s)}</span>`; }
+function lb(en) { const b = BASE[en]; return b ? `<button class="link cnl" data-b="${en}" title="${esc(en)}">${b.code} ${esc(b.cn)}</button>` : ""; }
+function bindLinks(root) {
+  root.querySelectorAll("[data-t]").forEach(x => x.onclick = e => { e.stopPropagation(); openTable(x.dataset.t); });
+  root.querySelectorAll("[data-b]").forEach(x => x.onclick = e => { e.stopPropagation(); openBase(x.dataset.b); });
+  root.querySelectorAll("[data-a]").forEach(x => x.onclick = e => { e.stopPropagation(); openAds(x.dataset.a); });
+  root.querySelectorAll("[data-lin]").forEach(x => x.onclick = e => { e.stopPropagation(); linSelect({ kind: "table", id: x.dataset.lin }, true); });
+  root.querySelectorAll("[data-linm]").forEach(x => x.onclick = e => { e.stopPropagation(); linSelect({ kind: "metric", id: x.dataset.linm }, true); });
+  root.querySelectorAll("[data-linb]").forEach(x => x.onclick = e => { e.stopPropagation(); linSelect({ kind: "base", id: x.dataset.linb }, true); });
+  root.querySelectorAll("[data-lindb]").forEach(x => x.onclick = e => { e.stopPropagation(); linSelect({ kind: "db", id: x.dataset.lindb }, true); });
+  root.querySelectorAll("[data-adst]").forEach(x => x.onclick = e => { e.stopPropagation(); Object.assign(st.a, { q: "", table: x.dataset.adst, mode: null, period: null, base: null, sel: null }); $("#a-q").value = ""; renderAds(); go("ads"); });
+  root.querySelectorAll("[data-adsb]").forEach(x => x.onclick = e => { e.stopPropagation(); Object.assign(st.a, { q: "", table: "", mode: null, period: null, base: x.dataset.adsb, sel: null }); $("#a-q").value = ""; renderAds(); go("ads"); });
+  root.querySelectorAll("[data-copy]").forEach(x => x.onclick = e => { e.stopPropagation(); copy(x.dataset.copy); });
+}
+function copy(text) {
+  const t = $("#toast");
+  const say = m => { t.textContent = m; t.classList.add("on"); setTimeout(() => t.classList.remove("on"), 1600); };
+  try { navigator.clipboard.writeText(text).then(() => say("已复制"), () => say("浏览器不允许复制，请手动选中")); } catch (e) { say("浏览器不允许复制，请手动选中"); }
+}
+function closure(start, key, extra) {
+  const seen = new Set(), stack = [start];
+  while (stack.length) {
+    const x = stack.pop(), t = T[x];
+    if (!t) continue;
+    const nxt = [...t[key], ...(extra ? t[extra] : [])];
+    for (const n of nxt) if (!seen.has(n) && T[n]) { seen.add(n); stack.push(n); }
+  }
+  return seen;
+}
+
+/* ================= 血缘全景（画布） ================= */
+const COLS = ["SRC", "ODS", "DWD", "DIM", "DWS", "ADS", "MET"];
+const COLNAME = { SRC: ["SRC", "业务源层"], ODS: ["ODS", "原始数据层"], DWD: ["DWD", "明细层"], DIM: ["DIM", "维度层"], DWS: ["DWS", "汇总层"], ADS: ["ADS", "应用层"], MET: ["指标", "ADS 业务指标"] };
+const NW = 300, NH = 36, ROW = 44, GAP = 120, GH = 26, TOP = 70;
+const DBCN = { "pft-order": "订单库", "pft-payment": "支付库", "pft-verification": "核销库", "pft-finance": "财务库", "pft-product": "商品库",
+  "pft-pricing": "价格库", "pft-inventory": "库存库", "pft-identity": "用户身份库", "pft-platform": "平台运营库", "pft-distribution": "分销库",
+  "pft-open-platform": "开放平台库", "pft-risk": "风控库", "pft-device": "设备库", "pft-notification": "通知库", "pft-audit": "审计库",
+  "pft-application": "应用库", "pft-data-pipeline": "数据管道库", "pft-marketing": "营销库" };
+let LIN = null;
+const VP = { k: .6, x: 20, y: 10 };
+let MOVED = {};   // 用户拖过的节点位置
+const MC = "#4b4b4b";
+
+function selId() { const s = st.lin.sel; return s ? s.kind + ":" + s.id : ""; }
+function nodeId(kind, id) { return kind === "table" ? id : kind === "db" ? "db:" + id : kind === "metric" ? "m:" + id : id; }
+function metricColumn() {
+  const s = st.lin.sel;
+  if (!s) return { title: "", list: [] };
+  if (s.kind === "table" && T[s.id]?.layer === "ADS") return { title: T[s.id].cn, list: DATA.ads.filter(r => r.ads === s.id) };
+  if (s.kind === "metric") { const r = ADSI[s.id]; return { title: r.ads_cn, list: DATA.ads.filter(x => x.ads === r.ads) }; }
+  if (s.kind === "base") return { title: "口径 " + BASE[s.id].cn + " 生成的指标", list: (ADSBY[s.id] || []).slice(0, 80) };
+  return { title: "", list: [] };
+}
+function keepT(t) { const m = st.lin.mode; return m === "all" || (m === "off" && !t.rt) || (m === "only" && t.rt); }
+function layoutLineage() {
+  const cols = { SRC: [], ODS: [], DWD: [], DIM: [], DWS: [], ADS: [], MET: [] };
+  const dbs = new Map();
+  DATA.tables.forEach(t => { if (keepT(t)) cols[t.layer].push(t); });
+  cols.ODS.forEach(t => { if (t.db) { if (!dbs.has(t.db)) dbs.set(t.db, []); dbs.get(t.db).push(t.short); } });
+  cols.SRC = [...dbs.keys()].sort().map(db => ({ short: "db:" + db, name: db, cn: (DBCN[db] || "业务库") + " · " + dbs.get(db).length + " 张 ODS", layer: "SRC", domain: "", rt: false, down: dbs.get(db), up: [], dims: [], used_by: [] }));
+  const mc = metricColumn();
+  cols.MET = mc.list.map(r => ({ short: "m:" + r.code, name: r.en, cn: r.cn, layer: "MET", domain: "", rt: r.mode === "实时", up: [r.ads], down: [], dims: [], used_by: [], r }));
+  const pos = {}, groups = [], heads = [];
+  let H = 0;
+  COLS.forEach((c, ci) => {
+    const x = 20 + ci * (NW + GAP);
+    heads.push({ c, x, n: cols[c].length });
+    let y = TOP;
+    let list = cols[c].slice();
+    if (c !== "MET") list.sort((a, b) => (a.rt - b.rt) || a.domain.localeCompare(b.domain) || a.short.localeCompare(b.short));
+    let g = null;
+    list.forEach(t => {
+      const gk = c === "SRC" ? "" : c === "MET" ? "" : (t.rt ? "实时 · " : "") + t.domain + "_";
+      if (gk && gk !== g) { g = gk; groups.push({ x, y: y + 15, label: gk }); y += GH; }
+      const m = MOVED[t.short];
+      pos[t.short] = { x: m ? m.x : x, y: m ? m.y : y, t };
+      y += ROW;
+    });
+    if (c === "MET" && mc.title) groups.push({ x, y: TOP - 8, label: mc.title + " · " + list.length + " 个" });
+    H = Math.max(H, y + 20);
+  });
+  const W = 20 + COLS.length * (NW + GAP);
+  const edges = [];
+  Object.values(pos).forEach(({ t }) => {
+    if (t.layer === "SRC") t.down.forEach(d => pos[d] && edges.push({ u: t.short, v: d, k: "flow" }));
+    else if (t.layer === "MET") pos[t.up[0]] && edges.push({ u: t.up[0], v: t.short, k: "met" });
+    else t.up.forEach(u => pos[u] && edges.push({ u, v: t.short, k: "flow" }));
+    if (st.lin.dims && !["DIM", "SRC", "MET"].includes(t.layer)) t.dims.forEach(d => pos[d] && !t.up.includes(d) && edges.push({ u: d, v: t.short, k: "dimlink" }));
+  });
+  const adj = {};
+  edges.forEach((e, i) => { (adj[e.u] ||= []).push(i); (adj[e.v] ||= []).push(i); });
+  LIN = { pos, edges, groups, heads, W, H, adj, cols, mc };
+}
+function pathOf(e) {
+  const a = LIN.pos[e.u], b = LIN.pos[e.v];
+  const y1 = a.y + NH / 2, y2 = b.y + NH / 2;
+  if (Math.abs(a.x - b.x) < 1) { const x = a.x + NW; return `M${x},${y1} C${x + 60},${y1} ${x + 60},${y2} ${x},${y2}`; }
+  if (b.x > a.x) { const x1 = a.x + NW, x2 = b.x, mx = Math.max(40, (x2 - x1) * .5); return `M${x1},${y1} C${x1 + mx},${y1} ${x2 - mx},${y2} ${x2},${y2}`; }
+  const x1 = a.x, x2 = b.x + NW; return `M${x1},${y1} C${x1 - 50},${y1} ${x2 + 50},${y2} ${x2},${y2}`;
+}
+const cut = (s, n) => s.length > n ? s.slice(0, n - 1) + "…" : s;
+function nodeSvg({ x, y, t }) {
+  const cnt = t.layer === "ADS" ? t.ads_metric_qty : t.layer === "DWS" ? t.metrics.length : "";
+  const cls = t.layer === "MET" ? "L-ADS" : "L-" + t.layer;
+  const l1 = t.layer === "SRC" ? t.name : t.layer === "MET" ? t.name : t.name;
+  return `<g class="node ${cls}" data-n="${t.short}" transform="translate(${x},${y})">
+    <title>${esc(t.layer === "MET" ? t.r.code + " " + t.name + "｜" + t.cn : t.name + "｜" + t.cn)}</title>
+    <rect class="bg" width="${NW}" height="${NH}" rx="5"/><rect class="bar" width="4" height="${NH}" rx="2"/>
+    <text class="n1" x="12" y="15">${esc(cut(l1, 40))}</text>
+    <text class="n2" x="12" y="29">${esc(cut(t.cn, 24))}</text>
+    ${cnt !== "" && cnt !== undefined ? `<text class="cnt" x="${NW - 8}" y="15">${cnt}${t.layer === "ADS" ? " 指标" : " 口径"}</text>` : ""}
+    ${t.layer === "MET" && t.rt ? `<text class="cnt" x="${NW - 8}" y="15">实时</text>` : ""}</g>`;
+}
+function renderLineage() {
+  chips($("#lin-mode"), [["off", "离线"], ["only", "实时"], ["all", "离线+实时"]], st.lin.mode, v => { st.lin.mode = v; MOVED = {}; if (st.lin.sel?.kind === "table" && !keepT(T[st.lin.sel.id])) st.lin.sel = null; renderLineage(); });
+  $("#lin-opt").innerHTML = `<button class="chip" aria-pressed="${st.lin.dims}" id="o-dims">显示维度关联</button>`;
+  $("#o-dims").onclick = () => { st.lin.dims = !st.lin.dims; renderLineage(); };
+  chips($("#lin-dom"), domItems(), st.lin.dom, v => { st.lin.dom = v; paintLineage(); }, "mono");
+  layoutLineage();
+  const out = [`<svg id="lin-svg" role="img" aria-label="表级与指标级血缘画布"><g id="vp">`];
+  out.push(LIN.heads.map(h => `<g class="L-${h.c === "MET" ? "ADS" : h.c}"><rect class="colline" x="${h.x}" y="22" width="4" height="26" fill="var(--c)"/>
+    <text x="${h.x + 14}" y="40"><tspan class="colh">${COLNAME[h.c][0]}</tspan><tspan class="colh2" dx="10">${COLNAME[h.c][1]} · ${h.n}</tspan></text></g>`).join(""));
+  if (!LIN.cols.MET.length) { const h = LIN.heads.find(x => x.c === "MET"); out.push(`<text class="ph" x="${h.x}" y="${TOP + 20}">选中一张 ADS 表或一个指标，这里展开业务指标</text><text class="ph" x="${h.x}" y="${TOP + 40}">点指标只看它自己的链路</text>`); }
+  out.push(`<g id="g-edges">` + LIN.edges.map((e, i) => `<path class="edge ${e.k === "flow" ? "" : e.k}" data-i="${i}" d="${pathOf(e)}"/>`).join("") + `</g>`);
+  out.push(LIN.groups.map(g => `<text class="grp" x="${g.x + 2}" y="${g.y}">${esc(g.label)}</text>`).join(""));
+  out.push(`<g id="g-nodes">` + Object.values(LIN.pos).map(nodeSvg).join("") + `</g>`);
+  out.push(`</g></svg>`);
+  $("#lin-canvas").innerHTML = out.join("") + `
+    <div class="cv-tools"><button id="z-in" title="放大">＋</button><span class="z" id="z-v"></span><button id="z-out" title="缩小">－</button>
+      <button id="z-fit">适应全图</button><button id="z-sel">回到选中</button><button id="z-reset">重置布局</button>
+      <span class="sepv"></span><button id="z-panel">${st.lin.panel === false ? "展开面板" : "收起面板"}</button>
+      <button id="z-max" class="${st.lin.max ? "on" : ""}" title="快捷键 Esc 退出">${st.lin.max ? "退出最大化" : "最大化"}</button></div>
+    <div class="cv-hint">拖动空白处平移 · 滚轮缩放 · 拖动节点调整位置 · 点击节点看链路</div>`;
+  $("#z-in").onclick = () => zoomAt(1.25); $("#z-out").onclick = () => zoomAt(.8);
+  $("#z-fit").onclick = fitAll; $("#z-sel").onclick = () => focusSel(true);
+  $("#z-reset").onclick = () => { MOVED = {}; renderLineage(); };
+  $("#z-max").onclick = () => setMax(!st.lin.max);
+  $("#z-panel").onclick = () => { st.lin.panel = st.lin.panel === false; applyLayout(); };
+  applyLayout();
+  applyVP();
+  paintLineage();
+}
+function applyLayout() {
+  $("#view-lineage").classList.toggle("max", !!st.lin.max);
+  document.body.classList.toggle("locked", !!st.lin.max);
+  $(".lin-head").classList.toggle("nopanel", st.lin.panel === false);
+  const m = $("#z-max"), p = $("#z-panel");
+  if (m) { m.textContent = st.lin.max ? "退出最大化" : "最大化"; m.classList.toggle("on", !!st.lin.max); }
+  if (p) p.textContent = st.lin.panel === false ? "展开面板" : "收起面板";
+}
+function setMax(on) {
+  const before = $("#lin-canvas").getBoundingClientRect();
+  st.lin.max = on;
+  applyLayout();
+  try {
+    if (on && !document.fullscreenElement && document.documentElement.requestFullscreen) document.documentElement.requestFullscreen().catch(() => {});
+    if (!on && document.fullscreenElement) document.exitFullscreen().catch(() => {});
+  } catch (e) {}
+  // 保持画面中心不跳
+  requestAnimationFrame(() => {
+    const after = $("#lin-canvas").getBoundingClientRect();
+    VP.x += (after.width - before.width) / 2; VP.y += (after.height - before.height) / 2; applyVP();
+  });
+}
+function applyVP() {
+  const g = $("#vp"); if (!g) return;
+  g.setAttribute("transform", `translate(${VP.x},${VP.y}) scale(${VP.k})`);
+  const c = $("#lin-canvas");
+  c.style.backgroundSize = `${22 * VP.k}px ${22 * VP.k}px`;
+  c.style.backgroundPosition = `${VP.x}px ${VP.y}px`;
+  const z = $("#z-v"); if (z) z.textContent = Math.round(VP.k * 100) + "%";
+}
+function zoomAt(f, cx, cy) {
+  const c = $("#lin-canvas"), r = c.getBoundingClientRect();
+  cx ??= r.width / 2; cy ??= r.height / 2;
+  const k2 = Math.min(2.2, Math.max(.1, VP.k * f));
+  VP.x = cx - (cx - VP.x) * k2 / VP.k; VP.y = cy - (cy - VP.y) * k2 / VP.k; VP.k = k2; applyVP();
+}
+function fitAll() {
+  const c = $("#lin-canvas"), r = c.getBoundingClientRect();
+  const k = Math.min(r.width / (LIN.W + 20), r.height / (LIN.H + 20));
+  VP.k = Math.max(.1, k); VP.x = (r.width - LIN.W * VP.k) / 2; VP.y = 10; applyVP();
+}
+function focusSel(force) {
+  const id = st.lin.sel ? nodeId(st.lin.sel.kind, st.lin.sel.id) : null;
+  const p = id && LIN?.pos[id]; if (!p) return;
+  const c = $("#lin-canvas"), r = c.getBoundingClientRect();
+  if (r.width === 0) return;
+  if (force || VP.k < .45) VP.k = Math.max(VP.k, .6);
+  const sx = p.x * VP.k + VP.x, sy = p.y * VP.k + VP.y;
+  if (!force && sx > 40 && sx < r.width - 200 && sy > 40 && sy < r.height - 60) return;
+  VP.x = r.width * .45 - (p.x + NW / 2) * VP.k; VP.y = r.height * .45 - p.y * VP.k; applyVP();
+}
+function upClosure(start, withDims) { return closure(start, "up", withDims ? "dims" : null); }
+function addDbs(set) { [...set].forEach(x => { const t = T[x]; if (t && t.layer === "ODS" && t.db) set.add("db:" + t.db); }); return set; }
+function linSets() {
+  const s = st.lin.sel; if (!s) return null;
+  if (s.kind === "db") {
+    const ods = DATA.tables.filter(t => t.layer === "ODS" && t.db === s.id).map(t => t.short), down = new Set(ods);
+    ods.forEach(o => closure(o, "down", st.lin.dims ? "used_by" : null).forEach(x => down.add(x)));
+    return { focus: "db:" + s.id, up: new Set(), down, path: null };
+  }
+  if (s.kind === "table") {
+    const up = addDbs(upClosure(s.id, st.lin.dims));
+    const down = closure(s.id, "down", st.lin.dims ? "used_by" : null);
+    LIN.cols.MET.forEach(m => { if (m.up[0] === s.id) down.add(m.short); });
+    return { focus: s.id, up, down, path: null };
+  }
+  if (s.kind === "metric") {
+    const r = ADSI[s.id], tr = traceAds(r), P = new Set([r.ads, "m:" + r.code]);
+    tr.dws.forEach(d => { P.add(d); upClosure(d, false).forEach(x => P.add(x)); });
+    return { focus: "m:" + r.code, path: addDbs(P) };
+  }
+  if (s.kind === "base") {
+    const b = BASE[s.id], P = new Set();
+    const srcs = [b.src, ...(b.type === "原子指标" ? [] : (b.calc.match(/[a-z][a-z0-9_]*/g) || []).filter(x => BASE[x]).map(x => BASE[x].src))];
+    srcs.forEach(x => { if (T[x]) { P.add(x); upClosure(x, false).forEach(y => P.add(y)); } });
+    b.dws.forEach(d => { P.add(d); upClosure(d, false).forEach(y => P.add(y)); });
+    b.ads.forEach(a => P.add(a));
+    LIN.cols.MET.forEach(m => P.add(m.short));
+    return { focus: null, path: addDbs(P) };
+  }
+}
+function paintLineage() {
+  const S = linSets(), dom = st.lin.dom;
+  const inS = x => S && (S.path ? S.path.has(x) : (S.up.has(x) || S.down.has(x)));
+  document.querySelectorAll("#lin-canvas .node").forEach(n => {
+    const s = n.dataset.n, t = LIN.pos[s].t;
+    const isSel = S && S.focus === s;
+    n.classList.toggle("sel", !!isSel);
+    n.classList.toggle("hit", !!inS(s) && !isSel);
+    const domOff = dom && !["SRC", "MET"].includes(t.layer) && t.domain !== dom;
+    n.classList.toggle("off", S ? (!inS(s) && !isSel) : !!domOff);
+  });
+  const upAll = S && !S.path ? new Set([...S.up, S.focus]) : null, downAll = S && !S.path ? new Set([...S.down, S.focus]) : null;
+  document.querySelectorAll("#lin-canvas .edge").forEach(p => {
+    const e = LIN.edges[+p.dataset.i];
+    let on = false, up = false;
+    if (S && S.path) { on = S.path.has(e.u) && S.path.has(e.v); up = on && e.k !== "met"; }
+    else if (S) {
+      if (upAll.has(e.u) && upAll.has(e.v)) { on = true; up = true; }
+      else if (downAll.has(e.u) && downAll.has(e.v)) on = true;
+    }
+    const domOff = !S && dom && ![e.u, e.v].some(x => LIN.pos[x].t.domain === dom);
+    p.classList.toggle("on", on); p.classList.toggle("up", up);
+    p.classList.toggle("off", (!!S && !on) || !!domOff);
+  });
+  const g = $("#g-edges"); if (g) g.querySelectorAll(".edge.on").forEach(p => g.appendChild(p));
+  renderLinInfo(S);
+}
+const legendHtml = `<div class="legend"><span><i style="--s:var(--dwd)"></i>上游 / 指标链路</span><span><i style="--s:var(--accent)"></i>下游</span><span><i class="dash" style="--s:var(--dim)"></i>维度关联</span></div>`;
+function layerPills(arr) { return LAYERS.map(l => [l, arr.filter(x => T[x]?.layer === l).length]).filter(x => x[1]).map(([l, n]) => `<span class="pill L-${l}">${l} ${n}</span>`).join(""); }
+function metricList(list, cur) {
+  return `<div class="mlist">${list.map(r => `<button data-linm="${r.code}" class="${cur === r.code ? "on" : ""}"><span>${esc(r.cn)}</span><span class="mono">${esc(r.period)}</span></button>`).join("")}</div>`;
+}
+function renderLinInfo(S) {
+  const box = $("#lin-info"), s = st.lin.sel;
+  if (!s) {
+    box.innerHTML = `<h3 style="font-family:var(--body);font-size:15px">表级 + 指标级血缘</h3>
+      <p class="small">节点第一行是规范表名（库.表），第二行是中文名。点表看它全链路的上下游；选中 ADS 表后最右列展开业务指标，点指标只看这一个指标的链路。</p>
+      <div class="kpis"><div><b>${LIN.edges.filter(e => e.k === "flow").length}</b><span>表间依赖</span></div><div><b>${Object.values(LIN.pos).filter(p => p.t.layer !== "MET").length}</b><span>当前节点</span></div><div><b>${DATA.summary.ads}</b><span>业务指标</span></div></div>${legendHtml}`;
+    return;
+  }
+  if (s.kind === "metric") {
+    const r = ADSI[s.id], tr = traceAds(r);
+    box.innerHTML = `<div class="top"><span class="pill L-ADS">指标</span><span class="actions"><button class="btn" data-a="${r.code}">指标详情</button><button class="btn" id="lin-clear">清除</button></span></div>
+      <h3>${esc(r.en)}</h3><p class="small" style="margin:0">${r.code} · ${esc(r.cn)}</p>
+      <div class="sec"><span>计算公式</span></div><pre class="code">${esc(r.formula)}</pre>
+      <div class="sec"><span>取数示例</span><button class="btn" data-copy="${esc(r.sql)}">复制 SQL</button></div><pre class="code">${esc(r.sql)}</pre>
+      <div class="sec"><span>指标血缘</span></div>
+      <div class="chain">
+        <div class="step T-${r.type}"><b>口径</b><div class="links"><button class="link cnl" data-linb="${r.base}">${BASE[r.base].code} ${esc(r.base_cn)}</button></div></div>
+        <div class="step L-ADS"><b>ADS</b><div class="links">${ltl(r.ads)}</div></div>
+        <div class="step L-DWS"><b>DWS</b><div class="links">${tr.dws.map(ltl).join("")}</div></div>
+        <div class="step L-DWD"><b>DWD</b><div class="links">${tr.dwd.map(ltl).join("") || "—"}</div></div>
+        <div class="step L-ODS"><b>ODS</b><div class="links">${tr.ods.map(ltl).join("") || "—"}</div></div>
+        <div class="step L-SRC"><b>SRC</b><div class="links">${tr.dbs.map(d => `<button class="link" data-lindb="${d}">${esc(d)}</button>`).join("") || "—"}</div></div>
+      </div>
+      <div class="sec"><span>同表其他指标</span><span>${LIN.mc.list.length}</span></div>${metricList(LIN.mc.list, r.code)}${legendHtml}`;
+  } else if (s.kind === "base") {
+    const b = BASE[s.id];
+    box.innerHTML = `<div class="top"><span class="pill T-${b.type}">口径</span><span class="actions"><button class="btn" data-b="${b.en}">口径详情</button><button class="btn" id="lin-clear">清除</button></span></div>
+      <h3>${esc(b.en)}</h3><p class="small" style="margin:0">${b.code} · ${esc(b.cn)}</p>
+      <div class="sec"><span>计算逻辑</span></div><pre class="code">${esc(b.calc)}</pre>
+      <div class="sec"><span>来源明细</span></div><div class="links">${ltl(b.src)}</div>
+      <div class="sec"><span>落地 DWS</span></div><div class="links">${b.dws.map(ltl).join("") || "<span class='none'>计算口径，ADS 现算</span>"}</div>
+      <div class="sec"><span>使用的 ADS</span></div><div class="links">${b.ads.map(ltl).join("") || "—"}</div>
+      <div class="sec"><span>生成的业务指标</span><span>${(ADSBY[b.en] || []).length}</span></div>${metricList(LIN.mc.list)}${legendHtml}`;
+  } else {
+    const isDb = s.kind === "db";
+    const t = isDb ? LIN.pos["db:" + s.id].t : T[s.id];
+    const upT = [...S.up].filter(x => T[x]), downT = [...S.down].filter(x => T[x]);
+    const dbs = [...S.up].filter(x => x.startsWith("db:")).map(x => x.slice(3));
+    const adsDown = downT.filter(x => T[x].layer === "ADS");
+    const metricN = (t.layer === "ADS" ? [t.short] : adsDown).reduce((n, x) => n + (T[x]?.ads_metric_qty || 0), 0);
+    box.innerHTML = `<div class="top"><span class="pill L-${t.layer}">${isDb ? "SRC 业务源" : t.layer}</span>
+        <span class="actions">${!isDb ? `<button class="btn" data-t="${t.short}">表详情</button>` : ""}<button class="btn" id="lin-clear">清除</button></span></div>
+      <h3>${esc(t.name)}</h3><p class="small" style="margin:0">${esc(t.cn)}</p>
+      <div class="kpis"><div><b>${upT.length}</b><span>上游表（全链）</span></div><div><b>${downT.length}</b><span>下游表（全链）</span></div><div><b>${metricN}</b><span>影响业务指标</span></div></div>
+      ${upT.length ? `<div class="sec"><span>上游分层</span></div><div class="links">${layerPills(upT)}${dbs.length ? `<span class="pill L-SRC">SRC ${dbs.length}</span>` : ""}</div>` : ""}
+      ${dbs.length ? `<div class="links" style="margin-top:6px">${dbs.map(d => `<button class="link" data-lindb="${d}">${esc(d)}</button>`).join("")}</div>` : ""}
+      ${downT.length ? `<div class="sec"><span>下游分层</span></div><div class="links">${layerPills(downT)}</div>` : ""}
+      ${adsDown.length ? `<div class="sec"><span>受影响的 ADS 表</span><span>${adsDown.length}</span></div><div class="links">${adsDown.map(ltl).join("")}</div>` : ""}
+      ${t.layer === "DWS" && t.metrics.length ? `<div class="sec"><span>本表口径 · 点看口径血缘</span><span>${t.metrics.length}</span></div><div class="links">${t.metrics.map(m => `<button class="link cnl" data-linb="${m}">${esc(BASE[m]?.cn || m)}</button>`).join("")}</div>` : ""}
+      ${t.layer === "ADS" ? `<div class="sec"><span>本表业务指标 · 点看指标血缘</span><span>${t.ads_metric_qty}</span></div>${metricList(LIN.mc.list)}` : ""}
+      ${legendHtml}`;
+  }
+  $("#lin-clear").onclick = () => linSelect(null);
+  bindLinks(box);
+}
+function ltl(s) { const t = T[s]; return t ? `<button class="link" data-lin="${s}" title="${esc(t.cn)}"><span class="pill L-${t.layer}">${t.layer}</span>${esc(t.name)}</button>` : `<span class="mono">${esc(s)}</span>`; }
+function linSelect(sel, jump) {
+  const prevMet = metricColumnKey();
+  if (sel?.kind === "table" && T[sel.id] && !keepT(T[sel.id])) { st.lin.mode = "all"; }
+  if (sel?.kind === "metric" && ADSI[sel.id]?.mode === "实时" && st.lin.mode === "off") st.lin.mode = "all";
+  st.lin.sel = sel;
+  if (jump) go("lineage");
+  if (metricColumnKey() !== prevMet || $("#lin-mode [aria-pressed=true]")?.dataset.v !== st.lin.mode) renderLineage(); else paintLineage();
+  requestAnimationFrame(() => focusSel(false));
+}
+function metricColumnKey() { const m = metricColumn(); return m.title + "|" + m.list.length + "|" + (m.list[0]?.code || ""); }
+function bindCanvas() {
+  const c = $("#lin-canvas");
+  let drag = null;
+  c.addEventListener("wheel", e => { e.preventDefault(); const r = c.getBoundingClientRect(); zoomAt(Math.exp(-e.deltaY * .0015), e.clientX - r.left, e.clientY - r.top); }, { passive: false });
+  c.addEventListener("pointerdown", e => {
+    if (e.target.closest(".cv-tools")) return;
+    const n = e.target.closest(".node");
+    drag = { sx: e.clientX, sy: e.clientY, moved: false, node: n ? n.dataset.n : null, vx: VP.x, vy: VP.y };
+    if (drag.node) { const p = LIN.pos[drag.node]; drag.ox = p.x; drag.oy = p.y; }
+    c.setPointerCapture(e.pointerId);
+  });
+  c.addEventListener("pointermove", e => {
+    if (!drag) return;
+    const dx = e.clientX - drag.sx, dy = e.clientY - drag.sy;
+    if (!drag.moved && Math.hypot(dx, dy) < 4) return;
+    drag.moved = true;
+    if (drag.node) {
+      const p = LIN.pos[drag.node];
+      p.x = drag.ox + dx / VP.k; p.y = drag.oy + dy / VP.k;
+      MOVED[drag.node] = { x: p.x, y: p.y };
+      document.querySelector(`#lin-canvas .node[data-n="${CSS.escape(drag.node)}"]`).setAttribute("transform", `translate(${p.x},${p.y})`);
+      (LIN.adj[drag.node] || []).forEach(i => document.querySelector(`#lin-canvas .edge[data-i="${i}"]`)?.setAttribute("d", pathOf(LIN.edges[i])));
+    } else {
+      c.classList.add("panning"); VP.x = drag.vx + dx; VP.y = drag.vy + dy; applyVP();
+    }
+  });
+  const end = () => {
+    if (drag && !drag.moved && drag.node) {
+      const id = drag.node;
+      const sel = id.startsWith("db:") ? { kind: "db", id: id.slice(3) } : id.startsWith("m:") ? { kind: "metric", id: id.slice(2) } : { kind: "table", id };
+      const same = st.lin.sel && st.lin.sel.kind === sel.kind && st.lin.sel.id === sel.id;
+      linSelect(same ? null : sel);
+    }
+    drag = null; c.classList.remove("panning");
+  };
+  c.addEventListener("pointerup", end); c.addEventListener("pointercancel", end);
+}
+function linSuggest() {
+  const q = $("#lin-q").value.trim().toLowerCase(), box = $("#lin-sugg");
+  if (!q) { box.hidden = true; return []; }
+  const tabs = DATA.tables.filter(t => (t.name + t.cn).toLowerCase().includes(q)).slice(0, 8).map(t => ({ sel: { kind: "table", id: t.short }, html: `<span class="pill L-${t.layer}">${t.layer}</span><span class="mono">${esc(t.name)}</span><span class="small">${esc(t.cn)}</span>` }));
+  const ms = DATA.ads.filter(r => (r.cn + r.en).toLowerCase().includes(q)).slice(0, 8).map(r => ({ sel: { kind: "metric", id: r.code }, html: `<span class="pill L-ADS">指标</span><span>${esc(r.cn)}</span><span class="small mono">${esc(r.en)}</span>` }));
+  const all = [...tabs, ...ms];
+  box.innerHTML = all.length ? all.map((x, i) => `<button data-i="${i}" class="${i === 0 ? "act" : ""}">${x.html}</button>`).join("") : `<div class="empty">没有找到，换个关键词试试</div>`;
+  box.hidden = false;
+  box.querySelectorAll("button").forEach(b => b.onclick = () => { box.hidden = true; linSelect(all[+b.dataset.i].sel); });
+  return all;
+}
+
+/* ================= 质量体检 ================= */
+function renderQuality() {
+  const Q = DATA.quality;
+  $("#qcards").innerHTML = Q.dims.map(d => {
+    const by = s => d.checks.filter(c => c.status === s).length;
+    const seg = [["通过", "var(--ok)"], ["提示", "var(--warn)"], ["待定", "var(--info)"], ["不通过", "var(--crit)"]];
+    return `<button class="qcard" data-q="${d.key}" aria-pressed="${st.q.dim === d.key}">
+      <span class="t">${d.name}</span>
+      <span class="s">${d.pass}/${d.total} 项通过${by("提示") ? ` · ${by("提示")} 提示` : ""}${by("待定") ? ` · ${by("待定")} 待定` : ""}${by("不通过") ? ` · ${by("不通过")} 不通过` : ""}</span>
+      <span class="bar">${seg.map(([s, c]) => by(s) ? `<i style="width:${100 * by(s) / d.total}%;background:${c}"></i>` : "").join("")}</span></button>`;
+  }).join("");
+  $("#qcards").querySelectorAll(".qcard").forEach(b => b.onclick = () => { st.q.dim = b.dataset.q; renderQuality(); });
+  const d = Q.dims.find(x => x.key === st.q.dim);
+  const proc = Q.process;
+  $("#qdetail").innerHTML = `
+    <h3 class="blk">${d.name} · 检查明细</h3>
+    <div class="grid-wrap" style="max-height:none"><table class="qlist"><thead><tr><th>状态</th><th>检查项</th><th>结果</th><th>说明 / 明细</th></tr></thead><tbody>
+      ${d.checks.map(c => `<tr><td><span class="st S-${c.status}">${c.status}</span></td><td>${esc(c.name)}</td><td>${esc(c.value)}</td><td class="small">${esc(c.detail)}</td></tr>`).join("")}
+    </tbody></table></div>
+    <h3 class="blk">业务过程覆盖 · 直接下游的 DWS 与 ADS（${proc.filter(p => p.dws.length && p.ads.length).length}/${proc.length}）</h3>
+    <div class="grid-wrap" style="max-height:none"><table><thead><tr><th>业务过程</th><th>DWD 明细</th><th>DWS 汇总</th><th>ADS 离线</th><th>ADS 实时</th></tr></thead><tbody>
+      ${proc.map(p => `<tr><td>${esc(p.name)}</td>
+        <td><div class="links">${p.dwd.map(lt).join("")}</div></td>
+        <td>${p.dws.length ? `<div class="links">${p.dws.map(lt).join("")}</div>` : `<span class="cx">缺</span>`}</td>
+        <td>${p.ads.length ? `<span class="ck">✓</span> <span class="small">${p.ads.length} 张</span> <div class="links" style="margin-top:4px">${p.ads.map(x => `<button class="link cnl" data-t="${x}">${esc(T[x].cn)}</button>`).join("")}</div>` : `<span class="cx">缺</span>`}</td>
+        <td>${p.rt.length ? `<span class="ck">✓</span> <span class="small">${p.rt.map(x => esc(T[x].cn)).join("、")}</span>` : `<span class="small">—</span>`}</td></tr>`).join("")}
+    </tbody></table></div>`;
+  bindLinks($("#qdetail"));
+}
+
+/* ================= 总线矩阵 ================= */
+function renderBus() {
+  const B = DATA.bus;
+  chips($("#bus-layer"), [[null, "DWD+DWS"], ["DWD", "DWD 业务过程"], ["DWS", "DWS 汇总"]], st.bus.layer, v => { st.bus.layer = v; renderBus(); });
+  chips($("#bus-dom"), domItems(), st.bus.dom, v => { st.bus.dom = v; renderBus(); }, "mono");
+  const rows = B.rows.filter(r => (!st.bus.layer || r.layer === st.bus.layer) && (!st.bus.dom || r.domain === st.bus.dom));
+  $("#bus-n").textContent = `${rows.length} 张表 × ${B.dims.length} 个维度 · 点列头高亮`;
+  const col = st.bus.col;
+  $("#bus-t").innerHTML = `<thead><tr><th>分层</th><th>表</th>${B.dims.map(d => `<th class="v ${col === d ? "hi" : ""}" data-col="${d}" title="${esc(d)}">${esc(B.dim_cn[d])}</th>`).join("")}</tr></thead>
+    <tbody>${rows.map(r => `<tr class="click" data-t="${r.short}"><td><span class="pill L-${r.layer}">${r.layer}</span></td><td><div>${esc(r.cn)}</div><div class="small mono">${esc(r.short)}</div></td>
+      ${B.dims.map(d => `<td class="dot ${col === d ? "hi" : ""}">${r.dims.includes(d) ? `<i class="L-${r.layer}" title="${esc(B.dim_cn[d])}"></i>` : ""}</td>`).join("")}</tr>`).join("")}</tbody>
+    <tfoot><tr><td></td><td style="text-align:left">被引用次数</td>${B.dims.map(d => `<td class="${col === d ? "hi" : ""}">${rows.filter(r => r.dims.includes(d)).length}</td>`).join("")}</tr></tfoot>`;
+  $("#bus-t").querySelectorAll("th.v").forEach(th => th.onclick = () => { st.bus.col = st.bus.col === th.dataset.col ? null : th.dataset.col; renderBus(); });
+  bindLinks($("#bus-t"));
+}
+
+/* ================= 表清单 ================= */
+function openTable(s) {
+  const t = T[s]; if (!t) return;
+  Object.assign(st.t, { sel: s, q: "", dom: null, layer: st.t.layer && st.t.layer !== t.layer ? null : st.t.layer });
+  $("#t-q").value = "";
+  renderTables(); go("tables");
+  requestAnimationFrame(() => document.querySelector(`#t-body tr[data-row="${s}"]`)?.scrollIntoView({ block: "nearest" }));
+}
+function renderTables() {
+  chips($("#t-layer"), [[null, "全部"], ...LAYERS.map(l => [l, l]), ["RT", "实时"]], st.t.layer, v => { st.t.layer = v; renderTables(); });
+  chips($("#t-dom"), domItems(), st.t.dom, v => { st.t.dom = v; renderTables(); }, "mono");
+  const q = st.t.q.trim().toLowerCase();
+  const rows = DATA.tables.filter(t => {
+    if (st.t.layer === "RT" ? !t.rt : (st.t.layer && t.layer !== st.t.layer)) return false;
+    if (st.t.dom && t.domain !== st.t.dom) return false;
+    if (!q) return true;
+    return [t.name, t.cn, t.grain, t.src, t.keys, t.note, t.measure, t.degen, t.metrics.join(" "), t.metrics.map(m => BASE[m]?.cn).join(" ")].join(" ").toLowerCase().includes(q);
+  });
+  $("#t-n").textContent = `${rows.length} 张`;
+  $("#t-body").innerHTML = rows.length ? rows.map(t => `<tr class="click ${st.t.sel === t.short ? "sel" : ""}" data-row="${t.short}">
+    <td><span class="pill L-${t.layer}">${t.layer}</span>${t.rt ? `<span class="rt L-${t.layer}">实时</span>` : ""}</td>
+    <td class="mono">${esc(t.name)}</td><td class="cn">${esc(t.cn)}</td><td class="dim col-hide">${esc(t.grain)}</td>
+    <td class="num">${t.up.length || "–"}</td><td class="num">${t.down.length || "–"}</td>
+    <td class="num">${(t.layer === "DIM" ? t.used_by.length : t.dims.length) || "–"}</td>
+    <td class="num">${(t.layer === "ADS" ? t.ads_metric_qty : t.metrics.length) || "–"}</td><td class="lnk"><button class="btn" data-lin="${t.short}">血缘</button></td></tr>`).join("")
+    : `<tr><td colspan="9" class="empty">没有符合条件的表，试试清空搜索或筛选</td></tr>`;
+  $("#t-body").querySelectorAll("tr[data-row]").forEach(r => r.onclick = () => { st.t.sel = r.dataset.row; renderTables(); });
+  bindLinks($("#t-body"));
+  drawTable();
+}
+function drawTable() {
+  const lay = $("#t-lay"), dr = $("#t-dr"), t = T[st.t.sel];
+  if (!t) { lay.classList.remove("open"); dr.innerHTML = ""; return; }
+  lay.classList.add("open");
+  const dom = DATA.domains.find(d => d.k === t.domain);
+  const srcBases = DATA.bases.filter(b => b.src === t.short).map(b => b.en);
+  dr.innerHTML = `
+    <div class="top"><span><span class="pill L-${t.layer}">${t.layer}</span>${t.rt ? `<span class="rt L-${t.layer}">实时</span>` : ""}</span>
+      <span class="actions"><button class="btn" data-lin="${t.short}">看血缘</button><button class="btn" data-copy="${t.name}">复制表名</button><button class="btn" id="t-x">关闭</button></span></div>
+    <h2>${esc(t.name)}</h2><p class="sub">${esc(t.cn)}</p>
+    <dl>
+      <dt>业务域</dt><dd><span class="mono">${t.domain}_</span> ${esc(dom ? dom.v : "")}</dd>
+      <dt>粒度</dt><dd>${esc(t.grain)}</dd><dt>后缀</dt><dd>${esc(t.suffix)}</dd><dt>分区</dt><dd>${esc(t.part)}</dd>
+      <dt>来源</dt><dd class="mono">${esc(t.src)}</dd>
+      ${t.measure ? `<dt>度量</dt><dd class="mono">${esc(t.measure)}</dd><dt>退化维度</dt><dd class="mono">${esc(t.degen)}</dd>` : ""}
+      ${t.keys && t.layer !== "ODS" ? `<dt>关键字段</dt><dd>${esc(t.keys)}</dd>` : ""}
+      ${t.note ? `<dt>备注</dt><dd>${esc(t.note)}</dd>` : ""}
+    </dl>
+    <div class="sec"><span>上游表</span><span>${t.up.length}</span></div>
+    <div class="links">${t.up.map(lt).join("") || `<span class="none">${t.layer === "ODS" ? "业务库源表，见上方来源" : "无"}</span>`}</div>
+    <div class="sec"><span>下游表</span><span>${t.down.length}</span></div>
+    <div class="links">${t.down.map(lt).join("") || `<span class="none">无（末端表）</span>`}</div>
+    ${t.layer === "DIM" ? `<div class="sec"><span>被哪些表关联</span><span>${t.used_by.length}</span></div><div class="links">${t.used_by.map(lt).join("") || `<span class="none">暂无</span>`}</div>`
+      : t.dims.length ? `<div class="sec"><span>关联维度</span><span>${t.dims.length}</span></div><div class="links">${t.dims.map(lt).join("")}</div>` : ""}
+    ${t.metrics.length ? `<div class="sec"><span>${t.layer === "DWS" ? "落地口径" : "实时口径"} · 点看口径血缘</span><span>${t.metrics.length}</span></div><div class="links">${t.metrics.map(m => `<button class="link cnl" data-linb="${m}" title="${esc(m)}">${BASE[m]?.code || ""} ${esc(BASE[m]?.cn || m)}</button>`).join("")}</div>` : ""}
+    ${srcBases.length ? `<div class="sec"><span>以本表为口径来源</span><span>${srcBases.length}</span></div><div class="links">${srcBases.map(lb).join("")}</div>` : ""}
+    ${t.layer === "ADS" ? `<div class="sec"><span>业务指标 · 点看指标血缘</span><span>${t.ads_metric_qty}</span></div>${metricList(DATA.ads.filter(r => r.ads === t.short))}<p style="margin:8px 0 0"><button class="btn" data-adst="${t.short}">在指标表里查看</button></p>` : ""}`;
+  $("#t-x").onclick = () => { st.t.sel = null; renderTables(); };
+  bindLinks(dr);
+}
+
+/* ================= ADS 业务指标 ================= */
+function openAds(code) {
+  const r = ADSI[code]; if (!r) return;
+  Object.assign(st.a, { q: "", table: r.ads, mode: null, period: null, base: null, sel: code });
+  $("#a-q").value = ""; renderAds(); go("ads");
+  requestAnimationFrame(() => document.querySelector(`#a-body tr[data-row="${code}"]`)?.scrollIntoView({ block: "nearest" }));
+}
+function renderAds() {
+  const tables = [...new Set(DATA.ads.map(r => r.ads))];
+  $("#a-table").innerHTML = `<option value="">全部 ADS 表（${tables.length}）</option>` + tables.map(x => `<option value="${x}" ${st.a.table === x ? "selected" : ""}>${esc(T[x].cn)}（${T[x].ads_metric_qty}）</option>`).join("");
+  chips($("#a-mode"), [[null, "离线+实时"], ["离线", "离线"], ["实时", "实时"]], st.a.mode, v => { st.a.mode = v; renderAds(); });
+  const periods = [...new Set(DATA.ads.filter(r => !st.a.table || r.ads === st.a.table).map(r => r.period))];
+  chips($("#a-period"), [[null, "全部周期"], ...periods.map(p => [p, p])], st.a.period, v => { st.a.period = v; renderAds(); });
+  const q = st.a.q.trim().toLowerCase();
+  const rows = DATA.ads.filter(r => (!st.a.table || r.ads === st.a.table) && (!st.a.mode || r.mode === st.a.mode) && (!st.a.period || r.period === st.a.period)
+    && (!st.a.base || r.base === st.a.base) && (!q || [r.code, r.cn, r.en, r.base_cn, r.mod, r.ads_cn].join(" ").toLowerCase().includes(q)));
+  $("#a-n").innerHTML = `${rows.length} 个${st.a.base ? ` · 口径 ${esc(BASE[st.a.base].cn)} <button class="btn" id="a-unbase">取消</button>` : ""}`;
+  if (st.a.base) $("#a-unbase").onclick = () => { st.a.base = null; renderAds(); };
+  const shown = rows.slice(0, 900);
+  $("#a-body").innerHTML = shown.length ? shown.map(r => `<tr class="click ${st.a.sel === r.code ? "sel" : ""}" data-row="${r.code}">
+    <td class="mono">${r.code}</td><td class="cn">${esc(r.cn)}${r.mode === "实时" ? `<span class="rt L-ADS">实时</span>` : ""}</td><td class="mono">${esc(r.en)}</td>
+    <td class="dim">${esc(r.period)}</td><td class="dim col-hide">${esc(r.mod)}</td><td class="dim col-hide">${esc(r.ads_cn)}</td><td class="lnk"><button class="btn" data-linm="${r.code}">血缘</button></td></tr>`).join("")
+    : `<tr><td colspan="7" class="empty">没有符合条件的指标</td></tr>`;
+  $("#a-body").querySelectorAll("tr[data-row]").forEach(tr => tr.onclick = () => { st.a.sel = tr.dataset.row; renderAds(); });
+  bindLinks($("#a-body"));
+  drawAds();
+}
+function traceAds(r) {
+  const at = T[r.ads], b = BASE[r.base];
+  const toks = new Set([r.base, ...(b.type === "原子指标" ? [] : (b.calc.match(/[a-z][a-z0-9_]*/g) || []).filter(x => BASE[x]))]);
+  const dws = at.up.filter(u => T[u].layer === "DWS" && T[u].metrics.some(m => toks.has(m)));
+  const dwsAll = dws.length ? dws : at.up.filter(u => T[u].layer === "DWS");
+  const dwd = [...new Set(dwsAll.flatMap(d => [...closure(d, "up")]).filter(x => T[x].layer === "DWD"))];
+  const ods = [...new Set(dwd.flatMap(d => T[d].up).filter(x => T[x]?.layer === "ODS"))];
+  const dbs = [...new Set(ods.map(o => T[o].db).filter(Boolean))];
+  return { dws: dwsAll, dwd, ods, dbs };
+}
+function drawAds() {
+  const lay = $("#a-lay"), dr = $("#a-dr"), r = ADSI[st.a.sel];
+  if (!r) { lay.classList.remove("open"); dr.innerHTML = ""; return; }
+  lay.classList.add("open");
+  const tr = traceAds(r);
+  dr.innerHTML = `
+    <div class="top"><span><span class="pill T-${r.type}">${r.type}</span> <span class="mono small">${r.code} · ${r.mode}</span></span>
+      <span class="actions"><button class="btn" data-linm="${r.code}">看血缘</button><button class="btn" data-copy="${r.en}">复制字段名</button><button class="btn" id="a-x">关闭</button></span></div>
+    <h2>${esc(r.en)}</h2><p class="sub">${esc(r.cn)}</p>
+    <dl><dt>统计周期</dt><dd>${esc(r.period)}</dd><dt>修饰词</dt><dd>${esc(r.mod)}</dd><dt>单位</dt><dd>${esc(r.unit)}</dd>
+      <dt>分析粒度</dt><dd class="mono">${esc(r.grain)}</dd><dt>使用端</dt><dd>${esc(r.end)}</dd></dl>
+    <div class="sec"><span>计算公式</span></div><pre class="code">${esc(r.formula)}</pre>
+    <div class="sec"><span>取数示例</span><button class="btn" data-copy="${esc(r.sql)}">复制 SQL</button></div><pre class="code">${esc(r.sql)}</pre>
+    <div class="sec"><span>追溯链路</span><button class="btn primary" data-linm="${r.code}">看指标血缘</button></div>
+    <div class="chain">
+      <div class="step L-ADS"><b>指标</b><div class="links"><button class="link cnl" data-adsb="${r.base}">${esc(r.cn)}</button></div></div>
+      <div class="step T-${r.type}"><b>口径</b><div class="links">${lb(r.base)}</div></div>
+      <div class="step L-ADS"><b>ADS</b><div class="links">${lt(r.ads)}</div></div>
+      <div class="step L-DWS"><b>DWS</b><div class="links">${tr.dws.map(lt).join("")}</div></div>
+      <div class="step L-DWD"><b>DWD</b><div class="links">${tr.dwd.map(lt).join("") || `<span class="none">—</span>`}</div></div>
+      <div class="step L-ODS"><b>ODS</b><div class="links">${tr.ods.map(lt).join("") || `<span class="none">—</span>`}</div></div>
+      <div class="step L-SRC"><b>业务库</b><div class="small mono">${tr.dbs.map(esc).join("、") || "—"}</div></div>
+    </div>
+    <p class="small" style="margin-top:10px">同一口径共生成 ${ADSBY[r.base].length} 个业务指标 · <button class="btn" data-adsb="${r.base}">全部查看</button></p>`;
+  $("#a-x").onclick = () => { st.a.sel = null; renderAds(); };
+  bindLinks(dr);
+}
+
+/* ================= DWS 口径 ================= */
+function openBase(en) {
+  Object.assign(st.b, { sel: en, q: "", type: null, dom: null }); $("#b-q").value = "";
+  renderBase(); go("base");
+  requestAnimationFrame(() => document.querySelector(`#b-body tr[data-row="${en}"]`)?.scrollIntoView({ block: "nearest" }));
+}
+function renderBase() {
+  chips($("#b-type"), [[null, "全部"], ...["原子指标", "派生指标", "计算指标"].map(x => [x, x + " " + DATA.bases.filter(b => b.type === x).length])], st.b.type, v => { st.b.type = v; renderBase(); });
+  chips($("#b-dom"), domItems(), st.b.dom, v => { st.b.dom = v; renderBase(); }, "mono");
+  const q = st.b.q.trim().toLowerCase();
+  const rows = DATA.bases.filter(b => (!st.b.type || b.type === st.b.type) && (!st.b.dom || b.domain === st.b.dom) && (!q || [b.code, b.en, b.cn, b.kou, b.calc].join(" ").toLowerCase().includes(q)));
+  $("#b-n").textContent = `${rows.length} 个`;
+  $("#b-body").innerHTML = rows.map(b => `<tr class="click ${st.b.sel === b.en ? "sel" : ""}" data-row="${b.en}">
+    <td class="mono">${b.code}</td><td class="mono">${esc(b.en)}</td><td class="cn">${esc(b.cn)}</td><td><span class="pill T-${b.type}">${b.type}</span></td>
+    <td class="dim">${esc(b.unit)}</td><td class="num">${b.dws.length || "–"}</td><td class="num">${(ADSBY[b.en] || []).length || "–"}</td><td class="lnk"><button class="btn" data-linb="${b.en}">血缘</button></td></tr>`).join("") || `<tr><td colspan="8" class="empty">没有符合条件的口径</td></tr>`;
+  $("#b-body").querySelectorAll("tr[data-row]").forEach(tr => tr.onclick = () => { st.b.sel = tr.dataset.row; renderBase(); });
+  bindLinks($("#b-body"));
+  drawBase();
+}
+function drawBase() {
+  const lay = $("#b-lay"), dr = $("#b-dr"), b = BASE[st.b.sel];
+  if (!b) { lay.classList.remove("open"); dr.innerHTML = ""; return; }
+  lay.classList.add("open");
+  const gen = ADSBY[b.en] || [];
+  dr.innerHTML = `
+    <div class="top"><span><span class="pill T-${b.type}">${b.type}</span> <span class="mono small">${b.code}</span></span>
+      <span class="actions"><button class="btn" data-linb="${b.en}">看血缘</button><button class="btn" data-copy="${b.en}">复制英文名</button><button class="btn" id="b-x">关闭</button></span></div>
+    <h2>${esc(b.en)}</h2><p class="sub">${esc(b.cn)}</p>
+    <dl><dt>业务口径</dt><dd>${esc(b.kou)}</dd><dt>单位</dt><dd>${esc(b.unit)}</dd><dt>业务域</dt><dd class="mono">${b.domain}_</dd></dl>
+    <div class="sec"><span>计算逻辑</span></div><pre class="code">${esc(b.calc)}</pre>
+    <div class="sec"><span>口径来源表</span></div><div class="links">${lt(b.src)}</div>
+    <div class="sec"><span>落地 DWS</span><span>${b.dws.length}</span></div><div class="links">${b.dws.map(lt).join("") || `<span class="none">计算口径，在 ADS 由分子分母现算</span>`}</div>
+    <div class="sec"><span>使用它的 ADS 表</span><span>${b.ads.length}</span></div><div class="links">${b.ads.map(lt).join("") || `<span class="none">未直接落 ADS</span>`}</div>
+    <div class="sec"><span>生成的业务指标</span><span>${gen.length}</span></div>
+    <div class="links">${gen.slice(0, 18).map(r => `<button class="link cnl" data-a="${r.code}">${esc(r.cn)}</button>`).join("")}</div>
+    ${gen.length > 18 ? `<p style="margin:8px 0 0"><button class="btn primary" data-adsb="${b.en}">查看全部 ${gen.length} 个</button></p>` : ""}`;
+  $("#b-x").onclick = () => { st.b.sel = null; renderBase(); };
+  bindLinks(dr);
+}
+
+/* ================= 待确认 ================= */
+function renderIssues() {
+  const sev = c => (c === "源系统缺口" || c === "合规") ? "crit" : c === "命名规范" ? "warn" : "info";
+  $("#issues").innerHTML = DATA.issues.map(i => `<article class="issue V-${sev(i.cat)}">
+    <div class="h"><b>${esc(i.cat)}</b><span class="mono">#${i.no}</span></div>
+    <div class="q">${esc(i.q)}</div><div class="a">${esc(i.a)}</div><div class="i">影响：${esc(i.impact)}</div></article>`).join("");
+}
+
+/* ================= 绑定 ================= */
+function bindStatic() {
+  const lq = $("#lin-q");
+  let cur = [];
+  lq.addEventListener("input", () => { cur = linSuggest(); });
+  lq.addEventListener("keydown", e => {
+    if (e.key === "Enter" && cur.length) { $("#lin-sugg").hidden = true; linSelect(cur[0].sel); }
+    if (e.key === "Escape") $("#lin-sugg").hidden = true;
+  });
+  document.addEventListener("click", e => { if (!e.target.closest(".searchwrap")) $("#lin-sugg").hidden = true; });
+  bindCanvas();
+  document.addEventListener("keydown", e => { if (e.key === "Escape" && st.lin.max) setMax(false); });
+  document.addEventListener("fullscreenchange", () => { if (!document.fullscreenElement && st.lin.max) setMax(false); });
+  $("#t-q").addEventListener("input", e => { st.t.q = e.target.value; renderTables(); });
+  $("#a-q").addEventListener("input", e => { st.a.q = e.target.value; renderAds(); });
+  $("#a-table").addEventListener("change", e => { st.a.table = e.target.value; st.a.period = null; renderAds(); });
+  $("#b-q").addEventListener("input", e => { st.b.q = e.target.value; renderBase(); });
+}
+</script>
+</body>
+</html>
