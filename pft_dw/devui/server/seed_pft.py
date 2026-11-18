@@ -9,6 +9,7 @@
 """
 import json
 import math
+import os
 from pathlib import Path
 
 from codegen import Gen
@@ -16,7 +17,10 @@ from codegen import Gen
 PID = "pft-dw"
 PROJECT = dict(id=PID, name="PFT 2.0 数仓项目", description="票付通 2.0 离线 + 实时数仓：ODS→DWD→DWS→ADS，DIM 分支，含数据质量与对账",
                owner="数仓组", createdAt="2026-11-18")
-WEB = Path(__file__).resolve().parents[2] / "web"
+_HERE = Path(__file__).resolve().parent
+# 数仓生成结果所在目录：环境变量 PFT_SEED_DIR > 本项目 seed/ > 数仓仓库 pft_dw/web/
+WEB = next(p for p in [Path(os.environ["PFT_SEED_DIR"]) if os.environ.get("PFT_SEED_DIR") else None,
+                       _HERE.parent / "seed", _HERE.parents[1] / "web"] if p and (p / "schema.json").exists())
 LAYERS = ["ODS", "DIM", "DWD", "DWS", "ADS"]
 TASK_W, TASK_H = 192, 96
 PAIR_DX, PITCH_X, PITCH_Y = 222, 470, 128
