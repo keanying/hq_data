@@ -518,6 +518,76 @@ python cs_synth.py --load-jsonl out/cs_synth_20261110/dialogs.jsonl             
 
 `/api/cs/export`、`/api/cs/export/count`、`/api/gd/export`、`/api/gd/export/count` 也支持 `gen_date`（生成日期）和 `sid`（样本 ID，逗号分隔）。
 
+## 15. 已交付数据修正：客服对话 / 个性化讲解（`data_fix.py`，火山方舟）
+
+对已经导出的 `客服会话.json`、`个性化讲解.json`（JSON 数组或 JSONL，含 `source`）做一遍修正再进标注。
+流程：**诊断 → 规则能修的直接修 → 需要改写的交给大模型（只改有问题的消息 / 句子）→ 用生成时同一套质检再查**
+（`cs_expand.quality_flags`、`cs_synth.session_checks`、`guide_synth.narr_check`）→ 不过关带着原因再问一次 → 还不过：
+编造事实 / 订单状态、乱码、超字数这类剔除，其余标 `needs_review`。每条改了什么写在 `source.fix`（动作、剩余问题、修正前的质检、讲解原文）。
+
+**方舟配置不用另填**：和工作台、`cs_expand.py` / `guide_synth.py` 一样，读工作台「设置 → AI 判断」里的 API Key、接口地址、模型、超时
+（MySQL 表 `hq_app_settings`；连不上库或没装 pymysql 时读 `.pw-profile-service/hq_prefs.json`，`--profile` 可改），没有再用环境变量 `ARK_API_KEY`。
+`--model` 指定这次用的模型（不填：`ARK_MODEL`，再不填用设置页的）；`ARK_BASE_URL` 可覆盖接口地址。
+
+**联网搜索**按步骤配置（设置页的联网开关是给 POI 核对用的，这里不跟它走）：
+
+| 步骤 | 默认 | 原因 | 改法 |
+|---|---|---|---|
+| 修正（`run`） | 关 | 只许用数据里给的景区资料 / 知识；开联网会把外部事实带进客服回答和讲解词（质检也会把这些数字当编造），还更慢更贵 | `--web-search on` 或 `DATA_FIX_WEB_SEARCH=on` |
+| 知识补充（`enrich`） | 开 | 每条补充都要有出处网址；不联网模型只能凭记忆写，出处靠不住 | `--web-search off` 或 `DATA_FIX_ENRICH_WEB_SEARCH=off`；`--max-keyword` 改搜索关键词数 |
+
+```bash
+python data_fix.py check                         # 看 Key 从哪来（打码）、模型、联网开没开，并试调一次；--step enrich 看补充那一步
+python data_fix.py scan --task cs   --in 客服会话.json                       # 只诊断、不调模型，看每类问题多少条
+python data_fix.py run  --task cs   --in 客服会话.json --model <模型ID或接入点ID> --workers 16 --limit 200   # 先试 200 条，抽查
+python data_fix.py run  --task cs   --in 客服会话.json --model <…> --workers 32                              # 全量，断点续跑
+python data_fix.py run  --task narr --in 个性化讲解.json --model <…> --workers 32 --rebalance-limits --relabel-scene
+```
+
+建议用比生成时（`glm-5-3-flash`）更强的模型修，也能顺带降低全部数据出自同一个模型的同质化。
+
+**客服对话**（问题代码见 `scan` 输出 / `diagnose.jsonl`）
+
+| 代码 | 问题 | 怎么修 |
+|---|---|---|
+| ORDERCONFLICT | 景区「不支持线上购票」，会话里却有线上订单（事实矛盾） | 规则：剔除（`--keep-order-conflict` 改为保留并标需复核） |
+| ORDER | 客服没有任何查询依据就说「查到订单 / 已出票 / 预约成功」 | 规则：在客服第一次说结果前插一条 `[订单信息]` 卡片（相当于系统查询结果，状态按意图由程序定，写进 `session_plan.order.status`）→ 模型让客服照卡片说；办理类只能说「已提交申请 / 以订单页为准」，不承诺退款到账 |
+| TEMPLATE | 套话「以景区官方公告为准」（原数据 6.4 万次） | 模型：资料能答就答，答不了换成自然、具体的引导（有咨询电话 / 官网就给）；按 `--keep-template`（默认 0.2）保留一部分原句；`--no-diversify` 关掉 |
+| DEFLECT | 游客问的东西资料里有，客服却推脱 | 模型：用资料回答 |
+| LEAK / ENG | 客服说了「资料里没有收录」、提示词字段名（gap / coref）、英文 | 模型改写；网址和资料里原有的英文（DIY、SPA）不算 |
+| FACT / OTHER / REPEAT | 资料里没有的金额 / 时间 / 电话、提到参考对话的景区、复读 | 模型改写；还改不掉就剔除 |
+| COREF / ORDERID | 设定要指代但没做到；游客没说订单号 | 模型改 1 条游客消息；指代还做不到就把设定改成「无」（如实） |
+| COUNT / VOICE | 消息条数、语音设定和实际不符 | 规则：设定改成实际 |
+| — | 访客 ID 全不重复 | 合并时规则：约 40% 会话复用同城更早会话的 visitor_id（`--returning-rate`，0 = 不改） |
+
+**个性化讲解**
+
+| 代码 | 问题 | 怎么修 |
+|---|---|---|
+| GARBLED | 夹英文 / 乱码、以省略号截断、过短 | 模型按知识重写 |
+| OVER | 超字数上限 | 模型只删不增 |
+| ABS / NUM / LEGEND / SALES | 绝对化、知识里没有的数字 / 传说、推销 | 模型只改有问题的句子；数字、传说还在就剔除 |
+| PERS | `personalization` 引用的原话讲解词里没有 | 模型按讲解词重写说明（正文不动） |
+| CNT | `char_count` 不对 | 规则重算 |
+| SCENE | 讲的是景区本身（`sub_poi` = 景区，约 85%） | `--relabel-scene`：scene 改成「景区个性化讲解生成」（要不要改由产品定） |
+| LIMIT100 / LIMIT500 | 手册字数上限是 100 / 150 / 200 / 300 / 500，数据里是 120 / 150 / 200 / 300 | `--rebalance-limits`：120 → 100，超出的模型压缩；带 `--kb-ext` 时再挑约 10% 补充后知识 ≥ 600 字的改 500 字并扩写（扩写不够长就退回原样）。不补知识不做 500 字档：原知识中位数约 312 字，写 500 字只能编 |
+| KBEXT | 知识太薄（多是景区表的简介、等级、游玩时长） | 先 `enrich` 联网补充，再 `run --kb-ext`：补充的条目并进 `sub_poi_knowledge.facts`，带 `source`=「大模型联网补充（待核）」、`source_name`、`source_url`、`verified=false` |
+
+**知识补充**（`enrich`）：每个讲解对象（景区 / 子景点）调一次方舟并开联网搜索，补 4～8 条稳定事实（历史沿革、建筑形制、文物景观、人物典故、自然地理、园内景点看点），
+每条必须带出处网址。程序丢掉：没有出处的、出处是 OTA / 社交平台的、票价 / 时间 / 交通等运营信息、宣传或绝对化说法、没标「相传」的传闻、和已有知识重复的
+（丢掉的和原因在 `kb_ext.jsonl` 的 `rejected` 里）。补充的条目**不覆盖原知识**，标注时按 `source_url` 抽查；同一个 `kb_ext.jsonl` 也能用于讲解内容评价的 `kb_entry`。
+客服对话的票价、开放时间这类运营事实**不要用大模型补**：会变、编错了直接误导游客，只能由景区方提供。
+
+```bash
+python data_fix.py enrich --in 个性化讲解.json --model <…> --workers 16 --limit 200     # 先试 200 个讲解对象，抽查出处
+python data_fix.py enrich --in 个性化讲解.json --model <…> --workers 32                 # 全量（约 2 万个讲解对象，断点续跑）
+python data_fix.py run --task narr --in 个性化讲解.json --model <…> --kb-ext out/fix_narr_<日期>/kb_ext.jsonl --rebalance-limits --relabel-scene
+```
+
+**输出**（`--out-dir`，默认 `out/fix_<task>_<日期>/`）：`fixed.json`（全量，格式同输入）、`fixed_l1.jsonl` + `fixed_sidecar.jsonl`（标注交付 L1 / 溯源）、
+`dropped.jsonl`（剔除的和原因）、`report.md` / `report.json`（修正前后对比）、`results.jsonl`（模型结果，断点续跑用，别删）。
+调用失败的下次 `run` 自动重试；`merge` 可单独重新合并（还没调模型的原样输出并标需复核）。
+
 ## 其他参数
 
 | 参数 | 说明 |
@@ -545,6 +615,7 @@ python cs_synth.py --load-jsonl out/cs_synth_20261110/dialogs.jsonl             
 | `data/` | 客服数据生成用的数据（随仓库提交，见 `data/README.md`）：客服对话包、景区表、讲解包、RedAttractionQA、RiSAWOZ / CrossWOZ 景点对话提取 |
 | `guide_synth.py` | 讲解类训练数据：讲解内容评价（讲解文字 + 错误清单 / 分数）、子景点个性化讲解（合成画像 + 参考讲解词）；写 MySQL 两张表 |
 | `cs_sources.py` | 扩展用的外部资料：景区讲解包、RedAttractionQA（事实），RiSAWOZ / CrossWOZ（问法参考）；自动识别 + 缓存 |
+| `data_fix.py` | 已交付数据修正（客服对话 / 个性化讲解）：诊断 → 规则修 → 火山方舟改写 → 同一套质检复检 → 合并导出（L1 / sidecar） |
 | `ai_judge.py` | AI 辅助核对（火山方舟 Responses API，提示词、解析、缓存） |
 | `crawler.py` | 点评图片采集（翻页、解析、入库） |
 | `service.py` | 常驻服务（FastAPI）：核对接口、任务队列、边核对边采集 |
