@@ -7,7 +7,6 @@
 //  5. 传递冗余的连线（A→B→C 已成立时的 A→C）不画；选中节点时相关连线按流向流动，其余连线照常静态显示
 import {groupBounds, hiddenGroup, groupDepth} from './model.mjs';
 
-const CH = 45;          // 分支卡片旁的走线间距
 const TRACK = 12;       // 轨道最大间距
 
 export const viewDir = flow => (flow?.layout?.lanes ? flow.layout.dir : flow?.view?.dir) === 'TB' ? 'TB' : 'LR';
@@ -66,9 +65,7 @@ function geometry(flow) {
     if (top <= gridStart + 50) return {center: gridStart - (wrapped ? 34 : 22), width: 28};
     return {center: top - rowGap / 2, width: rowGap - 12};
   };
-  const bch = isFinite(branchTop) ? {center: (gridEnd + branchTop) / 2 - 10, width: Math.max(30, Math.min(110, branchTop - gridEnd - 70))}
-                                  : {center: gridEnd + 75, width: 60};
-  return {TB, box, laneOf, gutter, before, rowChannel, groupOfTask, bch, endLane: L.lanes.length + 1};
+  return {TB, box, laneOf, gutter, before, rowChannel, groupOfTask, endLane: L.lanes.length + 1};
 }
 
 function roundPath(pts, r = 10) {
@@ -131,6 +128,25 @@ function tracks() {
   };
 }
 
+// 按两张卡片的实际位置走线（拖动后随之变化）：
+//  曲线：端口到端口的贝塞尔；目标在后方时控制点外伸，画成平滑的 S 形
+//  折线：目标在前方走中线；目标在后方/并排时，从两卡之间（或外侧）绕过去
+function freeCurve(sa, s, ta, e) {
+  const d = ta - sa, k = d > 40 ? Math.max(40, d / 2) : Math.max(70, -d / 2 + 50, Math.abs(e - s) / 3);
+  return [[sa, s], [sa + k, s], [ta - k, e], [ta, e]];
+}
+function freeRoute(sa, s, ta, e, F, T) {
+  if (ta > sa + 24) { const m = (sa + ta) / 2; return [[sa, s], [m, s], [m, e], [ta, e]]; }
+  const fEnd = F.c + F.lc, tEnd = T.c + T.lc;
+  if (T.c >= fEnd + 16 || F.c >= tEnd + 16) {     // 两卡在垂直方向上分开：从两卡之间穿过
+    const mid = T.c >= fEnd + 16 ? (fEnd + T.c) / 2 : (tEnd + F.c) / 2;
+    return [[sa, s], [sa + 20, s], [sa + 20, mid], [ta - 20, mid], [ta - 20, e], [ta, e]];
+  }
+  // 两卡并排或重叠：从两张卡片的外侧整体绕过去
+  const out = Math.max(sa, T.a + T.la) + 20, inn = Math.min(ta, F.a) - 20, side = Math.max(fEnd, tEnd) + 30;
+  return [[sa, s], [out, s], [out, side], [inn, side], [inn, e], [ta, e]];
+}
+
 export function edgeView(flow, projected) {
   const TB = viewDir(flow) === 'TB', style = edgeStyle(flow);
   const box = b => TB ? {a: b.y, c: b.x, la: b.h, lc: b.w} : {a: b.x, c: b.y, la: b.w, lc: b.h};
@@ -139,75 +155,37 @@ export function edgeView(flow, projected) {
   const red = lanes ? redundant(projected) : projected.map(() => false);
   const g = lanes ? geometry(flow) : null;
   const plans = projected.map(({from: f, to: t}, i) => {
-    const F = box(f), T = box(t);
+    const F = box(f), T = box(t), sa = F.a + F.la, ta = T.a;
     const lf = g?.laneOf(f), lt = g?.laneOf(t);
     const same = g && !f.groupId && !t.groupId && g.groupOfTask.get(f.ids[0]) && g.groupOfTask.get(f.ids[0]) === g.groupOfTask.get(t.ids[0]);
-    let kind = 'simple';
-    if (g && !same && lf !== null && lt !== null && lf !== undefined && lt !== undefined) {
-      if (lf === 'B' || lt === 'B') kind = 'branch';
-      else if (lt > lf && g.gutter(lf)?.center === g.before(lt)?.center) kind = 'adj';
-      else kind = 'skip';
-    }
-    return {i, f, t, F, T, lf, lt, kind};
+    // 只有“泳道之间、目标在前方”的线走泳道通道；分支线、组内线、被拖到后方/并排的线都按实际位置走
+    let kind = 'free';
+    if (g && !same && typeof lf === 'number' && typeof lt === 'number' && lt > lf && ta > sa + 24)
+      kind = g.gutter(lf)?.center === g.before(lt)?.center ? 'adj' : 'skip';
+    return {i, f, t, F, T, lf, lt, kind, sa, ta, s: F.c + F.lc / 2, e: T.c + T.lc / 2};
   });
-  // 连线一律从卡片的连接点（出口/入口圆点）画出、画入，不再错开落点
-  const inAt = new Map(), outAt = new Map();
-  const tc = p => inAt.get(p.i) ?? p.T.c + p.T.lc / 2, sc = p => outAt.get(p.i) ?? p.F.c + p.F.lc / 2;
-  // 开始/结束节点的线是调度控制（就绪检查、发布），不是数据流向，画得更淡
+  // 开始/结束节点的线是调度控制（就绪检查、发布），不是数据流向
   const ctl = p => g && (p.lf === 0 || p.lt === g.endLane);
   const cls = p => [red[p.i] ? 'edge-redundant' : '', p.lf === 'B' ? 'edge-branch' : '', ctl(p) ? 'edge-ctl' : ''].join(' ').trim();
   const bez = pts => { const P = pts.map(([a, c]) => map(a, c)); return `M${P[0]} C${P[1]} ${P[2]} ${P[3]}`; };
-
-  if (!g) {
-    return plans.map(p => {
-      const sa = p.F.a + p.F.la, ta = p.T.a, s = sc(p), e = tc(p);
-      let d;
-      if (style === 'curve') {
-        const k = Math.max(40, Math.abs(ta - sa) / 2);
-        d = bez([[sa, s], [sa + k, s], [ta - k, e], [ta, e]]);
-      } else if (ta > sa + 24) {
-        const m = (sa + ta) / 2;
-        d = roundPath([[sa, s], [m, s], [m, e], [ta, e]].map(([a, c]) => map(a, c)));
-      } else {   // 目标在后方：绕到两张卡片之外
-        const out = Math.max(p.F.c + p.F.lc, p.T.c + p.T.lc) + 30;
-        d = roundPath([[sa, s], [sa + 20, s], [sa + 20, out], [ta - 20, out], [ta - 20, e], [ta, e]].map(([a, c]) => map(a, c)));
-      }
-      return {d, cls: cls(p)};
-    });
-  }
-
-  // 折线：登记通道线段 -> 分配轨道 -> 生成路径
   const T = tracks();
   const routes = plans.map(p => {
-    const sa = p.F.a + p.F.la, ta = p.T.a, s = sc(p), e = tc(p), S = 'S:' + p.f.key, D = 'T:' + p.t.key;
-    if (p.kind === 'simple') {
-      const k = Math.max(30, Math.abs(ta - sa) / 2);
-      return {curve: [[sa, s], [sa + k, s], [ta - k, e], [ta, e]]};
-    }
-    if (red[p.i]) {   // 冗余线只在高亮时显示，不占轨道
-      const x = g.gutter(p.lf)?.center ?? sa + 30, y = (p.kind === 'branch' ? g.bch : g.rowChannel(p.t)).center;
-      const x2 = (p.lt === 'B' ? ta - CH : g.before(p.lt)?.center) ?? ta - 30;
-      return {pts: () => p.kind === 'adj' ? [[sa, s], [x, s], [x, e], [ta, e]] : [[sa, s], [x, s], [x, y], [x2, y], [x2, e], [ta, e]]};
-    }
-    if (p.kind === 'adj' && style === 'curve') {
-      const k = Math.max(40, Math.abs(ta - sa) / 2);
-      return {curve: [[sa, s], [sa + k, s], [ta - k, e], [ta, e]]};
-    }
+    const {sa, ta, s, e} = p, S = 'S:' + p.f.key, D = 'T:' + p.t.key;
+    if (p.kind === 'free' || red[p.i] || (style === 'curve' && p.kind === 'adj'))
+      return style === 'curve' ? {curve: freeCurve(sa, s, ta, e)} : {pts: () => freeRoute(sa, s, ta, e, p.F, p.T)};
     if (p.kind === 'adj') {
       const x = T.use(g.gutter(p.lf), S, s, e);
       return {pts: () => [[sa, s], [x(), s], [x(), e], [ta, e]]};
     }
-    const outG = p.lf === 'B' ? {center: sa + CH, width: 70} : g.gutter(p.lf);
-    const inG = p.lt === 'B' ? {center: ta - CH, width: 70} : g.before(p.lt);
-    const ch = p.kind === 'branch' ? g.bch : g.rowChannel(p.t);
+    // 跨层：沿出发泳道后的通道 → 目标所在行上方的通道 → 目标泳道前的通道（曲线模式下拐角为大圆弧）
+    const outG = g.gutter(p.lf), inG = g.before(p.lt), ch = g.rowChannel(p.t);
     const x1 = T.use(outG, S, s, ch.center), x2 = T.use(inG, D, ch.center, e);
-    const y = T.use(ch, D, outG.center, inG.center);   // 横向通道按目标合流：同一目标的线汇成一条总线
+    const y = T.use(ch, D, outG.center, inG.center);   // 横向通道按目标合流
     return {pts: () => [[sa, s], [x1(), s], [x1(), y()], [x2(), y()], [x2(), e], [ta, e]]};
   });
   T.solve();
   return plans.map((p, i) => {
     const r = routes[i];
-    // 曲线模式下跨层/分支的线仍沿通道绕开中间的卡片，只是拐角改成大圆弧
     const d = r.curve ? bez(r.curve) : roundPath(r.pts().map(([a, c]) => map(a, c)), style === 'curve' ? 40 : 8);
     return {d, cls: cls(p)};
   });
