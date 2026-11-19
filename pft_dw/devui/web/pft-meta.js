@@ -61,7 +61,7 @@ function renderCols(m) {
     </div>
     <div class="meta-table-wrap"><table class="meta-table"><thead><tr><th>#</th><th>字段</th><th>类型</th><th>角色</th><th>说明</th><th>加工口径</th><th>上游字段</th><th>下游字段</th></tr></thead><tbody>
     ${rows.map(c => `<tr><td>${m.columns.indexOf(c) + 1}</td><td class="mono">${esc(c.name)}</td><td class="mono muted">${esc(c.type)}</td>
-      <td><span class="meta-kind">${esc(c.kind)}</span></td><td>${esc(c.comment)}</td><td class="meta-src">${esc(c.source)}</td>
+      <td><span class="meta-kind" data-kind="${esc(c.kind)}">${esc(c.kind)}</span></td><td>${esc(c.comment)}</td><td class="meta-src">${esc(c.source)}</td>
       <td>${c.refs.map(([a, b]) => chip(a, b, 'small')).join('')}</td>
       <td>${c.downs.slice(0, 3).map(([a, b]) => chip(a, b, 'small')).join('')}${c.downs.length > 3 ? `<span class="meta-muted">等 ${c.downs.length} 个</span>` : ''}</td></tr>`).join('')}
     </tbody></table></div>`;

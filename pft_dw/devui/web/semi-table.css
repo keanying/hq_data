@@ -1,0 +1,84 @@
+/* 表格统一为 Semi Design Table 风格（https://semi.design/zh-CN/show/table）
+   取值来自 semi-foundation/table/variables.scss、semi-theme-default 调色板：
+   表头：白底、次要文字色 rgba(28,31,35,.62)、600 字重、8px 16px 内边距、底部分割线
+   单元格：12px 16px（middle 尺寸）、1px 分割线 rgba(28,31,35,.08)、悬浮行 rgba(46,50,56,.05)
+   标签：Semi Tag light 类型——背景 color-5 @15%、文字 color-8，20px 高、3px 圆角 */
+:root{
+  --st-border:rgba(28,31,35,.08);
+  --st-head-text:rgba(28,31,35,.62);
+  --st-text:rgba(28,31,35,1);
+  --st-text-1:rgba(28,31,35,.8);
+  --st-text-2:rgba(28,31,35,.62);
+  --st-hover:rgba(46,50,56,.05);
+  --st-primary:#3268ef;
+}
+
+/* ---- 通用表格 ---- */
+html .meta-table,html .suite-table,html .query-grid{border-collapse:separate;border-spacing:0;width:100%;font-size:13px;line-height:20px;color:var(--st-text);background:#fff}
+html .meta-table th,html .suite-table th,html .query-grid th{position:sticky;top:0;z-index:2;background:#fff;color:var(--st-head-text);font-weight:600;text-align:left;padding:8px 16px;border-bottom:1px solid var(--st-border);white-space:nowrap;vertical-align:middle}
+html .meta-table td,html .suite-table td,html .query-grid td{padding:12px 16px;border-bottom:1px solid var(--st-border);color:var(--st-text);vertical-align:middle;background:transparent;transition:background-color .1s}
+html .meta-table tbody tr:hover td,html .suite-table tbody tr:hover td,html .query-grid tbody tr:hover td{background:var(--st-hover)}
+html .meta-table tbody tr:last-child td,html .suite-table tbody tr:last-child td{border-bottom:0}
+
+/* 卡片容器 */
+html .meta-table-wrap{background:#fff;border:1px solid var(--st-border);border-radius:6px;overflow:auto}
+html .suite-card:has(>.suite-table){padding:0;overflow:hidden;border-color:var(--st-border);border-radius:6px}
+html .suite-card>.suite-table{background:transparent}
+html .suite-table th{background:#fff;padding:12px 16px 10px}
+html .suite-table td{padding:14px 16px;font-size:14px}
+html .suite-table tbody tr:hover{background:none}
+
+/* 操作列：Semi 文本按钮 */
+html .suite-table .suite-text-link{color:var(--st-primary);font-size:14px;font-weight:600;padding:0;margin-right:16px;cursor:pointer;background:none;border:0}
+html .suite-table .suite-text-link:last-child{margin-right:0}
+html .suite-table .suite-text-link:hover{color:#2453c9}
+
+/* ---- 字段与血缘 ---- */
+html .meta-table{font-size:13px}
+html .meta-table td{vertical-align:top;line-height:20px}
+html .meta-table th:first-child,html .meta-table td:first-child{width:28px;padding-right:4px;color:var(--st-text-2);font-variant-numeric:tabular-nums}
+html .meta-table td.mono{font-family:Consolas,"SFMono-Regular",monospace;font-size:12.5px;color:var(--st-text)}
+html .meta-table td.muted{font-family:Consolas,monospace;font-size:12px;color:var(--st-text-2)}
+html .meta-table td.meta-src{color:var(--st-text-1)}
+
+/* ---- 即席查询结果：Semi 带边框表格（bordered） ---- */
+html #queryResults:has(.query-grid){padding:0}
+html .query-grid{table-layout:fixed;min-width:680px;border-top:1px solid var(--st-border);border-left:1px solid var(--st-border);user-select:text}
+html .query-grid th,html .query-grid td{border-right:1px solid var(--st-border);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+html .query-grid th{height:auto;padding:8px 16px}
+html .query-grid th small{display:block;margin-top:2px;font-size:11px;font-weight:400;color:rgba(28,31,35,.35);font-family:Consolas,monospace}
+html .query-grid td{height:auto;padding:10px 16px}
+html .query-grid tbody tr:nth-child(even){background:none}
+html .query-grid th:first-child,html .query-grid td:first-child{text-align:center;padding:8px;color:var(--st-text-2)}
+html .query-grid td.numeric{font-family:inherit;text-align:right;font-variant-numeric:tabular-nums}
+html .query-grid td:focus{outline:1px solid var(--st-primary);outline-offset:-1px;background:rgba(50,104,239,.06)}
+html .query-grid .q-copy{color:rgba(28,31,35,.35)}
+html .query-grid .q-copy:hover{color:var(--st-primary)}
+
+/* ---- 参数表头与 Semi 表头一致 ---- */
+html .parameter-head{color:var(--st-head-text);font-weight:600;font-size:12px;border-bottom:1px solid var(--st-border)}
+
+/* ---- Semi Tag（light） ---- */
+html .suite-badge,html .meta-kind,html .meta-level,html .meta-chip,html .run-demo{border-radius:3px}
+html .suite-badge,html .meta-kind{display:inline-flex;align-items:center;height:20px;padding:0 8px;font-size:12px;font-weight:600;line-height:20px;white-space:nowrap;background:rgba(107,112,117,.15);color:rgb(46,50,56)}
+html .suite-badge.good{background:rgba(59,179,70,.15);color:rgb(27,89,36)}
+html .suite-badge.warn{background:rgba(252,136,0,.15);color:rgb(126,49,0)}
+html .suite-badge.bad{background:rgba(249,57,32,.15);color:rgb(142,8,5)}
+html .meta-kind[data-kind="主键"],html .meta-kind[data-kind="业务主键"],html .meta-kind[data-kind="粒度键"]{background:rgba(0,100,250,.15);color:rgb(0,61,143)}
+html .meta-kind[data-kind="外键"]{background:rgba(106,58,199,.15);color:rgb(54,28,138)}
+html .meta-kind[data-kind="指标"],html .meta-kind[data-kind="度量"]{background:rgba(59,179,70,.15);color:rgb(27,89,36)}
+html .meta-kind[data-kind="维度属性"],html .meta-kind[data-kind="退化维度"]{background:rgba(5,164,182,.15);color:rgb(0,77,91)}
+html .meta-kind[data-kind="状态类型"]{background:rgba(252,136,0,.15);color:rgb(126,49,0)}
+html .meta-kind[data-kind="时间"]{background:rgba(63,81,181,.15);color:rgb(31,40,120)}
+html .meta-kind[data-kind="分区"],html .meta-kind[data-kind="拉链"],html .meta-kind[data-kind="ETL"]{background:rgba(107,112,117,.15);color:rgb(46,50,56)}
+html .meta-level{display:inline-flex;align-items:center;height:20px;padding:0 8px;font-size:12px;font-weight:600}
+html .meta-level.strong{background:rgba(249,57,32,.15);color:rgb(142,8,5)}
+html .meta-level.weak{background:rgba(252,136,0,.15);color:rgb(126,49,0)}
+/* 上下游字段：可点击的 Semi Tag（ghost） */
+html .meta-chip{display:inline-flex;align-items:center;height:20px;padding:0 6px;font:12px/20px Consolas,"SFMono-Regular",monospace;background:#fff;border:1px solid rgba(0,100,250,.3);color:rgb(0,61,143);cursor:pointer}
+html .meta-chip.small{height:20px;padding:0 6px;font-size:11.5px;margin:2px 4px 2px 0}
+html .meta-chip i{font-style:normal;color:var(--st-text-2)}
+html .meta-chip:hover{background:rgba(0,100,250,.08);border-color:rgba(0,100,250,.55)}
+
+/* ---- Semi Empty ---- */
+html .suite-empty{padding:40px 16px;text-align:center;font-size:14px;color:var(--st-text-2);border-top:1px solid var(--st-border)}
