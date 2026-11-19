@@ -56,8 +56,8 @@
 .meta-table td:nth-child(5){min-width:160px;max-width:260px}.meta-table td:nth-child(7),.meta-table td:nth-child(8){min-width:190px}
 /* 工作流显示层 */
 #edges g.edge-redundant{display:none}
-#edges g.edge-branch .edge{stroke-dasharray:5 4;stroke:#c3b5e6}
-#edges g.edge-ctl .edge{stroke:#d3dae6;stroke-dasharray:2 4}
+#edges g.edge-branch .edge{stroke-dasharray:6 4;stroke:#9d86d6;stroke-width:1.6}
+#edges g.edge-ctl .edge{stroke:#8fa3c4;stroke-dasharray:5 4;stroke-width:1.5}
 #edges .edge{transition:opacity .15s,stroke .15s}
 #edges.hl-on g.edge-hl .edge{opacity:1;stroke-width:2.4;stroke-dasharray:8 6;animation:edge-flow .7s linear infinite}
 #edges.hl-on g.edge-out .edge{stroke:#3268ef}
