@@ -115,6 +115,20 @@ ASCII_OK = re.compile(r"^(?:A+|APP|App|app|WIFI|WiFi|wifi|VIP|PC|H5|ETC|LED|VR|A
 ASCII_WORD = re.compile(r"[A-Za-z]{3,}")
 NON_FACT_KEYS = {"政策说明", "办理说明"}
 TEMPLATE_RE = re.compile(r"以景区官方公告为准|以官方公告为准")
+# 资料回答不了时的引导说法：每条会话按 ID 抽 3 句给模型参考（不是让它照抄），避免全部改成同一句新套话
+GUIDE_POOL = [
+    "这个我这边没法给您准确答复，建议出发前打景区电话问一下", "这块暂时没有确切说法，到了现场可以问问游客中心",
+    "我先帮您记下来，核实清楚了再回复您", "具体情况可能会有调整，建议您临行前再确认一下",
+    "这个得看现场安排，您到了可以找工作人员咨询", "这方面我手头没有准确信息，不想误导您，建议您直接联系景区",
+    "这个我帮您转给负责的同事问问，有结果第一时间告诉您", "购票页面的须知里如果有写，以那里为准",
+    "不太好给您打包票，打电话跟景区确认最稳妥", "这一项我这边确认不了，您方便留个电话的话，核实后联系您",
+    "当天以现场情况为准，出发前可以先电话问一下", "这个我确实不清楚，怕说错耽误您行程，您可以问问景区",
+]
+
+
+def _guide_examples(rec, k=3):
+    pool = sorted(GUIDE_POOL, key=lambda x: _h(rec.get("session_id"), x))
+    return pool[:k]
 # 套话改写：资料回答不了时客服几乎都说「以景区官方公告为准」（原数据 6.4 万次）。默认把它改成自然、具体的引导，保留约 20% 原句。
 DIVERSIFY = dict(on=True, keep=0.2)
 OPTS = dict(keep_order_conflict=False)
@@ -228,6 +242,7 @@ URL_RE = re.compile(r"(?:https?://|www\.)[\w./?=&%#:+~-]+|[\w-]+(?:\.[\w-]+)*\.(
 def _bad_ascii(text, allowed=""):
     """夹英文：去掉网址、资料 / 景区名里原有的英文（如 DIY、SPA）后，还有 3 个字母以上的英文词。"""
     t = URL_RE.sub(" ", text or "")
+    t = re.sub(r"\[[A-Za-z_ ]{2,20}\]", " ", t)  # [smile] [wave] 这类表情占位符不算英文
     return [w for w in ASCII_WORD.findall(t) if not ASCII_OK.match(w) and w.lower() not in allowed.lower()]
 
 
@@ -390,8 +405,7 @@ def cs_prompt(rec, issues, feedback=None):
             todo.append(f"- 第 {i['turn']} 条客服推脱了，但游客上一条问的内容资料里可能有（相关条目：{'、'.join(i['keys'])}）："
                         "资料能回答就直接用资料回答；资料确实回答不了，就保留引导，但换一种自然说法。")
         elif c == "TEMPLATE":
-            todo.append(f"- 第 {i['turn']} 条客服用了套话「以景区官方公告为准」：资料能回答就直接回答；回答不了就换一种自然、具体的引导"
-                        "（资料里有咨询电话 / 官网 / 官方小程序的可以给出来；没有就说到现场问工作人员、出发前电话确认、帮您记录转同事核实等），不要再用这句套话。")
+            todo.append(f"- 第 {i['turn']} 条客服用了套话「以景区官方公告为准」：资料能回答就直接回答；回答不了就换成自然的引导，不再用这句套话。")
         elif c == "LEAK":
             todo.append(f"- 第 {i['turn']} 条客服说了「{i['word']}」：客服不能提「资料 / 数据表 / 知识库 / 携程 / 网友」，改成客服自然的说法（如「目前没有查到这方面的公告」）。")
         elif c == "ENG":
@@ -416,6 +430,8 @@ def cs_prompt(rec, issues, feedback=None):
             user_ok |= {t["turn"] for t in rec["turns"] if t["role"] == "user"}
     fb = ("\n\n【上一次改完仍不合格，原因】\n" + "\n".join(f"- {x}" for x in feedback)) if feedback else ""
     who = "游客消息不能改。" if not user_ok else "除上面明确要求的那 1～2 条，游客消息不要改。"
+    phones = [f"{k} {facts[k]}" for k in ("咨询电话", "投诉电话") if facts.get(k)]
+    phone_hint = f"\n   资料里有{'、'.join(phones)}，让游客打电话时直接给出号码。" if phones else ""
     return f"""你在修正「景区在线客服对话」训练数据。下面是一通「{rec['scenic_name']}」的会话，按【要修的问题】改，其余保持原样。
 
 【景区资料】（客服说的事实只能来自这里，数字原样）
@@ -430,9 +446,12 @@ def cs_prompt(rec, issues, feedback=None):
 规则：
 1. 只改有问题的消息，其余原样；不要增删消息、不要改消息顺序、角色和类型；{who}卡片消息（msg_type 为 card）不要改。
 2. 客服说的价格、时间、电话、地址、政策、设施、景点名都必须来自【景区资料】；不要编。
-3. 资料确实回答不了时客服可以引导，但要说得自然、每次说法不同，例如「目前没有查到这方面的公告，建议出发前电话确认」「这个需要现场工作人员确认」「帮您记录下来转给同事核实」；不要每条都说「以景区官方公告为准」。
-4. 改后的话要和上下文接得上（游客后面的话、结束方式不变），口吻和原来一致。
-5. 不要提「携程」「资料」「数据表」「知识库」「网友」。
+3. 资料确实回答不了时客服可以引导，但要说得自然、每条说法不同，用自己的话说，不要照抄下面的参考，也不要都用「没有查到」「出发前电话确认」开头：
+   参考：{'；'.join(f'「{x}」' for x in _guide_examples(rec))}{phone_hint}
+4. 引导时**不要顺带下结论**：资料里没有的，不能说「是免费的 / 不收费 / 价格一样 / 不包含 / 包含 / 可以现场办 / 随时可以 / 一般在春季」这类判断，
+   也不要补充资料外的常识或建议（如「学生证一般要带」）。只说确认不了、怎么确认。
+5. 改后的话要和上下文接得上（游客后面的话、结束方式不变），口吻和原来一致。
+6. 不要提「携程」「资料」「数据表」「知识库」「网友」。
 
 只输出一个 JSON 对象（字符串里需要引号时用「」，不要用英文双引号）：
 {{"edits":[{{"turn":消息序号,"text":"改后的完整内容"}}],"coref":[{{"turn":用指代的消息序号,"ref_turn":被指的东西第一次出现的消息序号,"expr":"指代原话"}}]}}
@@ -521,7 +540,8 @@ def cs_validate(before, after, issues):
 EXT_SOURCE = "大模型联网补充（待核）"
 EXT_BAD_DOMAIN = re.compile(r"ctrip|trip\.com|tripadvisor|mafengwo|dianping|meituan|qunar|tuniu|ly\.com|fliggy|xiaohongshu|xhslink|douyin|kuaishou|weibo|"
                             r"bilibili|zhihu\.com/question|tieba|douban", re.I)
-EXT_OPS = re.compile(r"票价|门票|\d+\s*元|开放时间|营业时间|几点|电话|优惠|公交|地铁|自驾|停车|预约|购票|开园|闭园|门票")
+EXT_OPS = re.compile(r"票价|门票|\d+\s*元|开放时间|营业时间|几点|电话|优惠|公交|地铁|自驾|停车|预约|购票|开园|闭园|门票|"
+                     r"总投资|投资(?:约|达|超|近)?\s*\d|\d+(?:\.\d+)?\s*[万亿]元|客房|床位|房间|酒店|营收|产值|接待游客")
 EXT_PROMO = re.compile(r"必去|绝美|网红|打卡|圣地|最美|第一|唯一|首屈一指|无与伦比|不可错过|值得一去")
 
 
@@ -575,7 +595,7 @@ def enrich_filter(facts, js):
         elif EXT_BAD_DOMAIN.search(url):
             why = "出处是 OTA / 社交平台"
         elif EXT_OPS.search(attr + val):
-            why = "运营信息（票价 / 时间 / 交通…）"
+            why = "运营 / 商业信息（票价、时间、交通、投资额、客房…）"
         elif EXT_PROMO.search(val):
             why = "宣传 / 绝对化说法"
         elif re.search(r"据说|网传|野史", val) or (re.search(r"传说", val) and "相传" not in val and "传说" not in attr):
@@ -663,6 +683,61 @@ def cmd_enrich(args):
     fout.close()
     print(f"[enrich] 完成 {dict(cnt)}；用法：run --task narr --kb-ext {path}")
     return dict(units=len(units) + len(done), done_now=dict(cnt), kb_ext=str(path))
+
+
+# ---------------------------------------------------------------- 客服：改后核对（第二次调用，防止改写时新编内容）
+VERIFY = dict(on=True)
+LEAK_FIX_RE = re.compile(r"(?:目前|具体的?|相关的?)?(?:这块|这方面)?资料里(?:面)?(?:暂时)?(?:没有|未|也没有|没)(?:详细|具体)?(?:收录|标注|说明|记载|写)?(?:到|的)?")
+
+
+def cs_verify_prompt(rec, before, changed):
+    facts = _facts(rec)
+    fx = "\n".join(f"- {k}：{v}" for k, v in facts.items()) or "（无）"
+    bt = {t["turn"]: t["text"] for t in before["turns"]}
+    items = "\n".join(f"[{n}] 原话：{bt.get(n, '（新增卡片）')}\n    改后：{next(t['text'] for t in rec['turns'] if t['turn'] == n)}" for n in changed)
+    return f"""你在核对客服对话训练数据的改写。下面是景区资料和几条客服回复（改写前 / 改写后）。
+
+【景区资料】
+{fx}
+
+【改写的客服回复】
+{items}
+
+请找出「改后」里有、但【景区资料】和「原话」里都没有依据的**事实性说法或结论**，例如：价格 / 收费 / 免费、是否包含、能不能办 / 怎么办、
+时间 / 季节 / 花期、设施有没有、规定要求、带什么证件，以及资料外的常识性建议。
+不算：引导用语（建议电话确认、到现场问工作人员、帮您记录转同事核实、以购票页面为准）、礼貌用语、复述游客的话、复述资料里有的内容。
+
+只输出 JSON：{{"unsupported":[{{"turn":序号,"text":"没有依据的那句原文"}}]}}；都没问题就 {{"unsupported":[]}}。"""
+
+
+def cs_verify(cfg, before, after, changed):
+    """→ [{turn, text}] 改后新编的说法。"""
+    agent_changed = [n for n in changed if any(t["turn"] == n and t["role"] == "agent" and t["msg_type"] != "card" for t in after["turns"])]
+    if not agent_changed:
+        return [], None
+    js, meta = call_model(cfg, cs_verify_prompt(after, before, agent_changed))
+    out = []
+    for u in js.get("unsupported") or []:
+        try:
+            n = int(u.get("turn"))
+        except (TypeError, ValueError, AttributeError):
+            continue
+        if n in agent_changed and str(u.get("text") or "").strip():
+            out.append(dict(turn=n, text=str(u["text"]).strip()))
+    return out, meta
+
+
+def cs_revert(prep, cur, turns):
+    """把这些消息退回改写前的原话；原话里的「资料里没有收录」这类生成痕迹按规则换掉。"""
+    r = copy.deepcopy(cur)
+    orig = {t["turn"]: t["text"] for t in prep["turns"]}
+    for t in r["turns"]:
+        if t["turn"] in turns and t["turn"] in orig:
+            txt = orig[t["turn"]]
+            if t["role"] == "agent":
+                txt = LEAK_FIX_RE.sub("目前没有查到相关说明", txt)
+            t["text"] = txt
+    return r
 
 
 # ================================================================ 个性化讲解
@@ -867,6 +942,35 @@ def narr_apply(rec, issues, js):
         if k in rn or k == "text":  # 只更新原来就有的字段，保持原结构
             rn[k] = v
     return r, (["text"] if text != old else []) + ["personalization"], []
+
+
+def narr_trim(rec):
+    """超字数上限时在句末（。！？）截断到不超过上限；截完不到上限的 60% 就不截。→ (rec, 日志 or None)"""
+    rn = rec["reference_narration"]
+    lim = int(rec["task_params"]["字数上限"])
+    text = rn.get("text") or ""
+    if _nlen(text) <= lim:
+        return rec, None
+    cut = None
+    for m in re.finditer(r"[。！？!?]", text):
+        if _nlen(text[:m.end()]) <= lim:
+            cut = m.end()
+    if not cut or _nlen(text[:cut]) < lim * 0.6:
+        return rec, None
+    r = copy.deepcopy(rec)
+    new = text[:cut]
+    r["reference_narration"]["text"] = new
+    if "char_count" in r["reference_narration"]:
+        r["reference_narration"]["char_count"] = _nlen(new)
+    pers = [p for p in r["reference_narration"].get("personalization") or [] if all(q in new for q in re.findall("「(.+?)」", str(p)))]
+    if pers and "personalization" in r["reference_narration"]:
+        r["reference_narration"]["personalization"] = pers
+    attrs_text = new
+    if "used_facts" in r["reference_narration"]:
+        kb = {f["attr"]: str(f.get("value") or "") for f in r["sub_poi_knowledge"].get("facts") or []}
+        r["reference_narration"]["used_facts"] = [a for a in r["reference_narration"]["used_facts"]
+                                                  if not re.findall(r"\d+(?:\.\d+)?", kb.get(a, "")) or any(n in attrs_text for n in re.findall(r"\d+(?:\.\d+)?", kb.get(a, "")))]
+    return r, f"规则：模型压缩后仍超字数，按句末截断 {_nlen(text)} → {_nlen(new)} 字"
 
 
 def narr_validate(before, after, issues):
@@ -1208,6 +1312,7 @@ def fix_one(task, rec, ctx, args, cfg):
         return dict(status="rule", record=prep, log=log)
     feedback, cur, calls, usage = None, prep, [], Counter()
     hard = soft = []
+    last_bad = []
     for attempt in range(1, args.attempts + 1):
         js, meta = call_model(cfg, T["prompt"](prep, issues, feedback))
         calls.append(meta.get("request_id"))
@@ -1219,9 +1324,29 @@ def fix_one(task, rec, ctx, args, cfg):
         cur, changed, notes = T["apply"](prep, issues, js)
         log += [f"模型第 {attempt} 次：改了 {changed}"] + notes
         hard, soft = T["validate"](prep, cur, issues)
+        if not hard and task == "cs" and VERIFY["on"] and changed:
+            bad, vm = cs_verify(cfg, prep, cur, changed)
+            if vm:
+                calls.append(vm.get("request_id"))
+            if bad:
+                hard = [f"第 {b['turn']} 条新增了资料里没有的说法：「{b['text']}」（不能下结论，只能说确认不了、怎么确认）" for b in bad]
+                last_bad = bad
+                log.append(f"核对第 {attempt} 次：{len(bad)} 处资料外说法")
+            else:
+                log.append(f"核对第 {attempt} 次：通过")
         if not hard:
             break
         feedback = hard + soft
+    if hard and task == "cs" and any("新增了资料里没有的说法" in h for h in hard):  # 改不掉的编造：那几条退回原话，其余改动保留
+        turns = {b["turn"] for b in last_bad}
+        cur = cs_revert(prep, cur, turns)
+        log.append(f"第 {'、'.join(map(str, sorted(turns)))} 条改写后仍有资料外说法，退回原话")
+        hard, soft = T["validate"](prep, cur, [i for i in issues if not (i.get("turn") in turns and i["code"] in ("TEMPLATE", "DEFLECT", "LEAK"))])
+    if hard and task == "narr" and all(h.startswith("超出字数上限") for h in hard):  # 只超几个字：按句号截断兜底
+        cur, note = narr_trim(cur)
+        if note:
+            log.append(note)
+            hard, soft = T["validate"](prep, cur, issues)
     if hard and task == "narr" and all(h.startswith("扩写后") for h in hard):  # 扩写不够长：退回原上限、原讲解词，不剔除
         cur = copy.deepcopy(prep)
         cur["task_params"]["字数上限"] = rec["task_params"]["字数上限"]
@@ -1672,6 +1797,7 @@ def main():
     ap.add_argument("--workers", type=int, default=8)
     ap.add_argument("--limit", type=int, default=0, help="这次最多修几条（0 = 全部；先小批试跑）")
     ap.add_argument("--attempts", type=int, default=2, help="每条最多问模型几次（第 2 次带上没过的原因）")
+    ap.add_argument("--no-verify", action="store_true", help="客服：改完不做核对（默认会多调一次模型，检查改后有没有资料外的说法）")
     ap.add_argument("--sample", type=int, default=300, help="改动对照（compare.jsonl）最多抽几条")
     ap.add_argument("--retries", type=int, default=3, help="调用失败（网络 / 超时 / 限流 / 5xx / 返回不是 JSON）最多重试几次，默认 3")
     ap.add_argument("--timeout", type=float, default=120)
@@ -1688,6 +1814,7 @@ def main():
     DIVERSIFY.update(on=not args.no_diversify, keep=args.keep_template)
     OPTS.update(keep_order_conflict=args.keep_order_conflict)
     RETRY.update(n=max(0, args.retries))
+    VERIFY.update(on=not args.no_verify)
     if args.cmd in ("scan", "run", "merge") and not args.task:
         ap.error("scan / run / merge 要 --task cs 或 narr")
     if args.cmd in ("enrich", "check"):
