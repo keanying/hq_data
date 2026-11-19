@@ -1,3 +1,6 @@
+/* 全局缩放 90%：视口单位按缩放比例换算，铺满整个窗口 */
+:root{--ui-zoom:.9;--vh100:calc(100vh / var(--ui-zoom));--vw100:calc(100vw / var(--ui-zoom))}
+html{zoom:var(--ui-zoom)}
 /* 开发页数仓信息标签 */
 .meta-tabs{display:flex;align-items:center;gap:4px;padding:0 22px;border-bottom:1px solid var(--line);background:#fff;min-height:42px;overflow-x:auto}
 .meta-tab{border:0;background:none;padding:11px 12px;font-size:12px;color:#77849a;position:relative;white-space:nowrap}
@@ -110,7 +113,7 @@
 .dev-parameters-collapsed .dev-parameters:focus-within header strong,.dev-parameters-collapsed .dev-parameters:focus-within #devParameterBody{display:block}
 /* —— 工作台：去掉页头与面包屑，返回项目放到左侧导航 —— */
 body:not(.suite-showing) .header,body:not(.suite-showing) .project-bar{display:none!important}
-body:not(.suite-showing) .shell{height:100vh!important}
+body:not(.suite-showing) .shell{height:var(--vh100)!important}
 .rail-back{color:#5d6b84}
 .rail-back .rail-back-ic{display:flex;align-items:center;justify-content:center;width:30px;height:30px;border-radius:8px;background:#eef2f9;margin:0 auto 4px;font-size:16px}
 .rail-back:hover .rail-back-ic{background:#e2e9f8;color:#3268ef}
@@ -121,10 +124,10 @@ body.suite-showing .rail-back{display:none}
 .code-tools .btn .ui-ic-wrap,.commit-tools .ui-ic-wrap{margin-right:5px}
 .code-tools .btn{display:inline-flex;align-items:center}
 .commit-tools .icon-btn .ui-ic-wrap{margin:0}
-.commit-tools .icon-btn .ui-ic{width:15px;height:15px}
-.folder-toggle .ui-ic{width:12px;height:12px}
-.folder-add .ui-ic,#addDomain .ui-ic{width:13px;height:13px}
-[data-close-tab] .ui-ic,[data-close-flow-tab] .ui-ic{width:11px;height:11px}
+.commit-tools .icon-btn .ui-ic{width:14px;height:14px}
+.folder-toggle .ui-ic{width:14px;height:14px;color:#8a98ae}
+.folder-add .ui-ic,#addDomain .ui-ic{width:12px;height:12px}
+[data-close-tab] .ui-ic,[data-close-flow-tab] .ui-ic{width:10px;height:10px}
 [data-close-tab],[data-close-flow-tab]{padding:0!important;margin:0 6px 0 -2px;display:inline-flex!important;align-items:center;justify-content:center;width:18px;height:18px;border-radius:4px;color:#9aa6b8}
 [data-close-tab]:hover,[data-close-flow-tab]:hover{background:#e8edf6;color:#46566f}
 .zoom .ui-ic{width:13px;height:13px}

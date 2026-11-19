@@ -96,7 +96,8 @@ Windows 双击 `启动.bat`。需要 Python 3.9 或更高版本，不依赖第�
 **界面：**
 - 进入项目后不再显示页头和面包屑。返回项目列表的按钮在左侧导航最上方的「‹ 项目」。
 - 开发目录和参数设置默认都收成窄条，鼠标移上去展开、移开收起；点图钉可以固定展开。
-- 页面上的符号按钮统一换成线性图标（`web/ui-icons.js`），包括关闭、展开/收起、新建、撤销/重做、格式化、查找、缩放、固定。风格参照 Semi Design 图标（24×24、圆角线条、跟随文字颜色），图标是本项目自己画的，没有引入 Semi 的依赖包。
+- 页面上的符号按钮统一换成 Semi Design 官方图标（`web/semi-icons.js`，取自 `@douyinfe/semi-icons` 的 SVG 源文件，MIT 许可，许可证见 `web/vendor/semi-icons-LICENSE`），包括关闭、目录树三角、新建、撤销/重做、格式化、查找、自动换行、缩放、固定、返回。图标颜色跟随文字颜色，由 `web/ui-icons.js` 自动替换，不需要安装 npm 包。
+- 整个页面统一缩小到 90%（`web/pft-meta.css` 顶部的 `--ui-zoom`，改这个值就能调整）。整屏高度改用 `var(--vh100)`，拖拽、平移、右键菜单、下拉框和提示框的坐标都按缩放比例换算过。
 - 代码编辑器的查找/替换面板重新排了版。
 
 **保存与提交：**
@@ -124,7 +125,8 @@ Windows 双击 `启动.bat`。需要 Python 3.9 或更高版本，不依赖第�
 
 - `web/backend.js`：新增，负责存储转发。
 - `web/pft-meta.js`、`web/pft-meta.css`：新增，开发页的数仓信息标签及界面样式。
-- `web/ui-icons.js`：新增，界面图标。
+- `web/ui-icons.js`：新增，界面图标替换。
+- `web/semi-icons.js`、`web/vendor/semi-icons-LICENSE`：新增，Semi Design 图标 SVG 及其许可证。
 - `web/project-storage.js`：引入后端；空项目增加 ODS 目录。
 - `web/model.mjs`：分层增加 ODS；新增 `relayout`（网格泳道排布，支持横向和纵向），与 `server/seed_pft.py` 采用同一算法，有测试保证两边结果一致。
 - `web/flow-view.mjs`：新增，负责连线走线、去掉冗余线、选中高亮。
