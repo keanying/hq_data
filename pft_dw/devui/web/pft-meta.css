@@ -108,3 +108,49 @@
 .dev-parameters-collapsed .dev-parameters:hover header,.dev-parameters-collapsed .dev-parameters:focus-within header{padding:0 15px;justify-content:space-between}
 .dev-parameters-collapsed .dev-parameters:hover header strong,.dev-parameters-collapsed .dev-parameters:hover #devParameterBody,
 .dev-parameters-collapsed .dev-parameters:focus-within header strong,.dev-parameters-collapsed .dev-parameters:focus-within #devParameterBody{display:block}
+/* —— 工作台：去掉页头与面包屑，返回项目放到左侧导航 —— */
+body:not(.suite-showing) .header,body:not(.suite-showing) .project-bar{display:none!important}
+body:not(.suite-showing) .shell{height:100vh!important}
+.rail-back{color:#5d6b84}
+.rail-back .rail-back-ic{display:flex;align-items:center;justify-content:center;width:30px;height:30px;border-radius:8px;background:#eef2f9;margin:0 auto 4px;font-size:16px}
+.rail-back:hover .rail-back-ic{background:#e2e9f8;color:#3268ef}
+body.suite-showing .rail-back{display:none}
+/* —— 图标 —— */
+.ui-ic-wrap{display:inline-flex;align-items:center;justify-content:center;vertical-align:middle;line-height:0}
+.ui-ic{width:14px;height:14px;flex:none}
+.code-tools .btn .ui-ic-wrap,.commit-tools .ui-ic-wrap{margin-right:5px}
+.code-tools .btn{display:inline-flex;align-items:center}
+.commit-tools .icon-btn .ui-ic-wrap{margin:0}
+.commit-tools .icon-btn .ui-ic{width:15px;height:15px}
+.folder-toggle .ui-ic{width:12px;height:12px}
+.folder-add .ui-ic,#addDomain .ui-ic{width:13px;height:13px}
+[data-close-tab] .ui-ic,[data-close-flow-tab] .ui-ic{width:11px;height:11px}
+[data-close-tab],[data-close-flow-tab]{padding:0!important;margin:0 6px 0 -2px;display:inline-flex!important;align-items:center;justify-content:center;width:18px;height:18px;border-radius:4px;color:#9aa6b8}
+[data-close-tab]:hover,[data-close-flow-tab]:hover{background:#e8edf6;color:#46566f}
+.zoom .ui-ic{width:13px;height:13px}
+#developmentDirectoryToggle .ui-ic,#devParametersToggle .ui-ic{width:15px;height:15px}
+.tree-entry>.ui-ic-wrap .ui-ic,.document-title .ui-ic{width:13px;height:13px;color:#8a98ae}
+.rail-back .ui-ic{width:16px;height:16px}
+.search .ui-ic{width:13px;height:13px;color:#9aa6b8}
+/* —— 开发目录：收起为窄条，悬停覆盖展开 —— */
+.directory-tab{display:none}
+.shell>.sidebar{transition:width .16s ease,box-shadow .16s ease;z-index:25;position:relative}
+.development-directory-collapsed .shell>.sidebar .directory-tab{display:block;writing-mode:vertical-rl;letter-spacing:3px;font-size:12px;color:#7d8ca2;margin:14px auto 0}
+.development-directory-collapsed .shell>.sidebar:hover,.development-directory-collapsed .shell>.sidebar:focus-within{width:280px;min-width:280px;margin-right:-248px;box-shadow:10px 0 24px #22304a1f;background:#fff;transition-delay:.08s}
+.development-directory-collapsed .shell>.sidebar:hover .directory-tab,.development-directory-collapsed .shell>.sidebar:focus-within .directory-tab{display:none}
+/* —— 查找/替换面板 —— */
+.cm-panels-bottom{border-top:1px solid #e4e9f2!important;background:#fbfcfe!important}
+.cm-search{display:block!important;padding:10px 40px 6px 14px!important;background:#fbfcfe!important;font-size:12px!important;position:relative}
+.cm-search>*{vertical-align:middle;margin-bottom:6px!important}
+.cm-search .cm-textfield{width:240px;height:28px;box-sizing:border-box;border:1px solid #dbe2ef;border-radius:6px;padding:0 9px;font-size:12px;background:#fff;margin:0 8px 6px 0!important;outline:none}
+.cm-search .cm-textfield:focus{border-color:#7fa2f0;box-shadow:0 0 0 3px #3268ef1a}
+.cm-search .cm-button{height:28px;padding:0 11px;margin:0 4px 0 0!important;border:1px solid #dbe2ef!important;border-radius:6px!important;background:#fff!important;background-image:none!important;color:#46566f;font-size:12px;cursor:pointer}
+.cm-search .cm-button:hover{border-color:#9fb6ec!important;color:#3268ef}
+.cm-search label{display:inline-flex;align-items:center;gap:4px;margin:0 10px 0 2px!important;color:#5d6b84;font-size:12px;white-space:nowrap}
+.cm-search input[type=checkbox]{accent-color:#3268ef;margin:0}
+.cm-search button[name=close]{position:absolute;right:10px;top:8px;border:0;background:none;font-size:16px;color:#9aa6b8;cursor:pointer}
+.cm-search button[name=close]:hover{color:#46566f}
+.rail-back{font-size:12px!important;line-height:1.4;padding:10px 0 6px!important;margin-bottom:6px}
+.rail-back>span:last-child{font-size:12px}
+.development-task-tab .ui-ic-wrap{overflow:visible!important}
+.search kbd{display:none}

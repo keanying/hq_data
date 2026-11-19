@@ -197,7 +197,7 @@ function commitUI(manual,time){const st=$('#saveState'),dirtyLocal=backend.onlin
  else if(manual){st.textContent='正在提交…';backend.commit(draftKey()).then(r=>{if(r.ok){st.textContent='已提交到数据库 · '+time;toast('已提交到'+backend.label)}else{st.textContent='提交失败 · 修改仍在本地草稿';toast('提交失败：'+(r.error||'请重试'))}commitButton()})}
  else st.textContent=backend.online?'已自动保存到本地 · '+time+' · 未提交':'已自动保存 · '+time;
  commitButton()}
-function commitButton(){const b=$('#commitBtn');if(!b)return;const d=backend.online&&backend.isDirty(draftKey());b.classList.toggle('has-changes',d);b.title=d?'有未提交的修改，点击写入数据库（Ctrl+S）':'已与数据库同步（Ctrl+S 提交）';$('#discardDraft').hidden=!d}
+function commitButton(){const b=$('#commitBtn');if(!b)return;const d=backend.online&&backend.isDirty(draftKey());b.classList.toggle('has-changes',d);b.title=d?'有未提交的修改，点击写入数据库（Ctrl+S）':'已与数据库同步（Ctrl+S 提交）'}
 function persistHistory(){backend.saveHistory(draftKey(),undoStack,redoStack);historyButtons()}
 function historyButtons(){const u=$('#undoBtn'),r=$('#redoBtn');if(u)u.disabled=!undoStack.length;if(r)r.disabled=!redoStack.length}
 function undoRedo(isUndo){const from=isUndo?undoStack:redoStack,to=isUndo?redoStack:undoStack;if(!from.length)return;syncEditor();to.push(JSON.stringify(data));data=JSON.parse(from.pop());data.tasks=data.tasks.map(normalizeTask);
@@ -205,11 +205,11 @@ function undoRedo(isUndo){const from=isUndo?undoStack:redoStack,to=isUndo?redoSt
  selection.clear();if(editorId&&!task(editorId))editorId=null;dirty();if(editorId)openEditor(editorId);else{showCanvas();render()}persistHistory();toast(isUndo?'已撤销上一步操作':'已重做')}
 {const bar=document.querySelector('.document-bar'),anchor=document.querySelector('#scheduleSettings');
  const wrap=document.createElement('div');wrap.className='commit-tools';
- wrap.innerHTML='<button id="undoBtn" class="icon-btn" title="撤销（Ctrl+Z）" aria-label="撤销" disabled>↶</button><button id="redoBtn" class="icon-btn" title="重做（Ctrl+Shift+Z / Ctrl+Y）" aria-label="重做" disabled>↷</button><button id="discardDraft" class="text-btn" hidden title="丢弃本地未提交的修改，恢复为数据库中的版本">放弃修改</button><button id="commitBtn" class="btn commit-btn">提交</button>';
+ wrap.innerHTML='<button id="undoBtn" class="icon-btn" title="撤销（Ctrl+Z）" aria-label="撤销" disabled>↶</button><button id="redoBtn" class="icon-btn" title="重做（Ctrl+Shift+Z / Ctrl+Y）" aria-label="重做" disabled>↷</button><button id="commitBtn" class="btn commit-btn">提交</button>';
  bar.insertBefore(wrap,anchor);
  $('#undoBtn').onclick=()=>undoRedo(true);$('#redoBtn').onclick=()=>undoRedo(false);
  $('#commitBtn').onclick=()=>save(true);
- $('#discardDraft').onclick=()=>{if(confirm('放弃未提交的修改？\n将恢复为数据库中最后一次提交的版本，撤销历史会一并清空。'))discardDraft()};
+ 
  commitButton();historyButtons();
  window.addEventListener('dataflow:backend',()=>commitButton());
  backend.loadHistory(draftKey()).then(h=>{if(h&&!undoStack.length&&!redoStack.length){undoStack.push(...h.undo);redoStack.push(...h.redo);historyButtons()}});}
@@ -228,6 +228,17 @@ function renderLevels(w){let host=$('#levelBadges');if(!host){host=document.crea
 // 参数设置：默认收起，鼠标移上去展开；点 › 固定展开
 {const pinKey='devui-parameters-pinned';let pinned=false;try{pinned=window.sessionStorage.getItem(pinKey)==='1'||window.localStorage.getItem(pinKey)==='1'}catch{}
  const pane=$('#developmentParameters'),btn=$('#devParametersToggle');
- const apply=()=>{document.body.classList.toggle('dev-parameters-collapsed',!pinned);btn.textContent=pinned?'›':'‹';btn.setAttribute('aria-expanded',String(pinned));btn.setAttribute('aria-label',pinned?'取消固定，改为鼠标悬停展开':'固定展开参数设置');btn.title=pinned?'取消固定（鼠标移开后自动收起）':'固定展开'};
+ const apply=()=>{document.body.classList.toggle('dev-parameters-collapsed',!pinned);btn.textContent=pinned?'›':'⇱';btn.setAttribute('aria-expanded',String(pinned));btn.setAttribute('aria-label',pinned?'取消固定，改为鼠标悬停展开':'固定展开参数设置');btn.title=pinned?'取消固定（鼠标移开后自动收起）':'固定展开'};
  btn.onclick=e=>{e.stopPropagation();pinned=!pinned;try{window.localStorage.setItem(pinKey,pinned?'1':'0')}catch{}apply()};
  pane.querySelector('header').insertAdjacentHTML('afterend','<div class="dev-parameters-tab" aria-hidden="true">参数设置</div>');apply()}
+
+// 开发目录：默认收起为左侧窄条，鼠标移上去展开、移开收起；点 ‹ 固定展开
+{const pinKey='devui-directory-pinned';let pinned=false;try{pinned=window.localStorage.getItem(pinKey)==='1'}catch{}
+ const btn=$('#developmentDirectoryToggle'),side=$('.shell>.sidebar');
+ const apply=()=>{document.body.classList.toggle('development-directory-collapsed',!pinned);btn.textContent=pinned?'‹':'⇱';btn.setAttribute('aria-expanded',String(pinned));btn.title=pinned?'取消固定（鼠标移开后自动收起）':'固定展开开发目录';btn.setAttribute('aria-label',btn.title)};
+ btn.onclick=e=>{e.stopPropagation();pinned=!pinned;try{window.localStorage.setItem(pinKey,pinned?'1':'0')}catch{}apply()};
+ side.insertAdjacentHTML('afterbegin','<div class="directory-tab" aria-hidden="true">开发目录</div>');apply()}
+// 左侧导航顶部：返回项目列表（替代原来的页头与面包屑）
+{const rail=$('.rail'),b=document.createElement('button');b.className='rail-item rail-back';b.title='返回项目列表';b.setAttribute('aria-label','返回项目列表');
+ b.innerHTML='<span class="rail-back-ic">‹</span><span>项目</span>';rail.prepend(b);b.onclick=()=>document.querySelector('#backProjects')?.click();
+ const name=getProjects().find(p=>p.id===activeProjectId)?.name;if(name)b.title='返回项目列表 · 当前：'+name}
