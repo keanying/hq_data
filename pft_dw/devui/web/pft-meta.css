@@ -234,7 +234,7 @@ body.suite-showing .rail-back{display:none}
 .query-empty>span .ui-ic{width:36px;height:36px;color:#c0cdeb}
 
 /* 参数一行：参数名 | 类型 | 值 | 描述 | 删除 */
-:root{--param-w:520px}
+:root{--param-w:600px}
 .dev-parameters{width:var(--param-w)}
 .parameter-head,.parameter-row{grid-template-columns:minmax(70px,1fr) 78px minmax(110px,1.5fr) minmax(90px,1.2fr) 16px!important;gap:6px;align-items:center}
 body:not(.dev-parameters-collapsed) .shell>main>.view{margin-right:var(--param-w)}

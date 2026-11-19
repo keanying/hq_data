@@ -82,3 +82,31 @@ html .meta-chip:hover{background:rgba(0,100,250,.08);border-color:rgba(0,100,250
 
 /* ---- Semi Empty ---- */
 html .suite-empty{padding:40px 16px;text-align:center;font-size:14px;color:var(--st-text-2);border-top:1px solid var(--st-border)}
+
+/* ---- 参数设置：Semi 可编辑表格 ----
+   卡片容器 + Semi 表头 + 行分割线/悬停；单元格内是 Semi Input/Select 的 fill 样式：
+   底色 fill-0、无描边、6px 圆角、32px 高；悬停 fill-1；聚焦白底 + 主色描边 */
+html .parameter-editor h4{font-size:13px;font-weight:600;color:var(--st-text);margin:0 0 10px}
+html .parameter-table{background:#fff;border:1px solid var(--st-border);border-radius:6px;overflow:visible}
+html .parameter-head,html .parameter-row{grid-template-columns:minmax(118px,1.15fr) 84px minmax(130px,1.4fr) minmax(96px,1fr) 24px!important;gap:8px;align-items:center}
+html .parameter-head{padding:8px 12px;margin:0;font-size:12px;font-weight:600;color:var(--st-head-text);border-bottom:1px solid var(--st-border);background:#fff;border-radius:6px 6px 0 0}
+html .parameter-row{margin:0;padding:6px 12px;border-bottom:1px solid var(--st-border);transition:background-color .1s}
+html .parameter-row:hover{background:var(--st-hover)}
+html .parameter-row>input,html .parameter-value input,html .parameter-row .parameter-desc,
+html .parameter-row>.hover-select,html .parameter-value>.hover-select{height:32px;min-height:32px;box-sizing:border-box;border:1px solid transparent;border-radius:6px;background:rgba(46,50,56,.05);color:var(--st-text);font-size:12px;padding:0 10px;box-shadow:none;transition:background-color .15s,border-color .15s}
+html .parameter-row>input:hover,html .parameter-value input:hover,html .parameter-row .parameter-desc:hover,
+html .parameter-row>.hover-select:hover,html .parameter-value>.hover-select:hover{background:rgba(46,50,56,.09);border-color:transparent}
+html .parameter-row>input:focus,html .parameter-value input:focus,html .parameter-row .parameter-desc:focus,
+html .parameter-row>.hover-select[aria-expanded=true],html .parameter-value>.hover-select[aria-expanded=true]{background:#fff;border-color:var(--st-primary);outline:none}
+html .parameter-row input::placeholder{color:rgba(28,31,35,.35)}
+html .parameter-row input[aria-invalid=true]{border-color:rgb(249,57,32);background:rgba(249,57,32,.06)}
+html .parameter-value{gap:6px}
+html .parameter-value small .help-icon .ui-ic{width:14px;height:14px;color:rgba(28,31,35,.35)}
+html .parameter-row>.parameter-remove{display:inline-flex;align-items:center;justify-content:center;width:24px;height:24px;padding:0;border-radius:3px;color:rgba(28,31,35,.45);background:none}
+html .parameter-row>.parameter-remove:hover{background:rgba(249,57,32,.1);color:rgb(249,57,32)}
+html .parameter-row>.parameter-remove .ui-ic{width:12px;height:12px}
+html .parameter-table>.parameter-add{display:flex;align-items:center;justify-content:center;gap:4px;width:100%;height:40px;margin:0;border:0;border-radius:0 0 6px 6px;background:#fff;color:var(--st-primary);font-size:13px;font-weight:600;cursor:pointer}
+html .parameter-table>.parameter-add:hover{background:rgba(50,104,239,.06)}
+html .parameter-table>.parameter-add .ui-ic{width:13px;height:13px}
+html .parameter-table>div:empty+.parameter-add,html .parameter-table>div:empty{border-radius:0 0 6px 6px}
+html .parameter-error:not(:empty){margin-top:8px;padding:6px 10px;border-radius:3px;background:rgba(249,57,32,.08);color:rgb(142,8,5);font-size:12px}
