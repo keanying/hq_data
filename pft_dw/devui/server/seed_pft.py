@@ -25,7 +25,7 @@ LAYERS = ["ODS", "DIM", "DWD", "DWS", "ADS"]
 TASK_W, TASK_H = 192, 96
 PAIR_DX, PITCH_X, PITCH_Y = 222, 470, 128
 COL_GAP, ROW_GAP, BRANCH_GAP = 150, 40, 150
-LAYOUT_VERSION = 4   # 排布结构版本：变化时启动会升级已有 PFT 项目的工作流排布（不动任务代码）
+LAYOUT_VERSION = 5   # 排布结构版本：变化时启动会升级已有 PFT 项目的工作流排布（不动任务代码）
 
 
 def load():
@@ -182,6 +182,18 @@ def relayout(flow):
         node(L["start"], A0 - (96 if TB else 192) - lane_gap, C0)
     if L.get("end"):
         node(L["end"], a, C0)
+    # 记录排布时的泳道几何：连线按它走通道，拖动单张卡片不会改变其他连线
+    NA = 96 if TB else 192
+    c0 = None
+    for lane in L["lanes"]:
+        ids = [LG[lane]] if (folded(lane) or LG.get(lane)) else list(L["cells"].get(lane, {}).values())
+        for gid in ids:
+            e = ext(gid)
+            if e:
+                v = e[0][0] if TB else e[0][1]
+                c0 = v if c0 is None else min(c0, v)
+    L["geo"] = {"dir": "TB" if TB else "LR", "lanes": [[p, p + lane_size[i]] for i, p in enumerate(lane_pos)],
+                "start": [A0 - NA - lane_gap, A0 - lane_gap], "end": [a, a + NA], "c0": C0 if c0 is None else c0}
     return True
 
 

@@ -25,17 +25,25 @@ function geometry(flow) {
   flow.groups.forEach(g => g.ids.forEach(id => { const cur = groupOfTask.get(id); if (!cur || depth.get(g.id) > depth.get(cur)) groupOfTask.set(id, g.id); }));
   const up = gid => { const seen = new Set(); for (let g = G.get(gid); g && !seen.has(g.id); g = G.get(g.parent)) { seen.add(g.id); if (laneOfGroup.has(g.id)) return laneOfGroup.get(g.id); if (branch.has(g.id)) return 'B'; } return null; };
   const nodeBox = id => { const n = flow.nodes.find(n => n.taskId === id); return n ? box({x: n.x, y: n.y, w: 192, h: 96}) : null; };
-  // 车道沿流向的起止：0=开始节点，1..N=泳道，N+1=结束节点
+  // 车道沿流向的起止：0=开始节点，1..N=泳道，N+1=结束节点。
+  // 优先用排布时记录的几何（layout.geo）：拖动单张卡片不会挪动通道，其他连线保持不变
   const ext = [];
-  const addExt = (i, b) => { if (!b) return; const e = ext[i] || [Infinity, -Infinity]; ext[i] = [Math.min(e[0], b.a), Math.max(e[1], b.a + b.la)]; };
-  addExt(0, L.start && nodeBox(L.start));
-  laneOfGroup.forEach((i, gid) => {
-    const g = G.get(gid); if (!g || hiddenGroup(flow, g)) return;
-    const lg = L.laneGroups?.[L.lanes[i - 1]];
-    if (lg && lg !== gid) return;            // 有泳道外框时以外框为准
-    const b = groupBounds(flow, g); if (b) addExt(i, box(b));
-  });
-  addExt(L.lanes.length + 1, L.end && nodeBox(L.end));
+  const geo = L.geo && L.geo.dir === (TB ? 'TB' : 'LR') && L.geo.lanes?.length === L.lanes.length ? L.geo : null;
+  if (geo) {
+    if (L.start) ext[0] = geo.start;
+    geo.lanes.forEach((r, i) => { if (r[1] > r[0]) ext[i + 1] = r; });
+    if (L.end) ext[L.lanes.length + 1] = geo.end;
+  } else {
+    const addExt = (i, b) => { if (!b) return; const e = ext[i] || [Infinity, -Infinity]; ext[i] = [Math.min(e[0], b.a), Math.max(e[1], b.a + b.la)]; };
+    addExt(0, L.start && nodeBox(L.start));
+    laneOfGroup.forEach((i, gid) => {
+      const g = G.get(gid); if (!g || hiddenGroup(flow, g)) return;
+      const lg = L.laneGroups?.[L.lanes[i - 1]];
+      if (lg && lg !== gid) return;            // 有泳道外框时以外框为准
+      const b = groupBounds(flow, g); if (b) addExt(i, box(b));
+    });
+    addExt(L.lanes.length + 1, L.end && nodeBox(L.end));
+  }
   const idx = ext.map((e, i) => e ? i : null).filter(i => i !== null);
   const gutter = i => {   // 车道 i 与其后第一条非空车道之间的通道
     const j = idx.find(k => k > i), e = ext[i];
@@ -44,19 +52,23 @@ function geometry(flow) {
     return {center: (e[1] + ext[j][0]) / 2, width: ext[j][0] - e[1] - 24};
   };
   const before = i => { const j = [...idx].reverse().find(k => k < i); return j === undefined ? {center: ext[i][0] - 60, width: 100} : gutter(j); };
-  let gridStart = Infinity, gridEnd = -Infinity, branchTop = Infinity;
-  flow.groups.forEach(g => {
+  let gridStart = geo ? geo.c0 : Infinity;
+  if (!geo) flow.groups.forEach(g => {
     if (hiddenGroup(flow, g)) return;
-    const where = up(g.id); if (where === null) return;
-    const b = groupBounds(flow, g); if (!b) return; const x = box(b);
-    if (where === 'B') branchTop = Math.min(branchTop, x.c);
-    else { gridEnd = Math.max(gridEnd, x.c + x.lc); gridStart = Math.min(gridStart, x.c); }
+    const where = up(g.id); if (where === null || where === 'B') return;
+    const b = groupBounds(flow, g); if (b) gridStart = Math.min(gridStart, box(b).c);
   });
   const rowGap = L.rowGap ?? 40, wrapped = !!L.laneGroups;
   const laneOf = item => {
     if (item.ids.length === 1 && item.ids[0] === L.start) return 0;
     if (item.ids.length === 1 && item.ids[0] === L.end) return L.lanes.length + 1;
     return up(item.groupId || groupOfTask.get(item.ids[0]));
+  };
+  // 卡片仍在所属泳道范围内（被拖出泳道的卡片，连线改为按实际位置走）
+  const inLane = (item, i) => {
+    if (typeof i !== 'number' || !geo) return true;
+    const b = box(item), r = ext[i];
+    return !!r && b.a >= r[0] - 40 && b.a + b.la <= r[1] + 40;
   };
   // 目标所在行上方的横向通道；第一行放到泳道外框之外，避开外框标题
   const rowChannel = item => {
@@ -65,7 +77,7 @@ function geometry(flow) {
     if (top <= gridStart + 50) return {center: gridStart - (wrapped ? 34 : 22), width: 28};
     return {center: top - rowGap / 2, width: rowGap - 12};
   };
-  return {TB, box, laneOf, gutter, before, rowChannel, groupOfTask, endLane: L.lanes.length + 1};
+  return {TB, box, laneOf, inLane, gutter, before, rowChannel, groupOfTask, endLane: L.lanes.length + 1};
 }
 
 function roundPath(pts, r = 10) {
@@ -114,14 +126,9 @@ function tracks() {
     },
     solve() {
       for (const p of pools.values()) {
-        const list = [...p.keys].sort((a, b) => a[1][0] - b[1][0] || a[1][1] - b[1][1]);
-        const ends = [], slot = new Map();
-        for (const [key, [lo, hi]] of list) {
-          let t = ends.findIndex(e => e < lo - 14);
-          if (t < 0) { t = ends.length; ends.push(hi); } else ends[t] = hi;
-          slot.set(key, t);
-        }
-        const n = ends.length, gap = n > 1 ? Math.min(TRACK, Math.max(3, p.spec.width) / (n - 1)) : 0;
+        // 每个来源/目标固定一条轨道（按名称排序），拖动某张卡片不会让其他线换轨
+        const list = [...p.keys.keys()].sort(), slot = new Map(list.map((k, t) => [k, t]));
+        const n = list.length, gap = n > 1 ? Math.min(TRACK, Math.max(3, p.spec.width) / (n - 1)) : 0;
         p.pos = new Map([...slot].map(([k, t]) => [k, p.spec.center + (t - (n - 1) / 2) * gap]));
       }
     },
@@ -159,10 +166,12 @@ export function edgeView(flow, projected) {
     const lf = g?.laneOf(f), lt = g?.laneOf(t);
     const same = g && !f.groupId && !t.groupId && g.groupOfTask.get(f.ids[0]) && g.groupOfTask.get(f.ids[0]) === g.groupOfTask.get(t.ids[0]);
     // 只有“泳道之间、目标在前方”的线走泳道通道；分支线、组内线、被拖到后方/并排的线都按实际位置走
-    let kind = 'free';
-    if (g && !same && typeof lf === 'number' && typeof lt === 'number' && lt > lf && ta > sa + 24)
-      kind = g.gutter(lf)?.center === g.before(lt)?.center ? 'adj' : 'skip';
-    return {i, f, t, F, T, lf, lt, kind, sa, ta, s: F.c + F.lc / 2, e: T.c + T.lc / 2};
+    // nominal：按排布应走的通道类型（用于预留轨道，保证拖动一张卡片时其他线不换轨）
+    let nominal = 'free';
+    if (g && !same && typeof lf === 'number' && typeof lt === 'number' && lt > lf)
+      nominal = g.gutter(lf)?.center === g.before(lt)?.center ? 'adj' : 'skip';
+    const kind = nominal !== 'free' && ta > sa + 24 && g.inLane(f, lf) && g.inLane(t, lt) ? nominal : 'free';
+    return {i, f, t, F, T, lf, lt, kind, nominal, sa, ta, s: F.c + F.lc / 2, e: T.c + T.lc / 2};
   });
   // 开始/结束节点的线是调度控制（就绪检查、发布），不是数据流向
   const ctl = p => g && (p.lf === 0 || p.lt === g.endLane);
@@ -171,6 +180,10 @@ export function edgeView(flow, projected) {
   const T = tracks();
   const routes = plans.map(p => {
     const {sa, ta, s, e} = p, S = 'S:' + p.f.key, D = 'T:' + p.t.key;
+    if (!red[p.i] && p.kind === 'free' && p.nominal !== 'free') {   // 预留原本的轨道
+      T.use(g.gutter(p.lf), S, 0, 0);
+      if (p.nominal === 'skip') { const ch = g.rowChannel(p.t); T.use(g.before(p.lt), D, 0, 0); T.use(ch, D, 0, 0); }
+    }
     if (p.kind === 'free' || red[p.i] || (style === 'curve' && p.kind === 'adj'))
       return style === 'curve' ? {curve: freeCurve(sa, s, ta, e)} : {pts: () => freeRoute(sa, s, ta, e, p.F, p.T)};
     if (p.kind === 'adj') {

@@ -86,5 +86,8 @@ export function relayout(flow){
  const node=(id,na,nc)=>{const n=pos.get(id);if(n){n.x=TB?nc:na;n.y=TB?na:nc}};
  if(L.start)node(L.start,A0-(TB?96:192)-laneGap,C0);
  if(L.end)node(L.end,a,C0);
+ // 记录排布时的泳道几何：连线按它走通道，拖动单张卡片不会改变其他连线
+ const NA=TB?96:192;let c0=Infinity;L.lanes.forEach(lane=>{const ids=folded(lane)||LG[lane]?[LG[lane]]:Object.values(L.cells[lane]||{});for(const gid of ids){const e=ext(gid);if(e)c0=Math.min(c0,TB?e.b.x:e.b.y)}});
+ L.geo={dir:TB?'TB':'LR',lanes:lanePos.map((p,i)=>[p,p+laneSize[i]]),start:[A0-NA-laneGap,A0-laneGap],end:[a,a+NA],c0:isFinite(c0)?c0:C0};
  return true;
 }
