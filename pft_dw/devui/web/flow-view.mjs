@@ -1,14 +1,21 @@
 // 工作流画布的显示层：只改变“怎么画”，不改依赖数据。
-//  1. 带泳道布局（flow.layout）的工作流：连线走列间通道的圆角折线，跨层线走行间通道，
-//     DIM 等分支走分支通道；横向（LR）与纵向（TB）两种方向
-//  2. 传递冗余的连线（A→B→C 已成立时的 A→C）默认不画，选中相关节点时再显示
-//  3. 选中节点或分组时，相关连线高亮、其余淡化，相邻节点描边
+//  1. 连线两种画法：折线（ortho，走卡片之间的通道）与曲线（curve，贝塞尔）
+//  2. 折线按“通道 + 轨道”分配：同一通道里不同来源的竖线各占一条轨道，互不重叠；
+//     同一来源的线共用一条主干（看起来像一棵树），到了目标卡片再按来向分开落点
+//  3. 每张卡片的入口按来向上下（纵向布局为左右）错开，几条线不会挤在同一个点上
+//  4. 方向：左右（LR）或上下（TB）；带泳道的工作流按泳道网格重排，普通工作流整体转置
+//  5. 传递冗余的连线（A→B→C 已成立时的 A→C）默认不画；选中节点时相关连线按流向流动
 import {groupBounds, hiddenGroup, groupDepth} from './model.mjs';
 
-const CH = 45;   // 分支卡片旁的走线间距
+const CH = 45;          // 分支卡片旁的走线间距
+const TRACK = 12;       // 轨道最大间距
+const SIDE = 0.18;      // 卡片边缘留白比例（入口错开时不贴边）
+
+export const viewDir = flow => (flow?.layout?.lanes ? flow.layout.dir : flow?.view?.dir) === 'TB' ? 'TB' : 'LR';
+export const edgeStyle = flow => flow?.view?.edge === 'curve' ? 'curve' : 'ortho';
 
 function geometry(flow) {
-  const L = flow.layout, TB = L.dir === 'TB';
+  const L = flow.layout, TB = viewDir(flow) === 'TB';
   const box = b => TB ? {a: b.y, c: b.x, la: b.h, lc: b.w} : {a: b.x, c: b.y, la: b.w, lc: b.h};
   const G = new Map(flow.groups.map(g => [g.id, g]));
   const laneOfGroup = new Map(), branch = new Set([...(L.branch?.groups || []), ...(L.branch?.group ? [L.branch.group] : [])]);
@@ -35,28 +42,34 @@ function geometry(flow) {
   const gutter = i => {   // 车道 i 与其后第一条非空车道之间的通道
     const j = idx.find(k => k > i), e = ext[i];
     if (!e) return null;
-    return j === undefined ? e[1] + 60 : (e[1] + ext[j][0]) / 2;
+    if (j === undefined) return {center: e[1] + 60, width: 100};
+    return {center: (e[1] + ext[j][0]) / 2, width: ext[j][0] - e[1] - 24};
   };
-  const before = i => { const j = [...idx].reverse().find(k => k < i); return j === undefined ? ext[i][0] - 60 : gutter(j); };
-  let gridEnd = -Infinity, branchTop = Infinity;
+  const before = i => { const j = [...idx].reverse().find(k => k < i); return j === undefined ? {center: ext[i][0] - 60, width: 100} : gutter(j); };
+  let gridStart = Infinity, gridEnd = -Infinity, branchTop = Infinity;
   flow.groups.forEach(g => {
     if (hiddenGroup(flow, g)) return;
     const where = up(g.id); if (where === null) return;
     const b = groupBounds(flow, g); if (!b) return; const x = box(b);
-    if (where === 'B') branchTop = Math.min(branchTop, x.c); else gridEnd = Math.max(gridEnd, x.c + x.lc);
+    if (where === 'B') branchTop = Math.min(branchTop, x.c);
+    else { gridEnd = Math.max(gridEnd, x.c + x.lc); gridStart = Math.min(gridStart, x.c); }
   });
-  const rowGap = L.rowGap ?? 40;
+  const rowGap = L.rowGap ?? 40, wrapped = !!L.laneGroups;
   const laneOf = item => {
     if (item.ids.length === 1 && item.ids[0] === L.start) return 0;
     if (item.ids.length === 1 && item.ids[0] === L.end) return L.lanes.length + 1;
     return up(item.groupId || groupOfTask.get(item.ids[0]));
   };
-  const rowTop = item => {
+  // 目标所在行上方的横向通道；第一行放到泳道外框之外，避开外框标题
+  const rowChannel = item => {
     const gid = item.groupId || groupOfTask.get(item.ids[0]); const g = G.get(gid); const b = g && groupBounds(flow, g);
-    return b ? box(b).c : box(item).c;
+    const top = b ? box(b).c : box(item).c;
+    if (top <= gridStart + 50) return {center: gridStart - (wrapped ? 34 : 22), width: 28};
+    return {center: top - rowGap / 2, width: rowGap - 12};
   };
-  return {TB, box, laneOf, gutter, before, rowTop, rowGap, groupOfTask,
-          branchCh: isFinite(branchTop) ? (gridEnd + branchTop) / 2 : gridEnd + 75};
+  const bch = isFinite(branchTop) ? {center: (gridEnd + branchTop) / 2 - 10, width: Math.max(30, Math.min(110, branchTop - gridEnd - 70))}
+                                  : {center: gridEnd + 75, width: 60};
+  return {TB, box, laneOf, gutter, before, rowChannel, groupOfTask, bch, endLane: L.lanes.length + 1};
 }
 
 function roundPath(pts, r = 10) {
@@ -73,13 +86,8 @@ function roundPath(pts, r = 10) {
   return d + ` L${last[0]},${last[1]}`;
 }
 
-function bezier(f, t) {
-  const x = f.x + f.w, y = f.y + f.h / 2, x2 = t.x, y2 = t.y + t.h / 2, c = Math.max(40, Math.abs(x2 - x) / 2);
-  return `M${x},${y} C${x + c},${y} ${x2 - c},${y2} ${x2},${y2}`;
-}
-
 export function portPoint(flow, item, side) {
-  if (flow?.layout?.dir === 'TB') return {x: item.x + item.w / 2, y: item.y + (side === 'out' ? item.h : 0)};
+  if (viewDir(flow) === 'TB') return {x: item.x + item.w / 2, y: item.y + (side === 'out' ? item.h : 0)};
   return {x: item.x + (side === 'out' ? item.w : 0), y: item.y + item.h / 2};
 }
 
@@ -97,34 +105,135 @@ function redundant(edges) {
   });
 }
 
+// 通道轨道分配：同一通道里 key 不同且区间重叠的线段放在不同轨道上
+function tracks() {
+  const pools = new Map();
+  return {
+    use(spec, key, lo, hi) {
+      const id = Math.round(spec.center) + ':' + Math.round(spec.width);
+      if (!pools.has(id)) pools.set(id, {spec, keys: new Map()});
+      const k = pools.get(id).keys, cur = k.get(key);
+      k.set(key, cur ? [Math.min(cur[0], lo, hi), Math.max(cur[1], lo, hi)] : [Math.min(lo, hi), Math.max(lo, hi)]);
+      return () => pools.get(id).pos.get(key);
+    },
+    solve() {
+      for (const p of pools.values()) {
+        const list = [...p.keys].sort((a, b) => a[1][0] - b[1][0] || a[1][1] - b[1][1]);
+        const ends = [], slot = new Map();
+        for (const [key, [lo, hi]] of list) {
+          let t = ends.findIndex(e => e < lo - 14);
+          if (t < 0) { t = ends.length; ends.push(hi); } else ends[t] = hi;
+          slot.set(key, t);
+        }
+        const n = ends.length, gap = n > 1 ? Math.min(TRACK, Math.max(3, p.spec.width) / (n - 1)) : 0;
+        p.pos = new Map([...slot].map(([k, t]) => [k, p.spec.center + (t - (n - 1) / 2) * gap]));
+      }
+    },
+  };
+}
+
+// 每张卡片的一侧按来向（或去向）排序后均匀错开落点
+function spread(groups, box) {
+  const at = new Map();
+  for (const [, list] of groups) {
+    list.sort((p, q) => p.order - q.order);
+    const b = box(list[0].item), k = list.length;
+    list.forEach((e, j) => at.set(e.i, k === 1 ? b.c + b.lc / 2 : b.c + b.lc * (SIDE + (1 - 2 * SIDE) * (j + .5) / k)));
+  }
+  return at;
+}
+
 export function edgeView(flow, projected) {
-  if (!flow?.layout?.lanes) return projected.map(({from, to}) => ({d: bezier(from, to), cls: ''}));
-  const g = geometry(flow), red = redundant(projected);
-  const map = (a, c) => g.TB ? [c, a] : [a, c];
-  return projected.map(({from: f, to: t}, i) => {
-    const F = g.box(f), T = g.box(t);
-    const sa = F.a + F.la, sc = F.c + F.lc / 2, ta = T.a, tc = T.c + T.lc / 2;
-    const lf = g.laneOf(f), lt = g.laneOf(t);
-    const sameGroup = !f.groupId && !t.groupId && g.groupOfTask.get(f.ids[0]) && g.groupOfTask.get(f.ids[0]) === g.groupOfTask.get(t.ids[0]);
-    let pts;
-    if (sameGroup || lf === null || lt === null) {
-      const k = Math.max(30, Math.abs(ta - sa) / 2);
-      const P = [[sa, sc], [sa + k, sc], [ta - k, tc], [ta, tc]].map(([a, c]) => map(a, c));
-      return {d: `M${P[0]} C${P[1]} ${P[2]} ${P[3]}`, cls: red[i] ? 'edge-redundant' : ''};
+  const TB = viewDir(flow) === 'TB', style = edgeStyle(flow);
+  const box = b => TB ? {a: b.y, c: b.x, la: b.h, lc: b.w} : {a: b.x, c: b.y, la: b.w, lc: b.h};
+  const map = (a, c) => TB ? [c, a] : [a, c];
+  const lanes = !!flow?.layout?.lanes;
+  const red = lanes ? redundant(projected) : projected.map(() => false);
+  const g = lanes ? geometry(flow) : null;
+  const plans = projected.map(({from: f, to: t}, i) => {
+    const F = box(f), T = box(t);
+    const lf = g?.laneOf(f), lt = g?.laneOf(t);
+    const same = g && !f.groupId && !t.groupId && g.groupOfTask.get(f.ids[0]) && g.groupOfTask.get(f.ids[0]) === g.groupOfTask.get(t.ids[0]);
+    let kind = 'simple';
+    if (g && !same && lf !== null && lt !== null && lf !== undefined && lt !== undefined) {
+      if (lf === 'B' || lt === 'B') kind = 'branch';
+      else if (lt > lf && g.gutter(lf)?.center === g.before(lt)?.center) kind = 'adj';
+      else kind = 'skip';
     }
-    if (lf === 'B' || lt === 'B') {
-      const out = lf === 'B' ? sa + CH : g.gutter(lf), inn = lt === 'B' ? ta - CH : g.before(lt), ch = g.branchCh;
-      pts = [[sa, sc], [out, sc], [out, ch], [inn, ch], [inn, tc], [ta, tc]];
-    } else if (lt === lf + 1 || (lt > lf && g.gutter(lf) === g.before(lt))) {
-      const x = g.gutter(lf);
-      pts = [[sa, sc], [x, sc], [x, tc], [ta, tc]];
-    } else {
-      const ch = g.rowTop(t) - g.rowGap / 2, x1 = g.gutter(lf), x2 = g.before(lt);
-      pts = [[sa, sc], [x1, sc], [x1, ch], [x2, ch], [x2, tc], [ta, tc]];
-    }
-    const cls = [red[i] ? 'edge-redundant' : '', lf === 'B' ? 'edge-branch' : ''].join(' ').trim();
-    return {d: roundPath(pts.map(([a, c]) => map(a, c))), cls};
+    const approachIn = kind === 'adj' || kind === 'simple' ? F.c + F.lc / 2 : kind === 'skip' ? -1e9 : (lt === 'B' ? -1e9 : 1e9);
+    const approachOut = kind === 'adj' || kind === 'simple' ? T.c + T.lc / 2 : kind === 'skip' ? -1e9 : (lf === 'B' ? -1e9 : 1e9);
+    return {i, f, t, F, T, lf, lt, kind, approachIn, approachOut};
   });
+  // 落点错开：入口始终错开；出口在曲线模式下错开，折线模式共用主干从中点出发
+  const ins = new Map(), outs = new Map();
+  plans.forEach(p => {
+    if (!red[p.i]) {
+      (ins.get(p.t.key) || ins.set(p.t.key, []).get(p.t.key)).push({i: p.i, item: p.t, order: p.approachIn});
+      (outs.get(p.f.key) || outs.set(p.f.key, []).get(p.f.key)).push({i: p.i, item: p.f, order: p.approachOut});
+    }
+  });
+  const inAt = spread(ins, box), outAt = style === 'curve' ? spread(outs, box) : new Map();
+  const tc = p => inAt.get(p.i) ?? p.T.c + p.T.lc / 2, sc = p => outAt.get(p.i) ?? p.F.c + p.F.lc / 2;
+  // 开始/结束节点的线是调度控制（就绪检查、发布），不是数据流向，画得更淡
+  const ctl = p => g && (p.lf === 0 || p.lt === g.endLane);
+  const cls = p => [red[p.i] ? 'edge-redundant' : '', p.lf === 'B' ? 'edge-branch' : '', ctl(p) ? 'edge-ctl' : ''].join(' ').trim();
+  const bez = pts => { const P = pts.map(([a, c]) => map(a, c)); return `M${P[0]} C${P[1]} ${P[2]} ${P[3]}`; };
+
+  if (style === 'curve' || !g) {
+    return plans.map(p => {
+      const sa = p.F.a + p.F.la, ta = p.T.a, s = sc(p), e = tc(p);
+      let d;
+      if (style === 'curve') {
+        const k = Math.max(40, Math.abs(ta - sa) / 2);
+        d = bez([[sa, s], [sa + k, s], [ta - k, e], [ta, e]]);
+      } else if (ta > sa + 24) {
+        const m = (sa + ta) / 2;
+        d = roundPath([[sa, s], [m, s], [m, e], [ta, e]].map(([a, c]) => map(a, c)));
+      } else {   // 目标在后方：绕到两张卡片之外
+        const out = Math.max(p.F.c + p.F.lc, p.T.c + p.T.lc) + 30;
+        d = roundPath([[sa, s], [sa + 20, s], [sa + 20, out], [ta - 20, out], [ta - 20, e], [ta, e]].map(([a, c]) => map(a, c)));
+      }
+      return {d, cls: cls(p)};
+    });
+  }
+
+  // 折线：登记通道线段 -> 分配轨道 -> 生成路径
+  const T = tracks();
+  const routes = plans.map(p => {
+    const sa = p.F.a + p.F.la, ta = p.T.a, s = sc(p), e = tc(p), S = 'S:' + p.f.key, D = 'T:' + p.t.key;
+    if (p.kind === 'simple') {
+      const k = Math.max(30, Math.abs(ta - sa) / 2);
+      return {curve: [[sa, s], [sa + k, s], [ta - k, e], [ta, e]]};
+    }
+    if (red[p.i]) {   // 冗余线只在高亮时显示，不占轨道
+      const x = g.gutter(p.lf)?.center ?? sa + 30, y = (p.kind === 'branch' ? g.bch : g.rowChannel(p.t)).center;
+      const x2 = (p.lt === 'B' ? ta - CH : g.before(p.lt)?.center) ?? ta - 30;
+      return {pts: () => p.kind === 'adj' ? [[sa, s], [x, s], [x, e], [ta, e]] : [[sa, s], [x, s], [x, y], [x2, y], [x2, e], [ta, e]]};
+    }
+    if (p.kind === 'adj') {
+      const x = T.use(g.gutter(p.lf), S, s, e);
+      return {pts: () => [[sa, s], [x(), s], [x(), e], [ta, e]]};
+    }
+    const outG = p.lf === 'B' ? {center: sa + CH, width: 70} : g.gutter(p.lf);
+    const inG = p.lt === 'B' ? {center: ta - CH, width: 70} : g.before(p.lt);
+    const ch = p.kind === 'branch' ? g.bch : g.rowChannel(p.t);
+    const x1 = T.use(outG, S, s, ch.center), x2 = T.use(inG, D, ch.center, e);
+    const y = T.use(ch, D, outG.center, inG.center);   // 横向通道按目标合流：同一目标的线汇成一条总线
+    return {pts: () => [[sa, s], [x1(), s], [x1(), y()], [x2(), y()], [x2(), e], [ta, e]]};
+  });
+  T.solve();
+  return plans.map((p, i) => {
+    const r = routes[i];
+    const d = r.curve ? bez(r.curve) : roundPath(r.pts().map(([a, c]) => map(a, c)), 8);
+    return {d, cls: cls(p)};
+  });
+}
+
+// 普通工作流（无泳道）切换方向：以左上角为基准整体转置，沿流向与垂直方向的间距按卡片宽高比换算
+export function transposeFlow(flow) {
+  if (!flow.nodes.length) return;
+  const x0 = Math.min(...flow.nodes.map(n => n.x)), y0 = Math.min(...flow.nodes.map(n => n.y)), k = 2;
+  for (const n of flow.nodes) { const x = n.x, y = n.y; n.x = Math.round(x0 + (y - y0) * k); n.y = Math.round(y0 + (x - x0) / k); }
 }
 
 // 高亮：keys 为选中卡片（task:ID / group:ID）
@@ -142,8 +251,9 @@ export function highlight(svg, keys, root) {
     if (hit) { near.add(el.dataset.from); near.add(el.dataset.to); }
   });
   keys.forEach(k => near.delete(k));
-  let legend = root.closest('.canvas')?.querySelector('.flow-legend');
-  if (!legend && root.closest('.canvas')) { legend = document.createElement('div'); legend.className = 'flow-legend'; root.closest('.canvas').append(legend); }
+  const host = root.closest('.canvas');
+  let legend = host?.querySelector('.flow-legend');
+  if (!legend && host) { legend = document.createElement('div'); legend.className = 'flow-legend'; host.append(legend); }
   if (legend) { legend.hidden = !on; legend.innerHTML = `<span class="lg-in">上游流入 ${ins}</span><span class="lg-out">下游流出 ${outs}</span>`; }
   root.querySelectorAll('.node[data-id]').forEach(el => el.classList.toggle('hl-near', near.has('task:' + el.dataset.id)));
   root.querySelectorAll('[data-group-box]').forEach(el => el.classList.toggle('hl-near', near.has('group:' + el.dataset.groupBox)));

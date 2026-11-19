@@ -58,6 +58,7 @@
 #edges g.edge-redundant{display:none}
 #edges g.edge-redundant.edge-hl{display:inline}
 #edges g.edge-branch .edge{stroke-dasharray:5 4;stroke:#c3b5e6}
+#edges g.edge-ctl .edge{stroke:#d3dae6;stroke-dasharray:2 4}
 #edges .edge{transition:opacity .15s,stroke .15s}
 #edges.hl-on .edge{opacity:.12}
 #edges.hl-on g.edge-hl .edge{opacity:1;stroke-width:2.4;stroke-dasharray:8 6;animation:edge-flow .7s linear infinite}
@@ -73,8 +74,6 @@
 #canvas,#canvas *{-webkit-user-select:none;user-select:none}
 #canvas input,#canvas textarea{-webkit-user-select:text;user-select:text}
 .node.hl-near,.group-box.hl-near{border-color:#7fa2f0;box-shadow:0 0 0 3px #3268ef22}
-.canvas .zoom{width:auto;padding-left:4px}
-.dir-toggle{width:auto!important;font-size:12px!important;padding:0 10px;border-right:1px solid #e4e9f2!important;white-space:nowrap}
 .canvas.dir-tb .port{top:auto;left:50%;transform:translateX(-50%)}
 .canvas.dir-tb .port-in{top:-7px;left:50%}
 .canvas.dir-tb .port-out{bottom:-7px;right:auto;left:50%}
@@ -82,3 +81,9 @@
 /* 分组：去掉展开按钮，双击分组展开/收起；嵌套分组的外层框更淡 */
 .group-toggle{display:none!important}
 .group-box .group-title{cursor:pointer}
+.view-bar{position:absolute;right:200px;bottom:24px;z-index:4;display:flex;align-items:center;gap:2px;height:35px;padding:0 6px;background:#fff;border:1px solid #e4e9f2;border-radius:7px;box-shadow:0 3px 10px #3b527609;cursor:default;font-size:12px}
+.view-bar span{color:#9aa5b6;font-size:11px;margin:0 4px 0 6px}
+.view-bar i{width:1px;height:18px;background:#e4e9f2;margin:0 4px}
+.view-bar button{border:0;background:none;color:#6b7891;border-radius:5px;padding:5px 9px;font-size:12px;white-space:nowrap}
+.view-bar button:hover{background:#f4f7ff}
+.view-bar button[aria-pressed="true"]{background:#eaf0ff;color:#3268ef;font-weight:500}

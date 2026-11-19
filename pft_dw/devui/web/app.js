@@ -6,7 +6,7 @@ import {setupWorkflowRun} from './workflow-run.js';
 import {createCodeEditor,formatCode} from './vendor/editor.js?v=32';
 import {layers,seed,migrate,worldPoint,zoomAt,canLink,removeNodes,groupBounds,projectFlow,connectionPairs,layerFolder,registerTask,relayout,hiddenGroup,groupDepth,groupParent,fixParents} from './model.mjs';
 import {backend} from './project-storage.js';
-import {edgeView,highlight,portPoint} from './flow-view.mjs';
+import {edgeView,highlight,portPoint,viewDir,edgeStyle,transposeFlow} from './flow-view.mjs';
 import {TASK_TYPES,SQL_ENGINES,typeOf,isJar,modeLabel,taskLabel,defaultMode,normalizeTask,taskTemplate,validateJar} from './task-types.mjs';
 const $=s=>document.querySelector(s), esc=s=>String(s).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])), uid=()=>crypto.randomUUID();
 let data=activeProjectId===defaultProjectId?seed():emptyProject(getProjects().find(p=>p.id===activeProjectId)?.name||'项目'), restored=false;
@@ -166,10 +166,13 @@ window.addEventListener('dataflow:backend',e=>{if(!e.detail.ok){$('#saveState').
 
 // —— 显示层：泳道走线、选中高亮、排布方向（flow-view.mjs） ——
 function flowHighlight(){const w=flow();if(!w||!$('#edges'))return;const keys=new Set();if(selection.size)for(const it of projectFlow(w).items)if(it.ids.some(id=>selection.has(id)))keys.add(it.key);highlight($('#edges'),keys,$('#stage'));
- const tb=w.layout?.dir==='TB';$('#canvas').classList.toggle('dir-tb',tb);const b=$('#dirToggle');if(b){b.hidden=!w.layout?.lanes;b.textContent=tb?'↓ 纵向':'→ 横向';b.title=tb?'当前从上到下排布，点击改为从左到右':'当前从左到右排布，点击改为从上到下'}}
+ $('#canvas').classList.toggle('dir-tb',viewDir(w)==='TB');const bar=$('#viewBar');if(bar){bar.querySelectorAll('[data-dir]').forEach(b=>b.setAttribute('aria-pressed',String(b.dataset.dir===viewDir(w))));bar.querySelectorAll('[data-edge-style]').forEach(b=>b.setAttribute('aria-pressed',String(b.dataset.edgeStyle===edgeStyle(w))))}}
 {const _edges=edges;edges=function(){_edges();flowHighlight()};const _sel=selectionUI;selectionUI=function(){_sel();flowHighlight()}}
-{const z=$('#canvas .zoom'),b=document.createElement('button');b.id='dirToggle';b.className='dir-toggle';b.hidden=true;z.prepend(b);
- b.onclick=e=>{e.stopPropagation();const w=flow();if(!w?.layout?.lanes)return;remember();w.layout.dir=w.layout.dir==='TB'?'LR':'TB';relayout(w);dirty();nodes();fit()}}
+{const bar=document.createElement('div');bar.id='viewBar';bar.className='view-bar';bar.innerHTML='<span>布局</span><button data-dir="LR" title="从左到右排布">左→右</button><button data-dir="TB" title="从上到下排布">上→下</button><i></i><span>连线</span><button data-edge-style="ortho" title="折线：沿卡片之间的通道走线">折线</button><button data-edge-style="curve" title="曲线：贝塞尔曲线直连">曲线</button>';$('#canvas').append(bar);
+ bar.addEventListener('pointerdown',e=>e.stopPropagation());
+ bar.addEventListener('click',e=>{const b=e.target.closest('button');const w=flow();if(!b||!w)return;e.stopPropagation();
+  if(b.dataset.dir){if(viewDir(w)===b.dataset.dir)return;remember();if(w.layout?.lanes){w.layout.dir=b.dataset.dir;relayout(w)}else{transposeFlow(w);w.view={...(w.view||{}),dir:b.dataset.dir}}dirty();nodes();fit()}
+  else if(b.dataset.edgeStyle){if(edgeStyle(w)===b.dataset.edgeStyle)return;remember();w.view={...(w.view||{}),edge:b.dataset.edgeStyle};dirty();edges()}})}
 
 // 分组套分组：选中范围完整包含的已有分组成为子分组；能完整包含选中范围的最小分组成为父分组；只部分重叠的分组让出这些任务
 function nestGroup(w,ng){const sel=new Set(ng.ids),sub=g=>g.ids.length&&g.ids.every(id=>sel.has(id));
