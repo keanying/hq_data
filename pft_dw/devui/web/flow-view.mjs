@@ -4,7 +4,7 @@
 //     同一来源的线共用一条主干（看起来像一棵树），到了目标卡片再按来向分开落点
 //  3. 每张卡片的入口按来向上下（纵向布局为左右）错开，几条线不会挤在同一个点上
 //  4. 方向：左右（LR）或上下（TB）；带泳道的工作流按泳道网格重排，普通工作流整体转置
-//  5. 传递冗余的连线（A→B→C 已成立时的 A→C）默认不画；选中节点时相关连线按流向流动
+//  5. 传递冗余的连线（A→B→C 已成立时的 A→C）不画；选中节点时相关连线按流向流动
 import {groupBounds, hiddenGroup, groupDepth} from './model.mjs';
 
 const CH = 45;          // 分支卡片旁的走线间距
@@ -179,7 +179,7 @@ export function edgeView(flow, projected) {
   const cls = p => [red[p.i] ? 'edge-redundant' : '', p.lf === 'B' ? 'edge-branch' : '', ctl(p) ? 'edge-ctl' : ''].join(' ').trim();
   const bez = pts => { const P = pts.map(([a, c]) => map(a, c)); return `M${P[0]} C${P[1]} ${P[2]} ${P[3]}`; };
 
-  if (style === 'curve' || !g) {
+  if (!g) {
     return plans.map(p => {
       const sa = p.F.a + p.F.la, ta = p.T.a, s = sc(p), e = tc(p);
       let d;
@@ -210,6 +210,10 @@ export function edgeView(flow, projected) {
       const x2 = (p.lt === 'B' ? ta - CH : g.before(p.lt)?.center) ?? ta - 30;
       return {pts: () => p.kind === 'adj' ? [[sa, s], [x, s], [x, e], [ta, e]] : [[sa, s], [x, s], [x, y], [x2, y], [x2, e], [ta, e]]};
     }
+    if (p.kind === 'adj' && style === 'curve') {
+      const k = Math.max(40, Math.abs(ta - sa) / 2);
+      return {curve: [[sa, s], [sa + k, s], [ta - k, e], [ta, e]]};
+    }
     if (p.kind === 'adj') {
       const x = T.use(g.gutter(p.lf), S, s, e);
       return {pts: () => [[sa, s], [x(), s], [x(), e], [ta, e]]};
@@ -224,7 +228,8 @@ export function edgeView(flow, projected) {
   T.solve();
   return plans.map((p, i) => {
     const r = routes[i];
-    const d = r.curve ? bez(r.curve) : roundPath(r.pts().map(([a, c]) => map(a, c)), 8);
+    // 曲线模式下跨层/分支的线仍沿通道绕开中间的卡片，只是拐角改成大圆弧
+    const d = r.curve ? bez(r.curve) : roundPath(r.pts().map(([a, c]) => map(a, c)), style === 'curve' ? 40 : 8);
     return {d, cls: cls(p)};
   });
 }
@@ -242,7 +247,8 @@ export function highlight(svg, keys, root) {
   svg.classList.toggle('hl-on', on);
   let ins = 0, outs = 0;
   svg.querySelectorAll('[data-edge]').forEach(el => {
-    const out = on && keys.has(el.dataset.from), inn = on && keys.has(el.dataset.to), hit = out || inn;
+    const vis = !el.classList.contains('edge-redundant');   // 冗余线始终不画，收起后两张卡片之间只留一条线
+    const out = on && vis && keys.has(el.dataset.from), inn = on && vis && keys.has(el.dataset.to), hit = out || inn;
     el.classList.toggle('edge-hl', hit);
     el.classList.toggle('edge-out', out);              // 从选中节点流出（下游）
     el.classList.toggle('edge-in', inn && !out);       // 流入选中节点（上游）

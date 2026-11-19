@@ -66,14 +66,17 @@ export function relayout(flow){
  const TB=L.dir==='TB',pos=new Map(flow.nodes.map(n=>[n.taskId,n])),G=new Map(flow.groups.map(g=>[g.id,g]));
  const ext=gid=>{const g=G.get(gid),b=g&&groupBounds(flow,g);return b?{b,la:TB?b.h:b.w,lc:TB?b.w:b.h}:null};
  const put=(gid,a,c)=>{const e=ext(gid);if(!e)return;const x=TB?c:a,y=TB?a:c,dx=x-e.b.x,dy=y-e.b.y;for(const id of G.get(gid).ids){const n=pos.get(id);if(n){n.x+=dx;n.y+=dy}}};
- const laneGap=L.laneGap??150,rowGap=L.rowGap??40,A0=L.a0??380,C0=L.c0??160,rows=L.rows||[],ri=r=>Math.max(0,rows.indexOf(r));
+ const laneGap=L.laneGap??150,rowGap=L.rowGap??40,A0=L.a0??380,C0=L.c0??160,base=L.rows||[],extra=[];
+ for(const lane of L.lanes)for(const r of Object.keys(L.cells[lane]||{}))if(!base.includes(r)&&!extra.includes(r))extra.push(r);   // 不属于数据域的格子（如对账）排在数据域行之后
+ const rows=[...base,...extra],ri=r=>Math.max(0,rows.indexOf(r));
  const laneSize=L.lanes.map(()=>0),rowSize=rows.length?rows.map(()=>0):[0];
- const LG=L.laneGroups||{},folded=lane=>G.get(LG[lane])?.collapsed;
- L.lanes.forEach((lane,i)=>{if(folded(lane)){const e=ext(LG[lane]);if(e){laneSize[i]=e.la;rowSize[0]=Math.max(rowSize[0],e.lc)}return}for(const [r,gid] of Object.entries(L.cells[lane]||{})){const e=ext(gid);if(!e)continue;laneSize[i]=Math.max(laneSize[i],e.la+(LG[lane]?(TB?64:36):0));rowSize[ri(r)]=Math.max(rowSize[ri(r)],e.lc)}});
+ const LG=L.laneGroups||{},folded=lane=>!!G.get(LG[lane])?.collapsed,inLane=(lane,gid)=>!!LG[lane]&&G.get(gid)?.parent===LG[lane];
+ const pad=lane=>LG[lane]&&!folded(lane)?(TB?47:18):0,padSize=lane=>LG[lane]&&!folded(lane)?(TB?64:36):0;
+ L.lanes.forEach((lane,i)=>{const f=folded(lane);if(f){const e=ext(LG[lane]);if(e){laneSize[i]=e.la;rowSize[0]=Math.max(rowSize[0],e.lc)}}
+  for(const [r,gid] of Object.entries(L.cells[lane]||{})){if(f&&inLane(lane,gid))continue;const e=ext(gid);if(!e)continue;laneSize[i]=Math.max(laneSize[i],e.la+padSize(lane));rowSize[ri(r)]=Math.max(rowSize[ri(r)],e.lc)}});
  const lanePos=[];let a=A0;laneSize.forEach((s,i)=>{lanePos[i]=a;if(s)a+=s+laneGap});
  const rowPos=[];let c=C0;rowSize.forEach((s,i)=>{rowPos[i]=c;if(s)c+=s+rowGap});
- const pad=lane=>LG[lane]?(TB?47:18):0;
- L.lanes.forEach((lane,i)=>{if(folded(lane)){put(LG[lane],lanePos[i],rowPos[0]);return}for(const [r,gid] of Object.entries(L.cells[lane]||{}))put(gid,lanePos[i]+pad(lane),rowPos[ri(r)])});
+ L.lanes.forEach((lane,i)=>{const f=folded(lane);if(f)put(LG[lane],lanePos[i],rowPos[0]);for(const [r,gid] of Object.entries(L.cells[lane]||{})){if(f&&inLane(lane,gid))continue;put(gid,lanePos[i]+pad(lane),rowPos[ri(r)])}});
  if(L.branch&&G.get(L.branch.group)?.collapsed){put(L.branch.group,lanePos[Math.max(0,L.lanes.indexOf(L.branch.anchor))],c-rowGap+(L.branch.gap??150))}
  else if(L.branch){const B=L.branch,cols=B.cols||2,ai=Math.max(0,L.lanes.indexOf(B.anchor)),es=B.groups.map(ext),sub=Array(cols).fill(0),brow=[];
   es.forEach((e,i)=>{if(!e)return;sub[i%cols]=Math.max(sub[i%cols],e.la);const r=Math.floor(i/cols);brow[r]=Math.max(brow[r]||0,e.lc)});

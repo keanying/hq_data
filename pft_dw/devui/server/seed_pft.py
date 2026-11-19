@@ -25,7 +25,7 @@ LAYERS = ["ODS", "DIM", "DWD", "DWS", "ADS"]
 TASK_W, TASK_H = 192, 96
 PAIR_DX, PITCH_X, PITCH_Y = 222, 470, 128
 COL_GAP, ROW_GAP, BRANCH_GAP = 150, 40, 150
-LAYOUT_VERSION = 3   # 排布结构版本：变化时启动会升级已有 PFT 项目的工作流排布（不动任务代码）
+LAYOUT_VERSION = 4   # 排布结构版本：变化时启动会升级已有 PFT 项目的工作流排布（不动任务代码）
 
 
 def load():
@@ -103,24 +103,34 @@ def relayout(flow):
                 pos[i]["y"] += dy
 
     lane_gap, row_gap = L.get("laneGap", 150), L.get("rowGap", 40)
-    A0, C0, rows = L.get("a0", 380), L.get("c0", 160), L.get("rows", [])
+    A0, C0, base = L.get("a0", 380), L.get("c0", 160), L.get("rows", [])
+    extra = []        # 不属于数据域的格子（如对账）排在数据域行之后
+    for lane in L["lanes"]:
+        for r in L["cells"].get(lane, {}):
+            if r not in base and r not in extra:
+                extra.append(r)
+    rows = base + extra
     ri = lambda r: rows.index(r) if r in rows else 0
     LG = L.get("laneGroups", {})
     folded = lambda lane: bool(G.get(LG.get(lane), {}).get("collapsed"))
-    pad = lambda lane: (47 if TB else 18) if LG.get(lane) else 0
+    in_lane = lambda lane, gid: bool(LG.get(lane)) and G.get(gid, {}).get("parent") == LG[lane]
+    pad = lambda lane: (47 if TB else 18) if LG.get(lane) and not folded(lane) else 0
+    pad_size = lambda lane: (64 if TB else 36) if LG.get(lane) and not folded(lane) else 0
     lane_size = [0] * len(L["lanes"])
     row_size = [0] * max(1, len(rows))
     for i, lane in enumerate(L["lanes"]):
-        if folded(lane):
+        f = folded(lane)
+        if f:
             e = ext(LG[lane])
             if e:
                 lane_size[i] = e[1]
                 row_size[0] = max(row_size[0], e[2])
-            continue
         for r, gid in L["cells"].get(lane, {}).items():
+            if f and in_lane(lane, gid):
+                continue
             e = ext(gid)
             if e:
-                lane_size[i] = max(lane_size[i], e[1] + ((64 if TB else 36) if LG.get(lane) else 0))
+                lane_size[i] = max(lane_size[i], e[1] + pad_size(lane))
                 row_size[ri(r)] = max(row_size[ri(r)], e[2])
     lane_pos, a = [], A0
     for s in lane_size:
@@ -133,10 +143,12 @@ def relayout(flow):
         if s:
             c += s + row_gap
     for i, lane in enumerate(L["lanes"]):
-        if folded(lane):
+        f = folded(lane)
+        if f:
             put(LG[lane], lane_pos[i], row_pos[0])
-            continue
         for r, gid in L["cells"].get(lane, {}).items():
+            if f and in_lane(lane, gid):
+                continue
             put(gid, lane_pos[i] + pad(lane), row_pos[ri(r)])
     B = L.get("branch")
     if B and G.get(B.get("group"), {}).get("collapsed"):
@@ -365,6 +377,12 @@ def build():
               [("ODS", L("ODS"), True), ("DWD", L("DWD"), True), ("DWS", L("DWS"), True), ("ADS", L("ADS"), True)] +
               ([("实时/离线对账", recon, False)] if recon else []),
               branch_spec=("ODS", "DIM", L("DIM")))
+    # 对账只依赖 DWS，与 ADS 并列：放进 ADS 泳道（在 ADS 外框之外），DWS→对账 与 DWS→ADS 都是相邻一跳
+    fl = flows[-1]["layout"]
+    if "实时/离线对账" in fl["lanes"]:
+        fl["lanes"].remove("实时/离线对账")
+        fl["cells"]["ADS"]["对账"] = fl["cells"].pop("实时/离线对账")["_"]
+        relayout(flows[-1])
 
     rtn = [n for n in nodes if n["flow"] == "realtime"]
     R = lambda layer: [n for n in rtn if n["kind"] == "task" and n["layer"] == layer]
@@ -471,7 +489,9 @@ def upgrade_layout(store, fresh):
             if n["taskId"] in pos:
                 n["x"], n["y"] = pos[n["taskId"]]["x"], pos[n["taskId"]]["y"]
         have = {n["taskId"] for n in f["nodes"]}
-        f["groups"] = [dict(g, ids=[i for i in g["ids"] if i in have]) for g in nf["groups"]]
+        was = {g["id"]: g.get("collapsed") for g in f.get("groups", [])}   # 保留用户的展开/收起状态
+        f["groups"] = [dict(g, ids=[i for i in g["ids"] if i in have], collapsed=was.get(g["id"], g.get("collapsed")))
+                       for g in nf["groups"]]
         f["groups"] = [g for g in f["groups"] if g["ids"]]
         f["layout"] = dict(nf["layout"], dir=dir_)
         relayout(f)

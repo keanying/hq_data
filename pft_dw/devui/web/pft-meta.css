@@ -56,7 +56,6 @@
 .meta-table td:nth-child(5){min-width:160px;max-width:260px}.meta-table td:nth-child(7),.meta-table td:nth-child(8){min-width:190px}
 /* 工作流显示层 */
 #edges g.edge-redundant{display:none}
-#edges g.edge-redundant.edge-hl{display:inline}
 #edges g.edge-branch .edge{stroke-dasharray:5 4;stroke:#c3b5e6}
 #edges g.edge-ctl .edge{stroke:#d3dae6;stroke-dasharray:2 4}
 #edges .edge{transition:opacity .15s,stroke .15s}
