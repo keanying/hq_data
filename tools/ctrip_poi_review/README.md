@@ -523,7 +523,7 @@ python cs_synth.py --load-jsonl out/cs_synth_20261110/dialogs.jsonl             
 对已经导出的 `客服会话.json`、`个性化讲解.json`（JSON 数组或 JSONL，含 `source`）做一遍修正再进标注。
 流程：**诊断 → 规则能修的直接修 → 需要改写的交给大模型（只改有问题的消息 / 句子）→ 用生成时同一套质检再查**
 （`cs_expand.quality_flags`、`cs_synth.session_checks`、`guide_synth.narr_check`）→ 不过关带着原因再问一次 → 还不过：
-编造事实 / 订单状态、乱码、超字数这类剔除，其余标 `needs_review`。每条改了什么写在 `source.fix`（动作、剩余问题、修正前的质检、讲解原文）。
+编造事实 / 订单状态、乱码、超字数这类剔除，其余标 `needs_review`。**修正后结构和输入完全一致**（字段名、顺序、类型，含 `source`）：只改值、不加字段；每条改了什么写在单独的 `fix_log.jsonl`（按 ID 对应），合并时自动做结构检查，不一致的写进 `structure_diff.jsonl` 并在报告里提示。调用失败（网络、超时、限流、5xx、返回不是 JSON）最多重试 3 次（`--retries`），Key / 权限 / 模型名不对这类直接报错。
 
 **方舟配置不用另填**：和工作台、`cs_expand.py` / `guide_synth.py` 一样，读工作台「设置 → AI 判断」里的 API Key、接口地址、模型、超时
 （MySQL 表 `hq_app_settings`；连不上库或没装 pymysql 时读 `.pw-profile-service/hq_prefs.json`，`--profile` 可改），没有再用环境变量 `ARK_API_KEY`。
@@ -561,7 +561,7 @@ mkdir -p out && nohup python data_fix.py all --workers 32 --enrich --rebalance-l
 单步命令 `run / enrich / merge` 也还在（见 `--help`）。
 
 **最终结果**：原始输入不改；知识补充只生成 `kb_ext.jsonl`，修讲解时并进每条数据。`all` 跑完把两份最终数据汇总到 `out/final/`：
-`客服会话_修正后.json`、`个性化讲解_修正后.json`（全量：没改的原样、改过的带 `source.fix`、剔除的不在里面）、各自的标注交付 L1 / 溯源 sidecar、
+`客服会话_修正后.json`、`个性化讲解_修正后.json`（全量，结构和输入一致，含 `source`；剔除的不在里面）、各自的标注交付 L1 / 溯源 sidecar、`*_修正记录.jsonl`、`*_改动对照.jsonl`（抽样原文 / 修正后并排，评估用）、
 剔除清单、修正报告、`讲解知识补充.jsonl` 和 `总报告.md`（同一磁盘用硬链接，不多占空间）。
 
 建议用比生成时（`glm-5-3-flash`）更强的模型修，也能顺带降低全部数据出自同一个模型的同质化。
@@ -571,7 +571,7 @@ mkdir -p out && nohup python data_fix.py all --workers 32 --enrich --rebalance-l
 | 代码 | 问题 | 怎么修 |
 |---|---|---|
 | ORDERCONFLICT | 景区「不支持线上购票」，会话里却有线上订单（事实矛盾） | 规则：剔除（`--keep-order-conflict` 改为保留并标需复核） |
-| ORDER | 客服没有任何查询依据就说「查到订单 / 已出票 / 预约成功」 | 规则：在客服第一次说结果前插一条 `[订单信息]` 卡片（相当于系统查询结果，状态按意图由程序定，写进 `session_plan.order.status`）→ 模型让客服照卡片说；办理类只能说「已提交申请 / 以订单页为准」，不承诺退款到账 |
+| ORDER | 客服没有任何查询依据就说「查到订单 / 已出票 / 预约成功」 | 规则：在客服第一次说结果前插一条 `[订单信息]` 卡片（相当于系统查询结果，状态按意图由程序定；字段和其他消息一样）→ 模型让客服照卡片说；办理类只能说「已提交申请 / 以订单页为准」，不承诺退款到账 |
 | TEMPLATE | 套话「以景区官方公告为准」（原数据 6.4 万次） | 模型：资料能答就答，答不了换成自然、具体的引导（有咨询电话 / 官网就给）；按 `--keep-template`（默认 0.2）保留一部分原句；`--no-diversify` 关掉 |
 | DEFLECT | 游客问的东西资料里有，客服却推脱 | 模型：用资料回答 |
 | LEAK / ENG | 客服说了「资料里没有收录」、提示词字段名（gap / coref）、英文 | 模型改写；网址和资料里原有的英文（DIY、SPA）不算 |
@@ -591,7 +591,7 @@ mkdir -p out && nohup python data_fix.py all --workers 32 --enrich --rebalance-l
 | CNT | `char_count` 不对 | 规则重算 |
 | SCENE | 讲的是景区本身（`sub_poi` = 景区，约 85%） | `--relabel-scene`：scene 改成「景区个性化讲解生成」（要不要改由产品定） |
 | LIMIT100 / LIMIT500 | 手册字数上限是 100 / 150 / 200 / 300 / 500，数据里是 120 / 150 / 200 / 300 | `--rebalance-limits`：120 → 100，超出的模型压缩；带 `--kb-ext` 时再挑约 10% 补充后知识 ≥ 600 字的改 500 字并扩写（扩写不够长就退回原样）。不补知识不做 500 字档：原知识中位数约 312 字，写 500 字只能编 |
-| KBEXT | 知识太薄（多是景区表的简介、等级、游玩时长） | 先 `enrich` 联网补充，再 `run --kb-ext`：补充的条目并进 `sub_poi_knowledge.facts`，带 `source`=「大模型联网补充（待核）」、`source_name`、`source_url`、`verified=false` |
+| KBEXT | 知识太薄（多是景区表的简介、等级、游玩时长） | 先 `enrich` 联网补充，再 `run --kb-ext`：补充的条目按原格式 `{attr, value}` 并进 `sub_poi_knowledge.facts`，出处按原格式追加进 `source.fact_sources`（`source_id`=`ext:条目名`、`type`=「大模型联网补充（待核）」） |
 
 **知识补充**（`enrich`）：每个讲解对象（景区 / 子景点）调一次方舟并开联网搜索，补 4～8 条稳定事实（历史沿革、建筑形制、文物景观、人物典故、自然地理、园内景点看点），
 每条必须带出处网址。程序丢掉：没有出处的、出处是 OTA / 社交平台的、票价 / 时间 / 交通等运营信息、宣传或绝对化说法、没标「相传」的传闻、和已有知识重复的
@@ -603,7 +603,7 @@ python data_fix.py enrich --workers 16 --limit 200     # 先试 200 个讲解对
 python data_fix.py all --tasks narr --enrich --workers 32 --rebalance-limits --relabel-scene   # 补知识 + 修讲解（全量约 2 万个讲解对象，断点续跑）
 ```
 
-**输出**（`--out-dir`，默认 `out/fix_cs/`、`out/fix_narr/`）：`fixed.json`（全量，格式同输入）、`fixed_l1.jsonl` + `fixed_sidecar.jsonl`（标注交付 L1 / 溯源）、
+**输出**（`--out-dir`，默认 `out/fix_cs/`、`out/fix_narr/`）：`fixed.json`（全量，结构同输入）、`fix_log.jsonl`（修正记录）、`compare.jsonl`（改动对照）、`fixed_l1.jsonl` + `fixed_sidecar.jsonl`（标注交付 L1 / 溯源）、
 `dropped.jsonl`（剔除的和原因）、`report.md` / `report.json`（修正前后对比）、`results.jsonl`（模型结果，断点续跑用，别删）。
 调用失败的下次 `run` 自动重试；`merge` 可单独重新合并（还没调模型的原样输出并标需复核）。
 

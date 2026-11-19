@@ -47,11 +47,14 @@
 
 ======================================================================== 输出
   原始输入（tools/q_data 下的文件）不改。all 跑完把最终结果汇总到 out/final/：
-    客服会话_修正后.json、个性化讲解_修正后.json   全量数据（没改的原样保留，改过的带 source.fix，剔除的不在里面）
+    客服会话_修正后.json、个性化讲解_修正后.json   全量数据，结构和输入完全一致（含 source；没改的原样保留，剔除的不在里面）
+    *_修正记录.jsonl                               每条改了什么（按 ID 对应，不写进数据本身）
+    *_改动对照.jsonl                               抽样的原文 / 修正后并排（评估用）
     *_标注交付L1.jsonl、*_溯源sidecar.jsonl        标注交付用
     *_剔除.jsonl、*_修正报告.md、讲解知识补充.jsonl、总报告.md
   过程文件在 out/fix_cs/、out/fix_narr/（固定目录，断点续跑靠它；要从头来就删掉对应目录）：
-    fixed.json           修好的全量数据，格式和输入一致（含 source；source.fix 记录改了什么）
+    fixed.json           修好的全量数据，结构和输入一致（含 source）；合并时自动做结构检查，不一致的写 structure_diff.jsonl
+    fix_log.jsonl        修正记录；compare.jsonl 改动对照
     fixed_l1.jsonl       标注交付 L1（不含答案 / 溯源）
     fixed_sidecar.jsonl  溯源 sidecar（同一个 ID 关联）
     dropped.jsonl        剔除的（带原因）；invalid.jsonl 输入里格式不对、跳过的
@@ -323,7 +326,6 @@ def cs_order_card(rec, issue):
                 agent_id=nxt.get("agent_id") or "ROBOT")
     rec["turns"].insert(idx, card)
     _renumber(rec, inserted_at=first)
-    o["status"] = status
     sp["target_msgs"] = (sp.get("target_msgs") or len(rec["turns"]) - 1) + 1
     return dict(card_turn=first, status=status)
 
@@ -769,15 +771,18 @@ def narr_prepare(rec, ctx, args):
         elif i["code"] == "LIMIT100":
             r["task_params"]["字数上限"] = 100
             log.append("规则：字数上限 120 → 100（配比）")
-        elif i["code"] == "KBEXT":
+        elif i["code"] == "KBEXT":  # 保持原结构：facts 仍是 {attr, value}；出处按原格式追加进 source.fact_sources
             k = r["sub_poi_knowledge"]
             have = {f["attr"] for f in k["facts"]}
+            fs = (r.get("source") or {}).get("fact_sources")
             for f in ctx["ext"][kb_unit(rec)[0]]:
-                f = dict(f)
-                if f["attr"] in have:
-                    f["attr"] += "（补充）"
-                k["facts"].append(f)
-            log.append(f"规则：知识补充 {i['n']} 条（{EXT_SOURCE}，带出处）")
+                attr = f["attr"] + ("（补充）" if f["attr"] in have else "")
+                have.add(attr)
+                k["facts"].append(dict(attr=attr, value=f["value"]))
+                if isinstance(fs, list):
+                    fs.append(dict(source_id=f"ext:{attr}", url=f.get("source_url"), title=f.get("source_name") or attr,
+                                   publisher=f.get("source_name"), type=EXT_SOURCE))
+            log.append(f"规则：知识补充 {i['n']} 条（{EXT_SOURCE}；出处在 source.fact_sources，source_id 为 ext:条目名）")
         elif i["code"] == "LIMIT500":
             log.append(f"规则：字数上限 {r['task_params']['字数上限']} → 500（配比；补充后知识够多）")
             r["task_params"]["字数上限"] = 500
@@ -858,9 +863,9 @@ def narr_apply(rec, issues, js):
     attrs = {f["attr"] for f in r["sub_poi_knowledge"].get("facts") or []}
     used = [a for a in js.get("used_attrs") or [] if a in attrs] or rn.get("used_facts") or []
     pers = [str(x) for x in (js.get("personalization") or [])][:3] or rn.get("personalization") or []
-    if text != old:
-        r.setdefault("source", {}).setdefault("fix", {}).setdefault("text_before", old)
-    rn.update(text=text, char_count=_nlen(text), used_facts=used, personalization=pers, style=js.get("style") or rn.get("style"))
+    for k, v in dict(text=text, char_count=_nlen(text), used_facts=used, personalization=pers, style=js.get("style") or rn.get("style")).items():
+        if k in rn or k == "text":  # 只更新原来就有的字段，保持原结构
+            rn[k] = v
     return r, (["text"] if text != old else []) + ["personalization"], []
 
 
@@ -1171,19 +1176,26 @@ def cmd_check(args):
         sys.exit(f"[ark] 调用失败：{e}")
 
 
-def call_model(cfg, prompt, tries=3):
-    """调方舟；限流 / 5xx / 超时退避重试，JSON 不合法重问一次（ai_judge.call_json）。"""
-    for k in range(tries):
+RETRY = dict(n=3)  # 调用失败最多重试几次（--retries）
+FATAL_HTTP = {400, 401, 403, 404}  # Key 不对、没权限、模型名 / 地址不对：重试也没用，直接报
+
+
+def call_model(cfg, prompt, tries=None):
+    """调方舟一次，失败（网络 / 超时 / 限流 429 / 5xx / 返回不是 JSON）最多重试 RETRY 次，间隔 3、6、12… 秒（限流再翻倍）。
+    返回 (js, meta)；meta.retries = 重试了几次。重试完还失败就抛出，这条记为「调用失败」，下次 run 自动再试。"""
+    n = RETRY["n"] if tries is None else tries
+    last = None
+    for k in range(n + 1):
         try:
-            raw, elapsed, meta, js = ai_judge.call_json(cfg, prompt, retries=1)
-            return js, dict(elapsed=elapsed, request_id=meta.get("request_id"), usage=meta.get("usage"))
-        except ai_judge.JSONParseError:
-            raise
+            raw, elapsed, meta, js = ai_judge.call_json(cfg, prompt, retries=0)
+            return js, dict(elapsed=elapsed, request_id=meta.get("request_id"), usage=meta.get("usage"), retries=k)
         except ai_judge.AIError as e:
-            if k == tries - 1 or (e.http_status and e.http_status < 500 and e.http_status != 429):
+            last = e
+            if e.http_status in FATAL_HTTP:
                 raise
-            time.sleep(3 * (k + 1) * (2 if e.http_status == 429 else 1))
-    raise ai_judge.AIError("重试用完")
+            if k < n:
+                time.sleep(3 * (2 ** k) * (2 if e.http_status == 429 else 1))
+    raise ai_judge.AIError(f"重试 {n} 次仍失败：{last}", getattr(last, "http_status", None), getattr(last, "request_id", None))
 
 
 def fix_one(task, rec, ctx, args, cfg):
@@ -1199,6 +1211,8 @@ def fix_one(task, rec, ctx, args, cfg):
     for attempt in range(1, args.attempts + 1):
         js, meta = call_model(cfg, T["prompt"](prep, issues, feedback))
         calls.append(meta.get("request_id"))
+        if meta.get("retries"):
+            log.append(f"调用重试 {meta['retries']} 次后成功")
         for kk, vv in (meta.get("usage") or {}).items():
             if isinstance(vv, (int, float)):
                 usage[kk] += vv
@@ -1225,8 +1239,8 @@ def fix_one(task, rec, ctx, args, cfg):
 
 
 # ================================================================ 全局（合并时）
-def cs_returning_visitors(records, rate):
-    """回头客：约 rate 的会话复用同城更早会话的 visitor_id（规则手册：老客约 40%）。确定性。"""
+def cs_returning_visitors(records, rate, fixlog=None):
+    """回头客：约 rate 的会话复用同城更早会话的 visitor_id（规则手册：老客约 40%）。确定性。改动记在 fixlog（不写进记录）。"""
     if not rate:
         return 0
     order = sorted(range(len(records)), key=lambda i: records[i]["start_time"])
@@ -1236,9 +1250,11 @@ def cs_returning_visitors(records, rate):
         city = (r.get("source") or {}).get("scenic_city") or ""
         pool = seen.setdefault(city, [])
         if pool and _h(r["session_id"], "returning") < rate:
-            r["source"].setdefault("fix", {}).setdefault("visitor_id_before", r["visitor_id"])
-            r["visitor_id"] = pool[int(_h(r["session_id"], "pick") * len(pool)) % len(pool)]
-            r["source"]["fix"].setdefault("actions", []).append("规则：设为回头客（复用同城更早会话的 visitor_id）")
+            new = pool[int(_h(r["session_id"], "pick") * len(pool)) % len(pool)]
+            if fixlog is not None:
+                e = fixlog.setdefault(r["session_id"], dict(id=r["session_id"], status="rule", actions=[]))
+                e["actions"].append(f"规则：设为回头客，visitor_id {r['visitor_id']} → {new}（复用同城更早会话的）")
+            r["visitor_id"] = new
             n += 1
         else:
             pool.append(r["visitor_id"])
@@ -1376,6 +1392,32 @@ def cmd_run(args):
     return dict(outcome=dict(cnt))
 
 
+def structure_diff(a, b, path=""):
+    """原记录 a 和修正后 b 的结构差异（字段名 / 顺序 / 类型 / 列表元素的字段），值的变化不算。空列表 = 结构一致。"""
+    out = []
+    if isinstance(a, dict) and isinstance(b, dict):
+        if list(a) != list(b):
+            add, rem = [k for k in b if k not in a], [k for k in a if k not in b]
+            out.append(f"{path or '/'} 字段" + (f" 多了 {add}" if add else "") + (f" 少了 {rem}" if rem else "") + ("" if add or rem else " 顺序变了"))
+        for k in a:
+            if k in b:
+                out += structure_diff(a[k], b[k], f"{path}.{k}")
+    elif isinstance(a, list) and isinstance(b, list):
+        sa = {tuple(x) for x in a if isinstance(x, dict)}
+        sb = {tuple(x) for x in b if isinstance(x, dict)}
+        if sa and sb - sa:
+            out.append(f"{path}[] 元素字段变了：{[list(x) for x in sb - sa][:2]}")
+    elif a is not None and b is not None and type(a) is not type(b) and not (isinstance(a, (int, float)) and isinstance(b, (int, float))):
+        out.append(f"{path} 类型 {type(a).__name__} → {type(b).__name__}")
+    return out
+
+
+def _set_existing(d, key, value):
+    """只更新原来就有的字段（原记录没有这个字段就不加，保持原结构）。"""
+    if isinstance(d, dict) and key in d:
+        d[key] = value
+
+
 def cmd_merge(args, records=None):
     T = TASKS[args.task]
     records = records if records is not None else get_records(args)
@@ -1383,9 +1425,10 @@ def cmd_merge(args, records=None):
     d = out_dir(args)
     done = _done(d)
     before = stats(args.task, records)
-    out, dropped = [], []
+    out, dropped, fixlog = [], [], {}
     st = Counter()
     pend = 0
+    orig_by_id = {}
     for r in records:
         rid = T["id"](r)
         prep, issues, need_llm, log = T["prepare"](r, ctx, args)
@@ -1406,29 +1449,39 @@ def cmd_merge(args, records=None):
             rec, status, remaining, log = res["record"], res["status"], res.get("remaining") or [], res.get("log") or log
         else:
             rec, status, remaining = prep, ("rule" if log else "ok"), []
-        src = rec.setdefault("source", {})
+        src = rec.get("source") if isinstance(rec.get("source"), dict) else {}
         if args.task == "cs":
-            sp = src.get("session_plan") or {}
-            if abs(len(rec["turns"]) - (sp.get("target_msgs") or 0)) > 2:
+            sp = src.get("session_plan") if isinstance(src.get("session_plan"), dict) else {}
+            if "target_msgs" in sp and abs(len(rec["turns"]) - (sp.get("target_msgs") or 0)) > 2:
                 sp["target_msgs"] = len(rec["turns"])
-            rec["session_duration_sec"] = cs_duration(rec)
+            if "session_duration_sec" in rec:
+                rec["session_duration_sec"] = cs_duration(rec)
             flags = cs_flags(rec)
-            # 原来是「订单无依据」被插卡片的，相关字段已更新；是否已解决等结论不变
             if any(i["code"] == "ORDERCONFLICT" for i in issues):
                 remaining = remaining + ["订单与「不支持线上购票」矛盾"]
         else:
             flags = narr_flags(rec)
         new_flags = sorted(set(flags + remaining))
-        if status != "ok" or new_flags != sorted(src.get("check_flags") or []):
-            src["fix"] = dict(src.get("fix") or {}, version=FIX_VERSION, status=status, actions=log + (src.get("fix") or {}).get("actions", []),
-                              remaining=remaining, before_flags=src.get("check_flags"),
-                              fixed_at=(res or {}).get("at") or datetime.now().strftime("%Y-%m-%d %H:%M:%S"))
-        src["check_flags"] = new_flags  # 全部按现在的质检重算（例如免费景区的「¥0」不再算编造）
-        src["needs_review"] = bool(new_flags) or status in ("review", "pending")
+        old_flags = src.get("check_flags")
+        _set_existing(src, "check_flags", new_flags)  # 按现在的质检重算（例如免费景区的「¥0」不再算编造）；原来没有这个字段就不加
+        _set_existing(src, "needs_review", bool(new_flags) or status in ("review", "pending"))
+        if status != "ok" or new_flags != sorted(old_flags or []):
+            fixlog[rid] = dict(id=rid, status=status, actions=list(log), remaining=remaining, check_flags_before=old_flags, check_flags_after=new_flags,
+                               fixed_at=(res or {}).get("at") or datetime.now().strftime("%Y-%m-%d %H:%M:%S"), version=FIX_VERSION)
+        if status in ("fixed", "review"):
+            orig_by_id[rid] = r
         st[status] += 1
         out.append(rec)
     if args.task == "cs":
-        st["returning_visitors_set"] = cs_returning_visitors(out, args.returning_rate)
+        st["returning_visitors_set"] = cs_returning_visitors(out, args.returning_rate, fixlog)
+    # 结构检查：修正后每条和输入比，字段名 / 顺序 / 类型 / 列表元素字段都要一致
+    src_by_id = {T["id"](r): r for r in records}
+    bad = []
+    for r in out:
+        df = structure_diff(src_by_id[T["id"](r)], r)
+        if df:
+            bad.append(dict(id=T["id"](r), diffs=df))
+    st["structure_mismatch"] = len(bad)
     after = stats(args.task, out)
     with open(d / "fixed.json", "w", encoding="utf-8") as f:
         f.write("[\n")
@@ -1438,16 +1491,43 @@ def cmd_merge(args, records=None):
     key = T["l1"][0]
     with open(d / "fixed_l1.jsonl", "w", encoding="utf-8") as f1, open(d / "fixed_sidecar.jsonl", "w", encoding="utf-8") as f2:
         for r in out:
-            f1.write(json.dumps({k: r.get(k) for k in T["l1"]}, ensure_ascii=False) + "\n")
-            f2.write(json.dumps({key: r[key], **{k: r.get(k) for k in T["sidecar"]}}, ensure_ascii=False) + "\n")
+            f1.write(json.dumps({k: r.get(k) for k in T["l1"] if k in r}, ensure_ascii=False) + "\n")
+            f2.write(json.dumps({key: r[key], **{k: r.get(k) for k in T["sidecar"] if k in r}}, ensure_ascii=False) + "\n")
     with open(d / "dropped.jsonl", "w", encoding="utf-8") as f:
         for x in dropped:
             f.write(json.dumps(x, ensure_ascii=False) + "\n")
+    with open(d / "fix_log.jsonl", "w", encoding="utf-8") as f:
+        for x in fixlog.values():
+            f.write(json.dumps(x, ensure_ascii=False) + "\n")
+    with open(d / "structure_diff.jsonl", "w", encoding="utf-8") as f:
+        for x in bad:
+            f.write(json.dumps(x, ensure_ascii=False) + "\n")
+    # 改动对照：调模型改过的，原文 / 修正后并排（每种状态均匀抽，最多 --sample 条），方便抽查
+    by_status = {}
+    final_by_id = {T["id"](r): r for r in out}
+    for rid in orig_by_id:
+        by_status.setdefault(fixlog.get(rid, {}).get("status", "fixed"), []).append(rid)
+    pick = []
+    for stt, ids in sorted(by_status.items()):
+        ids.sort(key=lambda i: _h(i, "sample"))
+        pick += ids[: max(1, args.sample * len(ids) // max(1, len(orig_by_id)))]
+    with open(d / "compare.jsonl", "w", encoding="utf-8") as f:
+        for rid in pick[: args.sample]:
+            f.write(json.dumps(dict(id=rid, status=fixlog.get(rid, {}).get("status"), actions=fixlog.get(rid, {}).get("actions"),
+                                    remaining=fixlog.get(rid, {}).get("remaining"), before=orig_by_id[rid], after=final_by_id[rid]), ensure_ascii=False) + "\n")
+        for x in dropped[: max(20, args.sample // 10)]:
+            f.write(json.dumps(dict(id=x["id"], status="dropped", actions=x.get("log"), remaining=x.get("reason"), before=src_by_id.get(x["id"]), after=None),
+                               ensure_ascii=False) + "\n")
     rep = dict(task=args.task, fix_version=FIX_VERSION, input=str(args.input), outcome=dict(st), pending_llm=pend, before=before, after=after,
-               dropped_reasons=dict(Counter(re.sub(r"\d+", "N", x) for d_ in dropped for x in (d_["reason"] or [])).most_common(15)))
+               dropped_reasons=dict(Counter(re.sub(r"\d+", "N", x) for d_ in dropped for x in (d_["reason"] or [])).most_common(15)),
+               structure=dict(mismatch=len(bad), examples=bad[:3]))
     (d / "report.json").write_text(json.dumps(rep, ensure_ascii=False, indent=1), encoding="utf-8")
     (d / "report.md").write_text(report_md(rep), encoding="utf-8")
     print(report_md(rep))
+    if bad:
+        print(f"[结构检查] ⚠ {len(bad)} 条和输入结构不一致，明细在 {d / 'structure_diff.jsonl'}，例：{bad[0]['diffs'][:2]}")
+    else:
+        print("[结构检查] 全部和输入结构一致（字段名、顺序、类型、列表元素字段，含 source）")
     print(f"输出在 {d}")
     return rep
 
@@ -1511,6 +1591,8 @@ FINAL_NAMES = {  # out/final 下的文件名：(来源目录, 来源文件) → 
     ("fix_narr", "fixed.json"): "个性化讲解_修正后.json", ("fix_narr", "fixed_l1.jsonl"): "个性化讲解_标注交付L1.jsonl",
     ("fix_narr", "fixed_sidecar.jsonl"): "个性化讲解_溯源sidecar.jsonl", ("fix_narr", "dropped.jsonl"): "个性化讲解_剔除.jsonl",
     ("fix_narr", "report.md"): "个性化讲解_修正报告.md", ("fix_narr", "kb_ext.jsonl"): "讲解知识补充.jsonl",
+    ("fix_cs", "fix_log.jsonl"): "客服会话_修正记录.jsonl", ("fix_narr", "fix_log.jsonl"): "个性化讲解_修正记录.jsonl",
+    ("fix_cs", "compare.jsonl"): "客服会话_改动对照.jsonl", ("fix_narr", "compare.jsonl"): "个性化讲解_改动对照.jsonl",
 }
 
 
@@ -1547,7 +1629,8 @@ def collect_final(results=None):
                     n_units += 1
                     n_facts += len(x.get("facts") or [])
         lines += ["## 讲解知识补充", "", f"补过的讲解对象 {n_units} 个，补充事实 {n_facts} 条（标注时按 source_url 抽查）", ""]
-    lines += ["## 文件", "", "- `*_修正后.json`：全量数据（没改的原样保留、改过的带 source.fix；剔除的不在里面），格式和输入一致",
+    lines += ["## 文件", "", "- `*_修正后.json`：全量数据，结构和输入完全一致（含 source；没改的原样保留，剔除的不在里面）",
+              "- `*_修正记录.jsonl`：每条改了什么（按 ID 对应，不写进数据本身）；`*_改动对照.jsonl`：抽样的原文 / 修正后并排，评估用",
               "- `*_标注交付L1.jsonl` / `*_溯源sidecar.jsonl`：标注交付用（同一个 ID 关联）",
               "- `*_剔除.jsonl`：剔除的和原因；`*_修正报告.md`：修正前后对比；`讲解知识补充.jsonl`：补充的知识和出处", ""]
     (final / "总报告.md").write_text("\n".join(lines), encoding="utf-8")
@@ -1564,6 +1647,9 @@ def report_md(rep):
         lines.append(f"| {k} | {b.get(k, '')} | {a.get(k, '')} |")
     if rep.get("dropped_reasons"):
         lines += ["", "剔除原因：", ""] + [f"- {k}：{v}" for k, v in rep["dropped_reasons"].items()]
+    sm = (rep.get("structure") or {}).get("mismatch")
+    if sm is not None:
+        lines += ["", "结构检查：" + ("全部和输入一致（字段名、顺序、类型、列表元素字段，含 source）" if not sm else f"⚠ {sm} 条不一致，见 structure_diff.jsonl")]
     return "\n".join(lines) + "\n"
 
 
@@ -1586,6 +1672,8 @@ def main():
     ap.add_argument("--workers", type=int, default=8)
     ap.add_argument("--limit", type=int, default=0, help="这次最多修几条（0 = 全部；先小批试跑）")
     ap.add_argument("--attempts", type=int, default=2, help="每条最多问模型几次（第 2 次带上没过的原因）")
+    ap.add_argument("--sample", type=int, default=300, help="改动对照（compare.jsonl）最多抽几条")
+    ap.add_argument("--retries", type=int, default=3, help="调用失败（网络 / 超时 / 限流 / 5xx / 返回不是 JSON）最多重试几次，默认 3")
     ap.add_argument("--timeout", type=float, default=120)
     ap.add_argument("--no-merge", action="store_true", help="run 完不合并导出")
     ap.add_argument("--keep-template", type=float, default=0.2, help="客服：套话「以景区官方公告为准」保留多少（其余改成自然引导）")
@@ -1599,6 +1687,7 @@ def main():
     args = ap.parse_args()
     DIVERSIFY.update(on=not args.no_diversify, keep=args.keep_template)
     OPTS.update(keep_order_conflict=args.keep_order_conflict)
+    RETRY.update(n=max(0, args.retries))
     if args.cmd in ("scan", "run", "merge") and not args.task:
         ap.error("scan / run / merge 要 --task cs 或 narr")
     if args.cmd in ("enrich", "check"):
