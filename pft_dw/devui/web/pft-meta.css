@@ -100,13 +100,14 @@ html{zoom:var(--ui-zoom)}
 .level-badges{position:absolute;left:0;top:0;pointer-events:none}
 .level-badge{position:absolute;z-index:6;font:600 10px/16px Consolas,monospace;color:#5b6fa0;background:#eef2fb;border:1px solid #d4ddf0;border-radius:8px;padding:0 6px}
 /* 参数描述 */
-.parameter-row .parameter-desc{grid-column:1/-1;margin-top:-1px;font-size:11px;color:#6b7891;background:#f7f9fd;border:1px dashed #dfe6f2;border-radius:5px;padding:4px 7px}
-.parameter-row{padding-bottom:8px;border-bottom:1px dashed #edf1f7}
+.parameter-row .parameter-desc{grid-column:auto;min-width:0;width:100%;height:33px;box-sizing:border-box;font-size:11px;color:#6b7891;background:#fff;border:1px solid #dce5f4;border-radius:4px;padding:5px 7px;text-overflow:ellipsis}
+.parameter-row .parameter-desc:focus{border-color:#8da8ff;outline:none}
+.parameter-row{padding-bottom:0;border-bottom:0}
 /* 参数设置：收起时为窄条，鼠标悬停覆盖展开 */
 .dev-parameters{transition:width .16s ease,box-shadow .16s ease;z-index:20}
 .dev-parameters-tab{display:none}
 .dev-parameters-collapsed .dev-parameters-tab{display:block;writing-mode:vertical-rl;letter-spacing:3px;font-size:12px;color:#7d8ca2;margin:14px auto 0;cursor:default}
-.dev-parameters-collapsed .dev-parameters:hover,.dev-parameters-collapsed .dev-parameters:focus-within{width:350px;box-shadow:-10px 0 24px #22304a1f;transition-delay:.08s}
+.dev-parameters-collapsed .dev-parameters:hover,.dev-parameters-collapsed .dev-parameters:focus-within{width:var(--param-w);box-shadow:-10px 0 24px #22304a1f;transition-delay:.08s}
 .dev-parameters-collapsed .dev-parameters:hover .dev-parameters-tab,.dev-parameters-collapsed .dev-parameters:focus-within .dev-parameters-tab{display:none}
 .dev-parameters-collapsed .dev-parameters:hover header,.dev-parameters-collapsed .dev-parameters:focus-within header{padding:0 15px;justify-content:space-between}
 .dev-parameters-collapsed .dev-parameters:hover header strong,.dev-parameters-collapsed .dev-parameters:hover #devParameterBody,
@@ -231,3 +232,9 @@ body.suite-showing .rail-back{display:none}
 .q-type-ic{display:inline-flex;align-items:center;color:#6f8fd8}
 .q-type-ic .ui-ic{width:13px;height:13px}
 .query-empty>span .ui-ic{width:36px;height:36px;color:#c0cdeb}
+
+/* 参数一行：参数名 | 类型 | 值 | 描述 | 删除 */
+:root{--param-w:520px}
+.dev-parameters{width:var(--param-w)}
+.parameter-head,.parameter-row{grid-template-columns:minmax(70px,1fr) 78px minmax(110px,1.5fr) minmax(90px,1.2fr) 16px!important;gap:6px;align-items:center}
+body:not(.dev-parameters-collapsed) .shell>main>.view{margin-right:var(--param-w)}
