@@ -19,8 +19,8 @@ function expandParents(id){while(id){expanded.add(id);id=folder(id)?.parentId}}
 function toast(msg){notify(msg)}
 let saveTimer,saveDeadline,hasChanges=false;
 function dirty(){hasChanges=true;$('#saveState').textContent='等待自动保存…';clearTimeout(saveTimer);saveTimer=setTimeout(()=>save(false),700);saveDeadline??=setTimeout(()=>save(false),5000)}
-function remember(){syncEditor();undoStack.push(JSON.stringify(data));if(undoStack.length>30)undoStack.shift()}
-function save(manual=true){clearTimeout(saveTimer);clearTimeout(saveDeadline);saveDeadline=null;syncEditor();try{localStorage.setItem(storageKey('dataflow-ui-draft-v2'),JSON.stringify(data));hasChanges=false;const time=new Date().toLocaleTimeString('zh-CN',{hour12:false});$('#saveState').textContent=(manual?'已保存':'已自动保存')+' · '+time;$('#saveState').title='保存到'+backend.label+'；刷新页面后自动恢复';if(manual)toast('已保存到'+backend.label)}catch{hasChanges=true;$('#saveState').textContent='保存失败 · 请重试';if(manual)toast('浏览器存储不可用或空间不足，修改仍保留在当前页面')}}
+function remember(){syncEditor();undoStack.push(JSON.stringify(data));if(undoStack.length>30)undoStack.shift();redoStack.length=0;persistHistory()}
+function save(manual=true){clearTimeout(saveTimer);clearTimeout(saveDeadline);saveDeadline=null;syncEditor();try{localStorage.setItem(storageKey('dataflow-ui-draft-v2'),JSON.stringify(data));hasChanges=false;const time=new Date().toLocaleTimeString('zh-CN',{hour12:false});commitUI(manual,time)}catch{hasChanges=true;$('#saveState').textContent='保存失败 · 请重试';if(manual)toast('浏览器存储不可用或空间不足，修改仍保留在当前页面')}}
 function flushSave(){if(gesture?.type==='nodes'&&gesture.moved)hasChanges=true;if(hasChanges)save(false)}
 window.addEventListener('pagehide',flushSave);document.addEventListener('visibilitychange',()=>{if(document.hidden)flushSave()});window.addEventListener('beforeunload',e=>{flushSave();if(hasChanges){e.preventDefault();e.returnValue=''}});
 
@@ -115,9 +115,9 @@ async function formatCurrent(){
 }
 $('#formatCode').onclick=formatCurrent;$('#searchCode').onclick=()=>codeEditor.search();$('#undoCode').onclick=()=>codeEditor.undo();$('#redoCode').onclick=()=>codeEditor.redo();$('#wrapCode').onclick=()=>$('#wrapCode').setAttribute('aria-pressed',codeEditor.wrap());
 $('#emptyCreate').onclick=()=>taskDialog(flow().folderId,centerWorld());$('#addDomain').onclick=()=>folderDialog(null);$('#renameFlow').onclick=()=>rename(flow(),'工作流');$('#canvasTab').onclick=$('#backCanvas').onclick=showCanvas;$('#save').onclick=()=>save();$('#saveCode').onclick=saveEditor;$('#taskSettings').onclick=()=>settingsDialog(editorId);['#jarUri','#jarMainClass','#jarArgs'].forEach(s=>$(s).oninput=()=>{jarStatus();dirty()});$('#search').oninput=tree;$('#zoomIn').onclick=()=>zoom(camera.scale*1.15);$('#zoomOut').onclick=()=>zoom(camera.scale/1.15);$('#fit').onclick=fit;
-document.addEventListener('keydown',e=>{if(document.body.classList.contains('query-active')||(document.body.classList.contains('suite-showing')||document.body.classList.contains('project-ops-active')))return;const input=e.target.closest('input,textarea,select,[contenteditable],.cm-editor')||$('#modal').open;if((e.ctrlKey||e.metaKey)&&e.key.toLowerCase()==='s'){e.preventDefault();save();return}if(e.key==='Escape'){hideMenu();selection.clear();selectionUI();if(connectMode)toggleConnect();connectFrom=null;endGesture()}if(input||!openFlowIds.includes(flowId)||editorId)return;if(e.code==='Space'){space=true;canvas.classList.add('space-pan');e.preventDefault()}if((e.ctrlKey||e.metaKey)&&e.key.toLowerCase()==='a'){e.preventDefault();selection=new Set(flow().nodes.map(n=>n.taskId));selectionUI()}if((e.ctrlKey||e.metaKey)&&e.key.toLowerCase()==='z'&&undoStack.length){e.preventDefault();syncEditor();data=JSON.parse(undoStack.pop());if(!flow())flowId=data.flows[0]?.id||null;if(!folder(folderId))folderId=flow()?.folderId||data.folders[0].id;selection.clear();editorId=null;dirty();showCanvas();render();toast('已撤销上一步操作')}if(e.key==='Delete'&&!editorId){e.preventDefault();selectedEdge?deleteEdge():removeSelected()}});
+document.addEventListener('keydown',e=>{if(document.body.classList.contains('query-active')||(document.body.classList.contains('suite-showing')||document.body.classList.contains('project-ops-active')))return;const input=e.target.closest('input,textarea,select,[contenteditable],.cm-editor')||$('#modal').open;if((e.ctrlKey||e.metaKey)&&e.key.toLowerCase()==='s'){e.preventDefault();save();return}if(e.key==='Escape'){hideMenu();selection.clear();selectionUI();if(connectMode)toggleConnect();connectFrom=null;endGesture()}if(input||!openFlowIds.includes(flowId)||editorId)return;if(e.code==='Space'){space=true;canvas.classList.add('space-pan');e.preventDefault()}if((e.ctrlKey||e.metaKey)&&e.key.toLowerCase()==='a'){e.preventDefault();selection=new Set(flow().nodes.map(n=>n.taskId));selectionUI()}if((e.ctrlKey||e.metaKey)&&e.key.toLowerCase()==='z'&&!e.shiftKey&&undoStack.length){e.preventDefault();undoRedo(true);return}if((e.ctrlKey||e.metaKey)&&(e.key.toLowerCase()==='y'||(e.shiftKey&&e.key.toLowerCase()==='z'))&&redoStack.length){e.preventDefault();undoRedo(false);return}if(false){syncEditor();data=JSON.parse(undoStack.pop());if(!flow())flowId=data.flows[0]?.id||null;if(!folder(folderId))folderId=flow()?.folderId||data.folders[0].id;selection.clear();editorId=null;dirty();showCanvas();render();toast('已撤销上一步操作')}if(e.key==='Delete'&&!editorId){e.preventDefault();selectedEdge?deleteEdge():removeSelected()}});
 document.addEventListener('keyup',e=>{if(e.code==='Space'){space=false;canvas.classList.remove('space-pan')}});window.addEventListener('blur',()=>{space=false;endGesture();flushSave();canvas.classList.remove('space-pan')});
-expandParents(folderId);tree();status();$('#saveState').textContent=restored?'已恢复草稿 · 自动保存已开启':'自动保存已开启';$('#saveState').title='自动保存到当前浏览器 · Ctrl + S 立即保存';
+expandParents(folderId);tree();status();commitUI(null);
 if(document.modelContext?.registerTool){try{Promise.resolve(document.modelContext.registerTool({name:'read_workflow',title:'读取当前工作流',description:'读取当前画布的文件夹、任务和分组。',inputSchema:{type:'object',properties:{},additionalProperties:false},annotations:{readOnlyHint:true},execute:input=>{if(!input||typeof input!=='object'||Array.isArray(input)||Object.keys(input).length)throw Error('此操作不接受参数');if(!openFlowIds.includes(flowId)||editorId)return {message:'当前未打开工作流'};return {folder:folderPath(flow().folderId),name:flow().name,tasks:flow().nodes.map(n=>({id:n.taskId,name:task(n.taskId).name,type:taskLabel(task(n.taskId)),mode:modeLabel(task(n.taskId))})),groups:flow().groups}}})).catch(()=>{})}catch{}}
 
 const jarUploads=new Map();
@@ -188,3 +188,29 @@ canvas.addEventListener('dblclick',e=>{if(e.ctrlKey||e.metaKey||connectMode)retu
 
 // 拖动画布、节点或分组时不选中页面文字
 canvas.addEventListener('pointerdown',e=>{if(!e.target.closest('input,textarea'))window.getSelection()?.removeAllRanges()},true);
+
+// —— 保存与提交：自动保存只进本地草稿；点「提交」或 Ctrl+S 才写入数据库 ——
+var redoStack=[];   // var：模块初始化阶段就可能被引用
+function draftKey(){return storageKey('dataflow-ui-draft-v2')}
+function commitUI(manual,time){const st=$('#saveState'),dirtyLocal=backend.online&&backend.isDirty(draftKey());
+ if(manual===null){st.textContent=dirtyLocal?'有未提交的本地修改 · Ctrl+S 提交':'已与数据库同步';st.title='自动保存只写入本地草稿；点「提交」或按 Ctrl+S 写入数据库'}
+ else if(manual){st.textContent='正在提交…';backend.commit(draftKey()).then(r=>{if(r.ok){st.textContent='已提交到数据库 · '+time;toast('已提交到'+backend.label)}else{st.textContent='提交失败 · 修改仍在本地草稿';toast('提交失败：'+(r.error||'请重试'))}commitButton()})}
+ else st.textContent=backend.online?'已自动保存到本地 · '+time+' · 未提交':'已自动保存 · '+time;
+ commitButton()}
+function commitButton(){const b=$('#commitBtn');if(!b)return;const d=backend.online&&backend.isDirty(draftKey());b.classList.toggle('has-changes',d);b.title=d?'有未提交的修改，点击写入数据库（Ctrl+S）':'已与数据库同步（Ctrl+S 提交）';$('#discardDraft').hidden=!d}
+function persistHistory(){backend.saveHistory(draftKey(),undoStack,redoStack);historyButtons()}
+function historyButtons(){const u=$('#undoBtn'),r=$('#redoBtn');if(u)u.disabled=!undoStack.length;if(r)r.disabled=!redoStack.length}
+function undoRedo(isUndo){const from=isUndo?undoStack:redoStack,to=isUndo?redoStack:undoStack;if(!from.length)return;syncEditor();to.push(JSON.stringify(data));data=JSON.parse(from.pop());data.tasks=data.tasks.map(normalizeTask);
+ if(!flow())flowId=data.flows[0]?.id||null;if(!folder(folderId))folderId=flow()?.folderId||data.folders[0].id;openFlowIds=openFlowIds.filter(id=>data.flows.some(f=>f.id===id));openTaskIds=openTaskIds.filter(id=>data.tasks.some(t=>t.id===id));
+ selection.clear();if(editorId&&!task(editorId))editorId=null;dirty();if(editorId)openEditor(editorId);else{showCanvas();render()}persistHistory();toast(isUndo?'已撤销上一步操作':'已重做')}
+{const bar=document.querySelector('.document-bar'),anchor=document.querySelector('#scheduleSettings');
+ const wrap=document.createElement('div');wrap.className='commit-tools';
+ wrap.innerHTML='<button id="undoBtn" class="icon-btn" title="撤销（Ctrl+Z）" aria-label="撤销" disabled>↶</button><button id="redoBtn" class="icon-btn" title="重做（Ctrl+Shift+Z / Ctrl+Y）" aria-label="重做" disabled>↷</button><button id="discardDraft" class="text-btn" hidden title="丢弃本地未提交的修改，恢复为数据库中的版本">放弃修改</button><button id="commitBtn" class="btn commit-btn">提交</button>';
+ bar.insertBefore(wrap,anchor);
+ $('#undoBtn').onclick=()=>undoRedo(true);$('#redoBtn').onclick=()=>undoRedo(false);
+ $('#commitBtn').onclick=()=>save(true);
+ $('#discardDraft').onclick=()=>{if(confirm('放弃未提交的修改？\n将恢复为数据库中最后一次提交的版本，撤销历史会一并清空。'))discardDraft()};
+ commitButton();historyButtons();
+ window.addEventListener('dataflow:backend',()=>commitButton());
+ backend.loadHistory(draftKey()).then(h=>{if(h&&!undoStack.length&&!redoStack.length){undoStack.push(...h.undo);redoStack.push(...h.redo);historyButtons()}});}
+async function discardDraft(){await backend.discard(draftKey());undoStack.length=0;redoStack.length=0;persistHistory();location.reload()}

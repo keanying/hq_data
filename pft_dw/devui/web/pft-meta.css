@@ -85,3 +85,11 @@
 .view-bar button{border:0;background:none;color:#6b7891;border-radius:5px;padding:5px 9px;font-size:12px;white-space:nowrap}
 .view-bar button:hover{background:#f4f7ff}
 .view-bar button[aria-pressed="true"]{background:#eaf0ff;color:#3268ef;font-weight:500}
+/* 提交与撤销 */
+.commit-tools{display:flex;align-items:center;gap:4px;margin-right:8px}
+.commit-tools .icon-btn{border:1px solid #e1e7f0;background:#fff;color:#5d6b84;width:30px;height:30px;border-radius:6px;font-size:15px;line-height:1}
+.commit-tools .icon-btn:disabled{color:#c3cbd8;cursor:default}
+.commit-tools .icon-btn:not(:disabled):hover{border-color:#9fb6ec;color:#3268ef}
+.commit-btn{position:relative}
+.commit-btn.has-changes{border-color:#3268ef;color:#3268ef}
+.commit-btn.has-changes:after{content:"";position:absolute;top:-3px;right:-3px;width:8px;height:8px;border-radius:50%;background:#f08a24;border:2px solid #fff}
