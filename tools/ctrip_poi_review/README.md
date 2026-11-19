@@ -536,13 +536,28 @@ python cs_synth.py --load-jsonl out/cs_synth_20261110/dialogs.jsonl             
 | 修正（`run`） | 关 | 只许用数据里给的景区资料 / 知识；开联网会把外部事实带进客服回答和讲解词（质检也会把这些数字当编造），还更慢更贵 | `--web-search on` 或 `DATA_FIX_WEB_SEARCH=on` |
 | 知识补充（`enrich`） | 开 | 每条补充都要有出处网址；不联网模型只能凭记忆写，出处靠不住 | `--web-search off` 或 `DATA_FIX_ENRICH_WEB_SEARCH=off`；`--max-keyword` 改搜索关键词数 |
 
+**数据放哪**：默认读 `tools/q_data/客服会话.zip`、`tools/q_data/个性化讲解.zip`（不用解压，压缩包里的中文文件名乱码也没关系），不用写 `--in`。
+zip 里放 `.json`（数组）/ `.jsonl` / `.csv` 都行；CSV 支持三种：工作台讲解导出的带 `record_json` 列的 CSV、客服的会话表 CSV + 轮次表 CSV（两张一起放）、
+一行一条且嵌套字段（turns / poi / source…）是 JSON 字符串的 CSV；UTF-8 和 GBK 都能读。格式不对的跳过并写进 `invalid.jsonl`，大部分不对就直接报缺哪些字段。
+
+**完整命令**（在 `tools/ctrip_poi_review` 下执行；`python data_fix.py --help` 也能看到）：
+
 ```bash
-python data_fix.py check                         # 看 Key 从哪来（打码）、模型、联网开没开，并试调一次；--step enrich 看补充那一步
-python data_fix.py scan --task cs   --in 客服会话.json                       # 只诊断、不调模型，看每类问题多少条
-python data_fix.py run  --task cs   --in 客服会话.json --model <模型ID或接入点ID> --workers 16 --limit 200   # 先试 200 条，抽查
-python data_fix.py run  --task cs   --in 客服会话.json --model <…> --workers 32                              # 全量，断点续跑
-python data_fix.py run  --task narr --in 个性化讲解.json --model <…> --workers 32 --rebalance-limits --relabel-scene
+cd tools/ctrip_poi_review
+python data_fix.py check                       # 看 Key 从哪来（打码）、模型、联网开没开，并试调一次
+python data_fix.py check --step enrich         # 知识补充那一步的配置（联网开）
+python data_fix.py scan --task cs              # 只诊断、不调模型
+python data_fix.py scan --task narr --rebalance-limits --relabel-scene
+python data_fix.py all --limit 200 --workers 8                                        # 小批试跑：两份排队，各 200 次调用
+python data_fix.py all --workers 32 --rebalance-limits --relabel-scene                # 全量排队：客服会话 → 个性化讲解
+python data_fix.py all --workers 32 --enrich --rebalance-limits --relabel-scene       # 全量排队：客服会话 → 讲解知识补充 → 个性化讲解
+python data_fix.py all --model <方舟模型ID或接入点ID> --tasks cs --workers 32           # 指定模型、只跑一份
+mkdir -p out && nohup python data_fix.py all --workers 32 --enrich --rebalance-limits --relabel-scene > out/fix_all.log 2>&1 &   # 后台跑
 ```
+
+`all` 一份跑完再跑下一份，每一步终端里有进度条（百分比、条数、速度、已用 / 剩余时间、修好 / 需复核 / 剔除 / 失败数；输出到日志时每 30 秒一行），
+最后打印每一步的结果汇总。某一步出错会记下来接着跑后面的。中途停了（Ctrl+C、断网），再执行同一条命令从没做完的地方接着做（结果在固定目录 `out/fix_cs/`、`out/fix_narr/`，要从头来就删掉对应目录）。
+单步命令 `run / enrich / merge` 也还在（见 `--help`）。
 
 建议用比生成时（`glm-5-3-flash`）更强的模型修，也能顺带降低全部数据出自同一个模型的同质化。
 
@@ -579,12 +594,11 @@ python data_fix.py run  --task narr --in 个性化讲解.json --model <…> --wo
 客服对话的票价、开放时间这类运营事实**不要用大模型补**：会变、编错了直接误导游客，只能由景区方提供。
 
 ```bash
-python data_fix.py enrich --in 个性化讲解.json --model <…> --workers 16 --limit 200     # 先试 200 个讲解对象，抽查出处
-python data_fix.py enrich --in 个性化讲解.json --model <…> --workers 32                 # 全量（约 2 万个讲解对象，断点续跑）
-python data_fix.py run --task narr --in 个性化讲解.json --model <…> --kb-ext out/fix_narr_<日期>/kb_ext.jsonl --rebalance-limits --relabel-scene
+python data_fix.py enrich --workers 16 --limit 200     # 先试 200 个讲解对象，抽查出处（结果在 out/fix_narr/kb_ext.jsonl）
+python data_fix.py all --tasks narr --enrich --workers 32 --rebalance-limits --relabel-scene   # 补知识 + 修讲解（全量约 2 万个讲解对象，断点续跑）
 ```
 
-**输出**（`--out-dir`，默认 `out/fix_<task>_<日期>/`）：`fixed.json`（全量，格式同输入）、`fixed_l1.jsonl` + `fixed_sidecar.jsonl`（标注交付 L1 / 溯源）、
+**输出**（`--out-dir`，默认 `out/fix_cs/`、`out/fix_narr/`）：`fixed.json`（全量，格式同输入）、`fixed_l1.jsonl` + `fixed_sidecar.jsonl`（标注交付 L1 / 溯源）、
 `dropped.jsonl`（剔除的和原因）、`report.md` / `report.json`（修正前后对比）、`results.jsonl`（模型结果，断点续跑用，别删）。
 调用失败的下次 `run` 自动重试；`merge` 可单独重新合并（还没调模型的原样输出并标需复核）。
 

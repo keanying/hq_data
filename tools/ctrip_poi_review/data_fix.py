@@ -1,29 +1,70 @@
-"""已交付训练数据的修正：智能客服对话 / 个性化讲解。
+"""已交付训练数据的修正：智能客服对话（客服会话）/ 个性化讲解。
 
-思路：先诊断每一条有什么问题 → 规则能修的程序直接修 → 需要改写的交给火山方舟大模型（只改有问题的消息 / 句子）
+======================================================================== 完整命令
+（在 tools/ctrip_poi_review 目录下执行；数据默认读 tools/q_data，不用 --in）
+
+数据放法：tools/q_data/客服会话.zip、tools/q_data/个性化讲解.zip
+  zip 里放 .json（数组）/ .jsonl / .csv 都行，不用解压，压缩包里的中文文件名乱码也没关系：
+  - JSON / JSONL：一行（一个元素）一条，字段和工作台导出的「完整 JSON」一致（含 source）
+  - CSV：① 工作台导出的讲解 CSV（带 record_json 列）；② 客服的会话表 CSV + 轮次表 CSV（两张一起放）；
+         ③ 一行一条、嵌套字段（turns / poi / source …）是 JSON 字符串的 CSV
+  也可以放 .json / .csv 文件本身，或解压后的 客服会话/、个性化讲解/ 目录。
+
+  cd tools/ctrip_poi_review
+
+  # 0. 查配置：方舟 Key 从哪来（打码）、模型、联网开没开，并试调一次
+  python data_fix.py check
+  python data_fix.py check --step enrich
+
+  # 1. 只诊断、不调模型：每类问题多少条、要调多少次模型
+  python data_fix.py scan --task cs
+  python data_fix.py scan --task narr --rebalance-limits --relabel-scene
+
+  # 2. 小批试跑（两份数据排队跑，各 200 条），抽查 out/fix_cs、out/fix_narr 里的 fixed.json 和 report.md
+  python data_fix.py all --limit 200 --workers 8
+
+  # 3. 全量排队：客服会话修正 → 个性化讲解修正（一份跑完再跑下一份，带进度条；中断后再执行同一条命令接着跑）
+  python data_fix.py all --workers 32 --rebalance-limits --relabel-scene
+
+  # 3'. 全量排队 + 讲解知识补充：客服会话修正 → 讲解知识补充（联网，带出处）→ 个性化讲解修正（用补充后的知识，含 500 字档）
+  python data_fix.py all --workers 32 --enrich --rebalance-limits --relabel-scene
+
+  # 指定模型（不填用工作台设置页的模型）、只跑一份
+  python data_fix.py all --model <方舟模型ID或接入点ID> --tasks cs --workers 32
+  python data_fix.py all --model <方舟模型ID或接入点ID> --tasks narr --enrich --workers 32
+
+  # 单步（需要时）
+  python data_fix.py run    --task cs   --workers 32
+  python data_fix.py enrich --workers 32
+  python data_fix.py run    --task narr --workers 32 --kb-ext out/fix_narr/kb_ext.jsonl --rebalance-limits --relabel-scene
+  python data_fix.py merge  --task cs                     # 只重新合并导出（run / all 结束会自动合并）
+  python data_fix.py run    --task cs --in D:/data/客服会话.zip   # 用别处的数据
+
+  后台跑、把进度写进日志（Linux / Mac）：
+  mkdir -p out && nohup python data_fix.py all --workers 32 --rebalance-limits --relabel-scene > out/fix_all.log 2>&1 &
+  tail -f out/fix_all.log
+
+======================================================================== 输出
+  out/fix_cs/、out/fix_narr/（固定目录，断点续跑靠它；要从头来就删掉对应目录）
+    fixed.json           修好的全量数据，格式和输入一致（含 source；source.fix 记录改了什么）
+    fixed_l1.jsonl       标注交付 L1（不含答案 / 溯源）
+    fixed_sidecar.jsonl  溯源 sidecar（同一个 ID 关联）
+    dropped.jsonl        剔除的（带原因）；invalid.jsonl 输入里格式不对、跳过的
+    report.md / .json    修正前后对比
+    results.jsonl        调过模型的结果（断点续跑用，别删）；diagnose.jsonl / scan.json 诊断
+    kb_ext.jsonl         （fix_narr）知识补充结果
+
+======================================================================== 做什么
+诊断每一条 → 规则能修的程序直接修 → 需要改写的交给火山方舟（只改有问题的消息 / 句子）
 → 用和生成时同一套质检（cs_expand.quality_flags、cs_synth.session_checks、guide_synth.narr_check）再查一遍
-→ 不过关的带着问题再问一次 → 还不过：严重的（编造事实 / 订单状态、乱码、超字数）剔除，其余标 needs_review 交给标注。
+→ 不过关的带着问题再问一次 → 还不过：编造事实 / 订单状态、乱码、超字数这类剔除，其余标 needs_review 交给标注。
+各类问题怎么修见 README 第 15 节。
 
-  python data_fix.py scan  --task cs   --in 客服会话.json             # 只诊断、不调模型：每类问题多少条，看要花多少次调用
-  python data_fix.py run   --task cs   --in 客服会话.json --workers 16 --limit 200   # 先试 200 条
-  python data_fix.py run   --task cs   --in 客服会话.json --workers 16               # 全量（断点续跑：已修过的跳过）
-  python data_fix.py run   --task narr --in 个性化讲解.json --workers 16 [--rebalance-limits] [--relabel-scene]
-  python data_fix.py merge --task cs   --in 客服会话.json --out-dir out/fix_cs_xxx   # 只重新合并导出（run 结束会自动合并）
-  python data_fix.py enrich --in 个性化讲解.json --workers 16                        # 大模型联网补充讲解知识（带出处）→ kb_ext.jsonl
-  python data_fix.py run   --task narr --in 个性化讲解.json --kb-ext out/fix_narr_xxx/kb_ext.jsonl --rebalance-limits
-
-火山方舟配置不用另填：和工作台、cs_expand / guide_synth 一样，读工作台「设置 → AI 判断」（MySQL 表 hq_app_settings，
-连不上库时读 .pw-profile-service/hq_prefs.json），没有再用环境变量 ARK_API_KEY。先跑 `python data_fix.py check` 看 Key 从哪来、能不能调通。
---model 指定这次用的模型（不填：ARK_MODEL，再不填用设置页的）。联网搜索按步骤配：修正默认关、知识补充默认开，
---web-search on|off 或环境变量 DATA_FIX_WEB_SEARCH / DATA_FIX_ENRICH_WEB_SEARCH 改；设置页的联网开关是给 POI 核对的，这里不跟。
-
-输出（--out-dir，默认 out/fix_<task>_<日期>/）：
-  diagnose.jsonl     每条的诊断（问题代码、要不要调模型）
-  results.jsonl      调过模型的结果（断点续跑靠它，别删）
-  fixed.json         修好的全量数据，格式和输入一致（含 source；source.fix 记录改了什么）
-  fixed_l1.jsonl / fixed_sidecar.jsonl   标注交付 L1 / 溯源 sidecar（同一个 ID 关联）
-  dropped.jsonl      剔除的（带原因）
-  report.md / report.json   修正前后对比
+======================================================================== 配置
+方舟：和工作台、cs_expand / guide_synth 一样读工作台「设置 → AI 判断」（MySQL 表 hq_app_settings，
+连不上库时读 .pw-profile-service/hq_prefs.json），没有再用环境变量 ARK_API_KEY。
+--model 指定这次用的模型（不填：ARK_MODEL，再不填用设置页的）；ARK_BASE_URL 可覆盖接口地址。
+联网搜索按步骤：修正默认关、知识补充默认开；--web-search on|off，或环境变量 DATA_FIX_WEB_SEARCH / DATA_FIX_ENRICH_WEB_SEARCH。
 """
 import argparse
 import copy
@@ -564,7 +605,7 @@ def load_kb_ext(path):
 
 
 def cmd_enrich(args):
-    records = load_records(args.input)
+    records = get_records(args)
     d = out_dir(args)
     path = Path(args.kb_ext) if args.kb_ext else d / "kb_ext.jsonl"
     done = set()
@@ -589,7 +630,9 @@ def cmd_enrich(args):
     if not cfg["ai_web_search"]:
         print("[enrich] 注意：联网搜索关着，模型只能凭记忆补，出处没法保证；没有出处的条目照样会被丢掉")
     print(f"[enrich] 讲解对象 {len(units) + len(done)} 个，待补 {len(todo)} 个（已完成 {len(done)}），联网搜索 {'开' if cfg['ai_web_search'] else '关'}，写到 {path}")
-    lock, cnt, t0 = threading.Lock(), Counter(), time.time()
+    lock, cnt = threading.Lock(), Counter()
+    bar = Progress(len(todo), "[知识补充]", "个")
+    bar_cn = ENRICH_CN
     fout = open(path, "a", encoding="utf-8")
 
     def work(item):
@@ -606,14 +649,13 @@ def cmd_enrich(args):
             fout.flush()
             cnt[res["status"]] += 1
             cnt["facts"] += len(res.get("facts") or [])
-            n = cnt["ok"] + cnt["failed"]
-            if n % 50 == 0 or n == len(todo):
-                print(f"[enrich] {n}/{len(todo)}  {dict(cnt)}  {n / max(time.time() - t0, 1e-6) * 60:.0f} 个/分")
+            bar.update(cnt["ok"] + cnt["failed"], {bar_cn.get(k, k): v for k, v in cnt.items()})
 
     with ThreadPoolExecutor(max_workers=args.workers) as ex:
         list(ex.map(work, todo))
     fout.close()
     print(f"[enrich] 完成 {dict(cnt)}；用法：run --task narr --kb-ext {path}")
+    return dict(units=len(units) + len(done), done_now=dict(cnt), kb_ext=str(path))
 
 
 # ================================================================ 个性化讲解
@@ -843,14 +885,219 @@ TASKS = {
 }
 
 
+Q_DATA = HERE.parent / "q_data"  # 客户交付数据默认放这里（tools/q_data）
+Q_NAMES = {"cs": "客服会话", "narr": "个性化讲解"}
+
+
+def default_input(task):
+    """没给 --in 时找 tools/q_data 下的数据：<名称>.zip / .json / .jsonl / .csv，或 <名称>/ 目录（里面放 json 或 csv）。"""
+    name = Q_NAMES[task]
+    for ext in (".zip", ".json", ".jsonl", ".csv"):
+        c = Q_DATA / f"{name}{ext}"
+        if c.exists():
+            return c
+    if (Q_DATA / name).is_dir():
+        return Q_DATA / name
+    sys.exit(f"找不到 {name} 的数据：放到 {Q_DATA / (name + '.zip')}（zip 里放 .json / .jsonl / .csv），或用 --in 指定")
+
+
+def _decode(b):
+    for enc in ("utf-8-sig", "gb18030"):  # Excel 另存的 CSV 可能是 GBK
+        try:
+            return b.decode(enc)
+        except UnicodeDecodeError:
+            continue
+    return b.decode("utf-8", "replace")
+
+
+def _parse_json_text(text):
+    t = text.lstrip()
+    if t.startswith("["):
+        return json.loads(t)
+    return [json.loads(line) for line in t.splitlines() if line.strip()]
+
+
+def _cell(v):
+    """CSV 单元格：空 / null → None；看起来是 JSON 的（[…] / {…}）解析成对象；其余原样。"""
+    if v is None:
+        return None
+    t = v.strip()
+    if t == "" or t.lower() in ("null", "none", "nan"):
+        return None
+    if t[0] in "[{":
+        try:
+            return json.loads(t)
+        except ValueError:
+            pass
+    return v
+
+
+INT_FIELDS = {"satisfaction_score", "session_duration_sec", "turn", "turn_no"}
+
+
+def _int(v):
+    try:
+        return int(float(v))
+    except (TypeError, ValueError):
+        return v
+
+
+def _records_from_csv(tables):
+    """CSV → 记录。支持三种：① 有 record_json 列（工作台讲解 / 评价导出的 CSV）；② 会话表 CSV + 轮次表 CSV（工作台客服导出的两张表）；
+    ③ 一行一条、嵌套字段（turns / poi / source…）是 JSON 字符串的通用 CSV。"""
+    import csv
+    tables = [(n, rows) for n, rows in tables if rows]
+    for n, rows in tables:
+        if "record_json" in rows[0]:
+            return [json.loads(r["record_json"]) for r in rows if (r.get("record_json") or "").strip()]
+    sess = next((rows for n, rows in tables if {"session_id", "channel"} <= set(rows[0]) and "msg_text" not in rows[0] and "turns" not in rows[0]), None)
+    turns = next((rows for n, rows in tables if {"session_id", "msg_text"} <= set(rows[0])), None)
+    if sess is not None and turns is not None:
+        by = {}
+        for t in turns:
+            by.setdefault(t["session_id"], []).append(t)
+        out = []
+        for r in sess:
+            tl = []
+            for t in sorted(by.get(r["session_id"], []), key=lambda t: _int(t.get("turn_no")) or 0):
+                d = dict(turn=_int(t.get("turn_no")), role=t.get("role"), msg_type=t.get("msg_type") or "text", text=t.get("msg_text") or "",
+                         ts=str(t.get("msg_ts") or "")[-8:])
+                if (t.get("agent_id") or "").strip():
+                    d["agent_id"] = t["agent_id"].strip()
+                tl.append(d)
+            out.append(dict(session_id=r["session_id"], channel=r.get("channel"), visitor_id=r.get("visitor_id"), scenic_id=r.get("scenic_id"),
+                            scenic_name=r.get("scenic_name"), start_time=r.get("start_time"), related_order_id=_cell(r.get("related_order_id")),
+                            turns=tl, end_type=_cell(r.get("end_type")), satisfaction_score=_int(_cell(r.get("satisfaction_score"))),
+                            session_duration_sec=_int(_cell(r.get("session_duration_sec"))), source=_cell(r.get("source")) or {}))
+        return out
+    if sess is None and turns is not None:
+        sys.exit("只有轮次表 CSV（session_id / msg_text），缺会话表 CSV（session_id / channel / source…），两张一起放进 zip")
+    n, rows = max(tables, key=lambda x: len(x[1]))
+    return [{k: (_int(_cell(v)) if k in INT_FIELDS else _cell(v)) for k, v in r.items() if k} for r in rows]
+
+
 def load_records(path):
+    """读输入：.json（数组）/ .jsonl / .csv，或 zip（里面放这些，中文文件名乱码也没关系），或一个目录。
+    同一个 zip / 目录里有 json 就用最大的那个 json；只有 csv 就按 CSV 规则读（见 _records_from_csv）。"""
+    import csv
+    import io
+    import zipfile
+    csv.field_size_limit(2 ** 31 - 1)
     p = Path(path)
-    with open(p, encoding="utf-8-sig") as f:
-        head = f.read(1)
-        f.seek(0)
-        if head == "[":
-            return json.load(f)
-        return [json.loads(line) for line in f if line.strip()]
+    t0 = time.time()
+    print(f"[读取] {p} …", flush=True)
+    files = []  # (文件名, 读字节的函数, 大小)
+    if p.is_dir():
+        files = [(str(f), f.read_bytes, f.stat().st_size) for f in sorted(p.iterdir()) if f.is_file()]
+        z = None
+    elif p.suffix.lower() == ".zip":
+        z = zipfile.ZipFile(p)
+        files = [(m.filename, (lambda m=m: z.read(m)), m.file_size) for m in z.infolist() if not m.is_dir()]
+    else:
+        z = None
+        files = [(str(p), p.read_bytes, p.stat().st_size)]
+    files = [f for f in files if not Path(f[0]).name.startswith(".") and "__MACOSX" not in Path(f[0]).parts]  # Mac 压缩带的隐藏文件
+    js = [f for f in files if re.search(r"\.jsonl?$", f[0], re.I)]
+    cs_ = [f for f in files if re.search(r"\.csv$", f[0], re.I)]
+    if js:
+        name, read, _ = max(js, key=lambda f: f[2])
+        recs = _parse_json_text(_decode(read()))
+        how = f"JSON（{Path(name).name}）"
+    elif cs_:
+        tables = [(name, list(csv.DictReader(io.StringIO(_decode(read()))))) for name, read, _ in cs_]
+        recs = _records_from_csv(tables)
+        how = "CSV（" + "、".join(f"{Path(n).name} {len(r)} 行" for n, r in tables) + "）"
+    else:
+        sys.exit(f"{p} 里没有 .json / .jsonl / .csv")
+    if z is not None:
+        z.close()
+    print(f"[读取] {len(recs)} 条，{how}，用时 {time.time() - t0:.0f} 秒", flush=True)
+    return recs
+
+
+REQUIRED = {"cs": ["session_id", "scenic_name", "turns", "source"],
+            "narr": ["request_id", "poi", "sub_poi_knowledge", "visitor_profile", "task_params", "reference_narration"]}
+
+
+def validate_input(task, recs, d=None):
+    """检查字段：大部分缺必需字段 → 直接退出说明缺什么；少数缺的跳过，写 invalid.jsonl。"""
+    def why(r):
+        miss = [k for k in REQUIRED[task] if not r.get(k)]
+        if miss:
+            return "缺字段：" + "、".join(miss)
+        if task == "cs" and not (isinstance(r["turns"], list) and all(isinstance(t, dict) and "role" in t and "text" in t for t in r["turns"])):
+            return "turns 不是 [{role, text, …}] 列表"
+        if task == "narr" and not isinstance((r.get("reference_narration") or {}).get("text"), str):
+            return "reference_narration.text 不是文字"
+        return None
+    good, bad = [], []
+    for r in recs:
+        w = why(r) if isinstance(r, dict) else "不是 JSON 对象"
+        (bad if w else good).append((r, w))
+    if recs and len(bad) > len(recs) / 2:
+        sys.exit(f"[读取] {len(bad)}/{len(recs)} 条格式不对，例：{bad[0][1]}。{Q_NAMES[task]}需要字段 {REQUIRED[task]}"
+                 + ("；客服会话的景区资料在 source.facts（没有的话事实核对做不了）" if task == "cs" else ""))
+    if bad:
+        print(f"[读取] 跳过 {len(bad)} 条格式不对的（{Counter(w for _, w in bad).most_common(1)[0][0]} 等），写在 invalid.jsonl", flush=True)
+        if d is not None:
+            with open(Path(d) / "invalid.jsonl", "w", encoding="utf-8") as f:
+                for r, w in bad:
+                    f.write(json.dumps(dict(reason=w, record=r), ensure_ascii=False, default=str) + "\n")
+    if task == "cs":
+        nofacts = sum(1 for r, _ in good if not (r["source"] or {}).get("facts"))
+        if nofacts:
+            print(f"[读取] 注意：{nofacts} 通会话的 source.facts 是空的，这些只能做格式类修正，事实核对做不了", flush=True)
+    return [r for r, _ in good]
+
+
+def get_records(args):
+    return validate_input(args.task, load_records(args.input), out_dir(args))
+
+
+# ================================================================ 进度条
+STATUS_CN = dict(fixed="模型修好", review="需复核", dropped="剔除", failed="调用失败", rule="规则修好", ok="无需修改", pending="还没调模型",
+                 returning_visitors_set="设为回头客")
+ENRICH_CN = dict(ok="补完", failed="调用失败", facts="条知识")
+
+
+def _hms(sec):
+    if sec is None:
+        return "--:--"
+    sec = int(sec)
+    return f"{sec // 3600}:{sec % 3600 // 60:02d}:{sec % 60:02d}" if sec >= 3600 else f"{sec // 60:02d}:{sec % 60:02d}"
+
+
+class Progress:
+    """终端里一行刷新的进度条（不依赖 tqdm）；输出被重定向到文件 / 日志时每 30 秒打一行。"""
+
+    def __init__(self, total, label, unit="条"):
+        self.total, self.label, self.unit = total, label, unit
+        self.t0, self.last, self.width = time.time(), 0.0, 0
+        self.tty = sys.stdout.isatty()
+
+    def update(self, done, counts=None, force=False):
+        now = time.time()
+        end = done >= self.total
+        if not force and not end and now - self.last < (0.5 if self.tty else 30):
+            return
+        self.last = now
+        pct = done / self.total if self.total else 1.0
+        n = int(pct * 28)
+        el = now - self.t0
+        rate = done / el if el > 0 else 0
+        eta = (self.total - done) / rate if rate > 0 else None
+        cs = " ".join(f"{STATUS_CN.get(k, k)} {v}" for k, v in (counts or {}).items() if v)  # 已经是中文的原样显示
+        line = (f"{self.label} [{'█' * n}{'░' * (28 - n)}] {pct * 100:5.1f}%  {done}/{self.total}  "
+                f"{rate * 60:.0f} {self.unit}/分  已用 {_hms(el)}  剩余 {_hms(eta)}" + (f"  | {cs}" if cs else ""))
+        if self.tty:
+            pad = max(0, self.width - len(line))
+            sys.stdout.write("\r" + line + " " * pad)
+            self.width = len(line)
+            if end:
+                sys.stdout.write("\n")
+            sys.stdout.flush()
+        else:
+            print(line, flush=True)
 
 
 # 联网搜索默认值（按步骤）：修正只许用数据里给的资料 / 知识，开联网反而会带进外部事实，默认关；知识补充要找出处，默认开。
@@ -878,7 +1125,9 @@ def ark_cfg(args, step="fix", quiet=False):
         try:
             prefs, where = json.loads(f.read_text(encoding="utf-8")), f"文件 {f}"
         except (OSError, ValueError):
-            print(f"[ark] 读工作台设置失败（{type(e).__name__}: {e}），也没有 {f}，只用环境变量", flush=True)
+            if not _WARNED.get("prefs"):
+                print(f"[ark] 读工作台设置失败（{type(e).__name__}: {e}），也没有 {f}，只用环境变量", flush=True)
+                _WARNED["prefs"] = True
     cfg = ai_judge.config(prefs)
     if cfg.get("key_source") == "设置页":
         cfg["key_source"] = f"工作台设置页（{where}）"
@@ -897,6 +1146,7 @@ def ark_cfg(args, step="fix", quiet=False):
     return cfg
 
 
+_WARNED = {}
 NO_KEY = "没有方舟 API Key：在工作台「设置 → AI 判断」里填（存 MySQL 表 hq_app_settings），或 export ARK_API_KEY=…；--profile 指向工作台用的浏览器目录"
 
 
@@ -1022,14 +1272,14 @@ def stats(task, records):
 
 # ================================================================ 命令
 def out_dir(args):
-    d = Path(args.out_dir) if args.out_dir else HERE / "out" / f"fix_{args.task}_{datetime.now():%Y%m%d}"
+    d = Path(args.out_dir) if args.out_dir else HERE / "out" / f"fix_{args.task}"  # 固定目录：隔天接着跑也能断点续上
     d.mkdir(parents=True, exist_ok=True)
     return d
 
 
 def cmd_scan(args, records=None):
     T = TASKS[args.task]
-    records = records if records is not None else load_records(args.input)
+    records = records if records is not None else get_records(args)
     ctx = T["ctx"](records, args)
     d = out_dir(args)
     by_code, need = Counter(), 0
@@ -1064,7 +1314,7 @@ def _done(d):
 
 def cmd_run(args):
     T = TASKS[args.task]
-    records = load_records(args.input)
+    records = get_records(args)
     ctx = T["ctx"](records, args)
     d = out_dir(args)
     cfg = ark_cfg(args, "fix")
@@ -1084,7 +1334,7 @@ def cmd_run(args):
     print(f"[fix] {T['name']}：共 {len(records)} 条，要调模型 {len(todo)} 条（已完成 {len(done)}），模型 {cfg['ai_model']}，并发 {args.workers}")
     lock = threading.Lock()
     cnt = Counter()
-    t0 = time.time()
+    bar = Progress(len(todo), f"[{T['name']}]")
     fout = open(d / "results.jsonl", "a", encoding="utf-8")
 
     def work(r):
@@ -1098,10 +1348,7 @@ def cmd_run(args):
             fout.write(json.dumps(res, ensure_ascii=False) + "\n")
             fout.flush()
             cnt[res["status"]] += 1
-            n = sum(cnt.values())
-            if n % 50 == 0 or n == len(todo):
-                sp = n / max(time.time() - t0, 1e-6) * 60
-                print(f"[fix] {n}/{len(todo)}  {dict(cnt)}  {sp:.0f} 条/分")
+            bar.update(sum(cnt.values()), cnt)
 
     with ThreadPoolExecutor(max_workers=args.workers) as ex:
         pending = set()
@@ -1112,14 +1359,17 @@ def cmd_run(args):
                 _, pending = wait(pending, return_when=FIRST_COMPLETED)
         wait(pending)
     fout.close()
+    if not todo:
+        print("[fix] 没有要调模型的（都修过了）")
     print(f"[fix] 本次 {dict(cnt)}；失败的下次 run 会重试")
     if not args.no_merge:
-        cmd_merge(args, records)
+        return cmd_merge(args, records)
+    return dict(outcome=dict(cnt))
 
 
 def cmd_merge(args, records=None):
     T = TASKS[args.task]
-    records = records if records is not None else load_records(args.input)
+    records = records if records is not None else get_records(args)
     ctx = T["ctx"](records, args)
     d = out_dir(args)
     done = _done(d)
@@ -1193,6 +1443,55 @@ def cmd_merge(args, records=None):
     return rep
 
 
+def cmd_all(args):
+    """排队跑：客服会话修正 → （--enrich）讲解知识补充 → 个性化讲解修正。一步跑完再跑下一步；某一步出错记下来，接着跑后面的。
+    每一步都能断点续跑：中途停了，再执行同一条命令会从没做完的地方接着做。"""
+    tasks = [t.strip() for t in (args.tasks or "cs,narr").split(",") if t.strip()]
+    for t in tasks:
+        if t not in TASKS:
+            sys.exit(f"--tasks 只能是 cs / narr：{t}")
+    steps = []
+    if "cs" in tasks:
+        steps.append(("cs", "run", "客服会话修正"))
+    if "narr" in tasks:
+        if args.enrich:
+            steps.append(("narr", "enrich", "讲解知识补充（联网）"))
+        steps.append(("narr", "run", "个性化讲解修正"))
+    if not ark_cfg(args, "fix", quiet=True).get("ai_api_key"):  # 先查一次，别跑到一半才发现没 Key
+        sys.exit(NO_KEY)
+    base = dict(vars(args))
+    results = []
+    t_all = time.time()
+    for i, (task, cmd, title) in enumerate(steps, 1):
+        print(f"\n{'=' * 18} 第 {i}/{len(steps)} 步：{title} {'=' * 18}", flush=True)
+        a = argparse.Namespace(**base)
+        a.task = task
+        a.input = base.get("input") if len(tasks) == 1 and base.get("input") else default_input(task)
+        a.out_dir = None
+        if task == "narr" and not a.kb_ext:
+            ext = HERE / "out" / "fix_narr" / "kb_ext.jsonl"
+            if args.enrich or ext.exists():
+                a.kb_ext = str(ext)
+                print(f"[queue] 知识补充文件：{ext}" + ("" if ext.exists() or cmd == "enrich" else "（还没有）"), flush=True)
+        t0 = time.time()
+        try:
+            rep = (cmd_enrich if cmd == "enrich" else cmd_run)(a)
+            results.append((title, "完成", time.time() - t0, rep))
+        except SystemExit as e:
+            results.append((title, f"中止：{e}", time.time() - t0, None))
+        except Exception as e:  # noqa: BLE001
+            results.append((title, f"出错：{type(e).__name__}: {e}", time.time() - t0, None))
+    print(f"\n{'=' * 18} 全部结束（{_hms(time.time() - t_all)}）{'=' * 18}")
+    for title, st, el, rep in results:
+        extra = ""
+        if rep and rep.get("outcome"):
+            extra = "  " + " ".join(f"{STATUS_CN.get(k, k)} {v}" for k, v in rep["outcome"].items() if isinstance(v, int) and v)
+        elif rep and rep.get("done_now"):
+            extra = "  " + " ".join(f"{ENRICH_CN.get(k, k)} {v}" for k, v in rep["done_now"].items() if v)
+        print(f"- {title}：{st}（{_hms(el)}）{extra}")
+    print(f"输出目录：{HERE / 'out'}/fix_cs、fix_narr（fixed.json / fixed_l1.jsonl / fixed_sidecar.jsonl / dropped.jsonl / report.md）")
+
+
 def report_md(rep):
     b, a = rep["before"], rep["after"]
     keys = [k for k in b if k in a] + [k for k in a if k not in b]
@@ -1207,9 +1506,14 @@ def report_md(rep):
 
 
 def main():
-    ap = argparse.ArgumentParser(description="已交付训练数据修正（客服会话 / 个性化讲解），模型用火山方舟")
-    ap.add_argument("cmd", choices=["check", "scan", "run", "merge", "enrich"])
+    ap = argparse.ArgumentParser(description="已交付训练数据修正（客服会话 / 个性化讲解），模型用火山方舟。数据默认读 tools/q_data。",
+                                 epilog=__doc__.split("======================================================================== 输出")[0].split("完整命令", 1)[1],
+                                 formatter_class=argparse.RawDescriptionHelpFormatter)
+    ap.add_argument("cmd", choices=["all", "check", "scan", "run", "merge", "enrich"],
+                    help="all = 排队把两份数据都处理完（推荐）；其余是单步")
     ap.add_argument("--task", choices=list(TASKS), help="scan / run / merge 必填；enrich 不用")
+    ap.add_argument("--tasks", default="cs,narr", help="all：处理哪些，默认 cs,narr（客服会话、个性化讲解）")
+    ap.add_argument("--enrich", action="store_true", help="all：个性化讲解修正前先做知识补充（联网，带出处）")
     ap.add_argument("--in", dest="input", help="输入：JSON 数组或 JSONL（客户交付的 客服会话.json / 个性化讲解.json）")
     ap.add_argument("--out-dir")
     ap.add_argument("--model", help="方舟模型 ID / 推理接入点 ID（不填：环境变量 ARK_MODEL，再不填用工作台设置页的模型）")
@@ -1235,13 +1539,11 @@ def main():
     OPTS.update(keep_order_conflict=args.keep_order_conflict)
     if args.cmd in ("scan", "run", "merge") and not args.task:
         ap.error("scan / run / merge 要 --task cs 或 narr")
-    if args.cmd in ("scan", "run", "merge", "enrich") and not args.input:
-        ap.error("要 --in 输入文件")
     if args.cmd in ("enrich", "check"):
         args.task = args.task or "narr"
-        if args.cmd == "check":
-            args.input = args.input or "-"
-    {"check": cmd_check, "scan": cmd_scan, "run": cmd_run, "merge": cmd_merge, "enrich": cmd_enrich}[args.cmd](args)
+    if args.cmd in ("scan", "run", "merge", "enrich") and not args.input:
+        args.input = default_input(args.task)  # 默认读 tools/q_data 下的数据
+    {"all": cmd_all, "check": cmd_check, "scan": cmd_scan, "run": cmd_run, "merge": cmd_merge, "enrich": cmd_enrich}[args.cmd](args)
 
 
 if __name__ == "__main__":
