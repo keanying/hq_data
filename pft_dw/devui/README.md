@@ -96,7 +96,7 @@ Windows 双击 `启动.bat`。需要 Python 3.9 或更高版本，不依赖第�
 **界面：**
 - 进入项目后不再显示页头和面包屑。返回项目列表的按钮在左侧导航最上方的「‹ 项目」。
 - 开发目录和参数设置默认都收成窄条，鼠标移上去展开、移开收起；点图钉可以固定展开。
-- 页面上的符号按钮统一换成 Semi Design 官方图标（`web/semi-icons.js`，取自 `@douyinfe/semi-icons` 的 SVG 源文件，MIT 许可，许可证见 `web/vendor/semi-icons-LICENSE`），包括关闭、目录树三角、新建、撤销/重做、格式化、查找、自动换行、缩放、固定、返回。图标颜色跟随文字颜色，由 `web/ui-icons.js` 自动替换，不需要安装 npm 包。
+- 页面上所有图标统一使用 Semi Design 官方图标（`web/semi-icons.js`，由 `tools/gen_semi_icons.py` 从 `@douyinfe/semi-icons` 的 SVG 源文件生成，MIT 许可，许可证见 `web/vendor/semi-icons-LICENSE`）。范围包括：左侧导航（开发/即席查询/数据运维）、目录树三角、标签页关闭、新建、撤销/重做、格式化、查找、自动换行、缩放、固定、返回、运行/停止、右键菜单、任务类型（SQL/Python/Spark JAR/Flink JAR/Shell）、外链箭头、帮助、导出、查询页的表/历史/复制等。原来的文字符号和 `icons/*.png` 位图都不再显示。新增图标时在 `tools/gen_semi_icons.py` 的 `ICONS` 里加一行再运行即可。
 - 整个页面统一缩小到 90%（`web/pft-meta.css` 顶部的 `--ui-zoom`，改这个值就能调整）。整屏高度改用 `var(--vh100)`，拖拽、平移、右键菜单、下拉框和提示框的坐标都按缩放比例换算过。
 - 代码编辑器的查找/替换面板重新排了版。
 
@@ -126,10 +126,23 @@ Windows 双击 `启动.bat`。需要 Python 3.9 或更高版本，不依赖第�
 - `web/backend.js`：新增，负责存储转发。
 - `web/pft-meta.js`、`web/pft-meta.css`：新增，开发页的数仓信息标签及界面样式。
 - `web/ui-icons.js`：新增，界面图标替换。
-- `web/semi-icons.js`、`web/vendor/semi-icons-LICENSE`：新增，Semi Design 图标 SVG 及其许可证。
+- `web/semi-icons.js`、`web/vendor/semi-icons-LICENSE`、`tools/gen_semi_icons.py`：Semi Design 图标 SVG、许可证及生成脚本。
+- `web/workflow-run.js`：运行改为在画布上展示进度（见“运行”）。
 - `web/project-storage.js`：引入后端；空项目增加 ODS 目录。
 - `web/model.mjs`：分层增加 ODS；新增 `relayout`（网格泳道排布，支持横向和纵向），与 `server/seed_pft.py` 采用同一算法，有测试保证两边结果一致。
 - `web/flow-view.mjs`：新增，负责连线走线、去掉冗余线、选中高亮。
 - `web/app.js`：连线改由 `flow-view.mjs` 计算；增加排布方向按钮；纵向排布时连接点移到卡片上下；折叠分组和自动排布时调用 `relayout`；打开任务时广播事件；支持从血缘标签跳转任务；保存提示改为“服务器 · SQLite”。
 - `web/development.js`：切换项目前先等待未完成的保存写完。
 - 删除 `serve.mjs` / `package.json`，由 `server/app.py` 提供静态文件和接口。
+
+## 运行（演示）
+
+点击右上角“运行”后不再弹出底部面板，运行进度直接显示在工作流画布上：
+
+- 任务卡片左上角显示状态：等待 / 运行中 / 成功 / 失败 / 跳过 / 已停止，运行中的卡片边框呼吸高亮，悬停可看开始时间与耗时。
+- 分组收起时，底部显示进度条和“运行中 12/20”；展开时标题旁显示进度。
+- 流入运行中节点的连线按数据方向流动，已完成的连线变绿。
+- 画布上方的状态条显示总进度、成功/失败/跳过数和耗时，可停止；结束后点 × 清除状态。
+- 按依赖并发调度（最多 8 个同时运行）：上游全部成功才开始，上游失败的下游标记为跳过。
+- 切换到其他工作流或任务不会中断运行；状态条上可点“查看”回到正在运行的工作流。
+- 仍是演示：只校验依赖、代码非空和 JAR 配置，不提交到执行引擎。

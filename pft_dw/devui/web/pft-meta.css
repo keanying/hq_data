@@ -157,3 +157,77 @@ body.suite-showing .rail-back{display:none}
 .rail-back>span:last-child{font-size:12px}
 .development-task-tab .ui-ic-wrap{overflow:visible!important}
 .search kbd{display:none}
+
+/* ---- 画布运行状态 ---- */
+.run-status{position:absolute;top:54px;left:50%;transform:translateX(-50%);z-index:40;display:flex;align-items:center;gap:10px;height:34px;padding:0 8px 0 14px;background:#fff;border:1px solid #dfe6f3;border-radius:17px;box-shadow:0 6px 20px #23406b17;font-size:12px;color:#5d6e8a;white-space:nowrap}
+.run-status.hidden{display:none}
+.run-status b{font-weight:600;color:#26354d}
+.run-status .run-name{max-width:240px;overflow:hidden;text-overflow:ellipsis;color:#7d8ca5}
+.run-status .run-dot{width:8px;height:8px;border-radius:50%;background:#3268ef}
+.run-status[data-state=running] .run-dot{animation:run-pulse 1.2s ease-in-out infinite}
+.run-status[data-state=done] .run-dot{background:#2fa36b}.run-status[data-state=failed] .run-dot{background:#e0473f}.run-status[data-state=stopped] .run-dot{background:#e08a2c}
+.run-status .run-bar{width:120px;height:6px;border-radius:3px;background:#edf1f8;overflow:hidden}
+.run-status .run-bar i{display:block;height:100%;background:#3268ef;border-radius:3px;transition:width .3s}
+.run-status[data-state=done] .run-bar i{background:#2fa36b}.run-status[data-state=failed] .run-bar i{background:#e0473f}.run-status[data-state=stopped] .run-bar i{background:#e08a2c}
+.run-status .run-num{font:600 12px Consolas,monospace;color:#26354d}
+.run-status .run-ok{color:#2a9463}.run-status .run-bad{color:#d8433b}.run-status .run-skip{color:#98a3b6}
+.run-status .run-time{font-family:Consolas,monospace;color:#8b98ae}
+.run-status button{height:24px;border:1px solid #e1e7f2;background:#fff;border-radius:12px;padding:0 10px;font-size:12px;color:#4f6080;cursor:pointer}
+.run-status button:hover{background:#f3f6fc}
+.run-status button[data-act=stop]{color:#d64f49;border-color:#f2c4c0}
+.run-status .run-demo{font-size:10px;color:#9a83be;background:#f4effb;padding:2px 7px;border-radius:9px;cursor:help}
+@keyframes run-pulse{0%,100%{box-shadow:0 0 0 0 #3268ef55}50%{box-shadow:0 0 0 5px #3268ef00}}
+
+.node[data-run]{transition:border-color .2s,box-shadow .2s}
+.node[data-run=waiting]{opacity:.78}
+.node[data-run=running]{border-color:#3268ef;animation:run-glow 1.2s ease-in-out infinite}
+.node[data-run=done],.node[data-run=live]{border-color:#7cc9a3}
+.node[data-run=failed]{border-color:#e0473f;box-shadow:0 0 0 3px #e0473f1f}
+.node[data-run=skipped],.node[data-run=stopped]{opacity:.6}
+@keyframes run-glow{0%,100%{box-shadow:0 0 0 2px #3268ef22}50%{box-shadow:0 0 0 6px #3268ef10}}
+.run-badge{position:absolute;left:10px;top:-10px;z-index:7;display:inline-flex;align-items:center;gap:4px;height:18px;padding:0 7px;border-radius:9px;font-size:10px;line-height:18px;background:#f1f4f9;color:#7c8aa2;border:1px solid #dfe5ef;pointer-events:auto;cursor:default}
+.run-badge i{width:6px;height:6px;border-radius:50%;background:currentColor}
+.run-badge[data-run=running]{background:#eaf1ff;color:#3268ef;border-color:#c9d9fb}
+.run-badge[data-run=running] i{animation:run-pulse 1.2s ease-in-out infinite}
+.run-badge[data-run=done],.run-badge[data-run=live]{background:#e9f7f0;color:#2a9463;border-color:#bfe5d1}
+.run-badge[data-run=failed]{background:#fdeceb;color:#d8433b;border-color:#f5c3bf}
+.run-badge[data-run=stopped]{background:#fdf3e7;color:#c97a22;border-color:#f3d7b5}
+
+.group-box[data-run]{transition:border-color .2s}
+.group-box.collapsed[data-run=running]{border-color:#3268ef;animation:run-glow 1.2s ease-in-out infinite}
+.group-box.collapsed[data-run=done]{border-color:#7cc9a3}
+.group-box.collapsed[data-run=failed]{border-color:#e0473f}
+.group-box.collapsed[data-run=waiting]{opacity:.8}
+.group-summary [data-run]{font-weight:600}
+.group-summary [data-run=running]{color:#3268ef}.group-summary [data-run=done]{color:#2a9463}.group-summary [data-run=failed]{color:#d8433b}.group-summary [data-run=stopped]{color:#c97a22}
+.run-group-bar{position:absolute;left:0;right:0;bottom:0;height:3px;background:#e6ecf6;border-radius:0 0 9px 9px;overflow:hidden;pointer-events:none}
+.run-group-bar i{display:block;height:100%;background:#3268ef;transition:width .3s}
+.group-box[data-run=done] .run-group-bar i{background:#2fa36b}.group-box[data-run=failed] .run-group-bar i{background:#e0473f}
+.run-group-chip{margin-left:8px;font-size:11px;padding:1px 8px;border-radius:9px;background:#eaf1ff;color:#3268ef;white-space:nowrap}
+.run-group-chip[data-run=done]{background:#e9f7f0;color:#2a9463}.run-group-chip[data-run=failed]{background:#fdeceb;color:#d8433b}.run-group-chip[data-run=waiting],.run-group-chip[data-run=stopped]{background:#f1f4f9;color:#7c8aa2}
+#edges .edge-run .edge{stroke:#3268ef;stroke-width:2;stroke-dasharray:6 5;animation:edge-run-flow .6s linear infinite}
+#edges .edge-ok .edge{stroke:#7cc9a3}
+@keyframes edge-run-flow{to{stroke-dashoffset:-11}}
+
+/* ---- Semi 图标：任务类型 / 导航 / 位图替换 ---- */
+.type-ic{width:15px;height:15px}
+.sql-square .type-ic{width:16px;height:16px}
+.task-entry-icon .type-ic{width:13px;height:13px}
+.development-task-tab small .type-ic{width:12px;height:12px;vertical-align:-2px}
+#editorIcon .type-ic,#jarIcon .type-ic{width:16px;height:16px}
+.rail-item .ui-ic-img{display:block;margin:0 auto 6px;width:22px;height:22px;color:#6f7f99}
+.rail-item .ui-ic-img .ui-ic{width:22px;height:22px}
+.rail-item.active .ui-ic-img{color:#3268ef}
+.rail-item:hover .ui-ic-img{color:#3268ef}
+.help-icon .ui-ic-img,.help-icon .ui-ic{width:14px;height:14px;color:#9aa7bb}
+.help-icon:hover .ui-ic{color:#3268ef}
+.group-task-icon{width:13px;height:13px;color:#7d8fb3;vertical-align:-2px;margin-right:4px}
+#queryExport .ui-ic{width:16px;height:16px}
+.node-foot [data-edit] .ui-ic{width:11px;height:11px;vertical-align:-1px}
+.group-toggle .ui-ic{width:12px;height:12px}
+.suite-kpi header .ui-ic{width:14px;height:14px;color:#9aa7bb}
+.ui-ic-wrap+.ui-ic-wrap{margin-left:2px}
+.ui-ic-wrap.ui-ic-trail{margin:0 0 0 1px}
+.q-type-ic{display:inline-flex;align-items:center;color:#6f8fd8}
+.q-type-ic .ui-ic{width:13px;height:13px}
+.query-empty>span .ui-ic{width:36px;height:36px;color:#c0cdeb}

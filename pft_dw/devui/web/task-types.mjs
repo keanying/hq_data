@@ -1,9 +1,11 @@
+import {SEMI} from './semi-icons.js';
+const svg=k=>`<svg class="ui-ic type-ic" viewBox="${SEMI[k].viewBox}" aria-hidden="true" fill="none">${SEMI[k].body}</svg>`;
 export const TASK_TYPES=[
- {id:'sql',label:'SQL',icon:'SQL',extension:'sql',description:'Spark / Flink / Presto / StarRocks / MySQL'},
- {id:'python',label:'Python',icon:'Py',extension:'py',description:'Python 脚本'},
- {id:'spark_jar',label:'Spark JAR',icon:'SJ',extension:'jar',description:'Spark 程序包',jar:true},
- {id:'flink_jar',label:'Flink JAR',icon:'FJ',extension:'jar',description:'Flink 程序包',jar:true},
- {id:'shell',label:'Shell',icon:'>_',extension:'sh',description:'Shell 脚本'}
+ {id:'sql',label:'SQL',icon:svg('typeSql'),extension:'sql',description:'Spark / Flink / Presto / StarRocks / MySQL'},
+ {id:'python',label:'Python',icon:svg('typePython'),extension:'py',description:'Python 脚本'},
+ {id:'spark_jar',label:'Spark JAR',icon:svg('typeSparkJar'),extension:'jar',description:'Spark 程序包',jar:true},
+ {id:'flink_jar',label:'Flink JAR',icon:svg('typeFlinkJar'),extension:'jar',description:'Flink 程序包',jar:true},
+ {id:'shell',label:'Shell',icon:svg('typeShell'),extension:'sh',description:'Shell 脚本'}
 ];
 export const SQL_ENGINES=[{id:'spark',label:'Spark'},{id:'flink',label:'Flink'},{id:'presto',label:'Presto'},{id:'starrocks',label:'StarRocks'},{id:'mysql',label:'MySQL'}];
 export const typeOf=t=>TASK_TYPES.find(k=>k.id===t.type)||TASK_TYPES[0];
