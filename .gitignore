@@ -222,3 +222,9 @@ data/
 
 # 本地数据目录（客服对话包、讲解包、对话数据集等）：仓库是公开的，不要提交
 tools/data/
+
+# 客户数据解压出来的大文件（单个超过 GitHub 100MB；zip 照常提交）
+tools/q_data/*.json
+tools/q_data/*.jsonl
+tools/q_data/*.csv
+tools/q_data/*/

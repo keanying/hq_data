@@ -536,7 +536,8 @@ python cs_synth.py --load-jsonl out/cs_synth_20261110/dialogs.jsonl             
 | 修正（`run`） | 关 | 只许用数据里给的景区资料 / 知识；开联网会把外部事实带进客服回答和讲解词（质检也会把这些数字当编造），还更慢更贵 | `--web-search on` 或 `DATA_FIX_WEB_SEARCH=on` |
 | 知识补充（`enrich`） | 开 | 每条补充都要有出处网址；不联网模型只能凭记忆写，出处靠不住 | `--web-search off` 或 `DATA_FIX_ENRICH_WEB_SEARCH=off`；`--max-keyword` 改搜索关键词数 |
 
-**数据放哪**：默认读 `tools/q_data/客服会话.zip`、`tools/q_data/个性化讲解.zip`（不用解压，压缩包里的中文文件名乱码也没关系），不用写 `--in`。
+**数据放哪**：不用写 `--in`，默认读 `tools/q_data` 下的数据，优先用解压出来的 `客服会话.json`、`个性化讲解.json`（也认 `.jsonl` / `.csv` / 同名目录），
+没有再读 `客服会话.zip`、`个性化讲解.zip`（不用解压，压缩包里的中文文件名乱码也没关系）。解压出来的文件已加进 `.gitignore`（单个超过 GitHub 100MB 上限，仓库又是公开的，别提交）。
 zip 里放 `.json`（数组）/ `.jsonl` / `.csv` 都行；CSV 支持三种：工作台讲解导出的带 `record_json` 列的 CSV、客服的会话表 CSV + 轮次表 CSV（两张一起放）、
 一行一条且嵌套字段（turns / poi / source…）是 JSON 字符串的 CSV；UTF-8 和 GBK 都能读。格式不对的跳过并写进 `invalid.jsonl`，大部分不对就直接报缺哪些字段。
 
@@ -558,6 +559,10 @@ mkdir -p out && nohup python data_fix.py all --workers 32 --enrich --rebalance-l
 `all` 一份跑完再跑下一份，每一步终端里有进度条（百分比、条数、速度、已用 / 剩余时间、修好 / 需复核 / 剔除 / 失败数；输出到日志时每 30 秒一行），
 最后打印每一步的结果汇总。某一步出错会记下来接着跑后面的。中途停了（Ctrl+C、断网），再执行同一条命令从没做完的地方接着做（结果在固定目录 `out/fix_cs/`、`out/fix_narr/`，要从头来就删掉对应目录）。
 单步命令 `run / enrich / merge` 也还在（见 `--help`）。
+
+**最终结果**：原始输入不改；知识补充只生成 `kb_ext.jsonl`，修讲解时并进每条数据。`all` 跑完把两份最终数据汇总到 `out/final/`：
+`客服会话_修正后.json`、`个性化讲解_修正后.json`（全量：没改的原样、改过的带 `source.fix`、剔除的不在里面）、各自的标注交付 L1 / 溯源 sidecar、
+剔除清单、修正报告、`讲解知识补充.jsonl` 和 `总报告.md`（同一磁盘用硬链接，不多占空间）。
 
 建议用比生成时（`glm-5-3-flash`）更强的模型修，也能顺带降低全部数据出自同一个模型的同质化。
 

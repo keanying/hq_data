@@ -3,12 +3,13 @@
 ======================================================================== 完整命令
 （在 tools/ctrip_poi_review 目录下执行；数据默认读 tools/q_data，不用 --in）
 
-数据放法：tools/q_data/客服会话.zip、tools/q_data/个性化讲解.zip
-  zip 里放 .json（数组）/ .jsonl / .csv 都行，不用解压，压缩包里的中文文件名乱码也没关系：
+数据放法：tools/q_data/客服会话.json、tools/q_data/个性化讲解.json（解压出来的，优先用）
+  或 tools/q_data/客服会话.zip、个性化讲解.zip（不用解压，压缩包里的中文文件名乱码也没关系）；
+  .json（数组）/ .jsonl / .csv 都行：
   - JSON / JSONL：一行（一个元素）一条，字段和工作台导出的「完整 JSON」一致（含 source）
   - CSV：① 工作台导出的讲解 CSV（带 record_json 列）；② 客服的会话表 CSV + 轮次表 CSV（两张一起放）；
          ③ 一行一条、嵌套字段（turns / poi / source …）是 JSON 字符串的 CSV
-  也可以放 .json / .csv 文件本身，或解压后的 客服会话/、个性化讲解/ 目录。
+  查找顺序：<名称>.json / .jsonl / .csv → <名称>/ 目录 → <名称>.zip。解压出来的大文件已在 .gitignore（超过 GitHub 100MB，别提交）。
 
   cd tools/ctrip_poi_review
 
@@ -45,7 +46,11 @@
   tail -f out/fix_all.log
 
 ======================================================================== 输出
-  out/fix_cs/、out/fix_narr/（固定目录，断点续跑靠它；要从头来就删掉对应目录）
+  原始输入（tools/q_data 下的文件）不改。all 跑完把最终结果汇总到 out/final/：
+    客服会话_修正后.json、个性化讲解_修正后.json   全量数据（没改的原样保留，改过的带 source.fix，剔除的不在里面）
+    *_标注交付L1.jsonl、*_溯源sidecar.jsonl        标注交付用
+    *_剔除.jsonl、*_修正报告.md、讲解知识补充.jsonl、总报告.md
+  过程文件在 out/fix_cs/、out/fix_narr/（固定目录，断点续跑靠它；要从头来就删掉对应目录）：
     fixed.json           修好的全量数据，格式和输入一致（含 source；source.fix 记录改了什么）
     fixed_l1.jsonl       标注交付 L1（不含答案 / 溯源）
     fixed_sidecar.jsonl  溯源 sidecar（同一个 ID 关联）
@@ -890,15 +895,19 @@ Q_NAMES = {"cs": "客服会话", "narr": "个性化讲解"}
 
 
 def default_input(task):
-    """没给 --in 时找 tools/q_data 下的数据：<名称>.zip / .json / .jsonl / .csv，或 <名称>/ 目录（里面放 json 或 csv）。"""
+    """没给 --in 时找 tools/q_data 下的数据，优先用解压出来的文件：<名称>.json / .jsonl / .csv → <名称>/ 目录 → <名称>.zip。"""
     name = Q_NAMES[task]
-    for ext in (".zip", ".json", ".jsonl", ".csv"):
-        c = Q_DATA / f"{name}{ext}"
-        if c.exists():
-            return c
-    if (Q_DATA / name).is_dir():
-        return Q_DATA / name
-    sys.exit(f"找不到 {name} 的数据：放到 {Q_DATA / (name + '.zip')}（zip 里放 .json / .jsonl / .csv），或用 --in 指定")
+    found = [Q_DATA / f"{name}{ext}" for ext in (".json", ".jsonl", ".csv") if (Q_DATA / f"{name}{ext}").exists()]
+    if not found and (Q_DATA / name).is_dir():
+        found = [Q_DATA / name]
+    if not found and (Q_DATA / f"{name}.zip").exists():
+        found = [Q_DATA / f"{name}.zip"]
+    if not found:
+        sys.exit(f"找不到 {name} 的数据：放 {Q_DATA / (name + '.json')}（或 .jsonl / .csv / .zip），或用 --in 指定")
+    z = Q_DATA / f"{name}.zip"
+    if found[0] != z and z.exists():
+        print(f"[读取] {name}：用解压出来的 {found[0].name}（同目录的 {z.name} 不用；要用 zip 就 --in {z}）", flush=True)
+    return found[0]
 
 
 def _decode(b):
@@ -1489,7 +1498,60 @@ def cmd_all(args):
         elif rep and rep.get("done_now"):
             extra = "  " + " ".join(f"{ENRICH_CN.get(k, k)} {v}" for k, v in rep["done_now"].items() if v)
         print(f"- {title}：{st}（{_hms(el)}）{extra}")
-    print(f"输出目录：{HERE / 'out'}/fix_cs、fix_narr（fixed.json / fixed_l1.jsonl / fixed_sidecar.jsonl / dropped.jsonl / report.md）")
+    final = collect_final(results)
+    print(f"\n最终结果都在 {final}：")
+    for f in sorted(final.iterdir()):
+        print(f"  {f.name:<28} {f.stat().st_size / 1e6:8.1f} MB")
+
+
+FINAL_NAMES = {  # out/final 下的文件名：(来源目录, 来源文件) → 名称
+    ("fix_cs", "fixed.json"): "客服会话_修正后.json", ("fix_cs", "fixed_l1.jsonl"): "客服会话_标注交付L1.jsonl",
+    ("fix_cs", "fixed_sidecar.jsonl"): "客服会话_溯源sidecar.jsonl", ("fix_cs", "dropped.jsonl"): "客服会话_剔除.jsonl",
+    ("fix_cs", "report.md"): "客服会话_修正报告.md",
+    ("fix_narr", "fixed.json"): "个性化讲解_修正后.json", ("fix_narr", "fixed_l1.jsonl"): "个性化讲解_标注交付L1.jsonl",
+    ("fix_narr", "fixed_sidecar.jsonl"): "个性化讲解_溯源sidecar.jsonl", ("fix_narr", "dropped.jsonl"): "个性化讲解_剔除.jsonl",
+    ("fix_narr", "report.md"): "个性化讲解_修正报告.md", ("fix_narr", "kb_ext.jsonl"): "讲解知识补充.jsonl",
+}
+
+
+def collect_final(results=None):
+    """把两份最终数据汇总到 out/final/（中文文件名；同一磁盘用硬链接，不多占空间），再写一份总报告。原始输入不动。"""
+    import shutil
+    final = HERE / "out" / "final"
+    final.mkdir(parents=True, exist_ok=True)
+    for (sub, fn), name in FINAL_NAMES.items():
+        src, dst = HERE / "out" / sub / fn, final / name
+        if not src.exists():
+            continue
+        if dst.exists():
+            dst.unlink()
+        try:
+            os.link(src, dst)
+        except OSError:
+            shutil.copy2(src, dst)
+    lines = [f"# 数据修正总报告（{FIX_VERSION}，{datetime.now():%Y-%m-%d %H:%M}）", ""]
+    for title, st, el, rep in results or []:
+        lines.append(f"- {title}：{st}，用时 {_hms(el)}")
+    lines.append("")
+    for sub, name in (("fix_cs", "客服会话"), ("fix_narr", "个性化讲解")):
+        f = HERE / "out" / sub / "report.md"
+        if f.exists():
+            lines += [f.read_text(encoding="utf-8").replace("# 修正报告：", "## "), ""]
+    ext = HERE / "out" / "fix_narr" / "kb_ext.jsonl"
+    if ext.exists():
+        n_units = n_facts = 0
+        with open(ext, encoding="utf-8") as fh:
+            for line in fh:
+                x = json.loads(line)
+                if x.get("status") == "ok":
+                    n_units += 1
+                    n_facts += len(x.get("facts") or [])
+        lines += ["## 讲解知识补充", "", f"补过的讲解对象 {n_units} 个，补充事实 {n_facts} 条（标注时按 source_url 抽查）", ""]
+    lines += ["## 文件", "", "- `*_修正后.json`：全量数据（没改的原样保留、改过的带 source.fix；剔除的不在里面），格式和输入一致",
+              "- `*_标注交付L1.jsonl` / `*_溯源sidecar.jsonl`：标注交付用（同一个 ID 关联）",
+              "- `*_剔除.jsonl`：剔除的和原因；`*_修正报告.md`：修正前后对比；`讲解知识补充.jsonl`：补充的知识和出处", ""]
+    (final / "总报告.md").write_text("\n".join(lines), encoding="utf-8")
+    return final
 
 
 def report_md(rep):
