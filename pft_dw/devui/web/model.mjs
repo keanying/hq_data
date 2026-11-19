@@ -58,31 +58,87 @@ export function registerTask(data,task,workflowId=null,point=null){
  data.tasks.push(task);if(workflow)workflow.nodes.push({taskId:task.id,x:point.x,y:point.y});
 }
 
+// —— 分层排布（按依赖层级） ——
+// 层级：没有上游的在第 0 层，其余在“所有上游最大层级 + 1”；同层内按上游位置的平均值排序（减少交叉），并列按原顺序。
+// 与 server/seed_pft.py 的同名函数一致（有测试比对）。
+export function levelsOf(ids,edges){
+ const idx=new Map(ids.map((id,i)=>[id,i])),succ=new Map(ids.map(id=>[id,[]])),indeg=new Map(ids.map(id=>[id,0])),seen=new Set(),preds=new Map(ids.map(id=>[id,[]]));
+ for(const [a,b] of edges){if(!idx.has(a)||!idx.has(b)||a===b)continue;const k=a+'\u0000'+b;if(seen.has(k))continue;seen.add(k);succ.get(a).push(b);preds.get(b).push(a);indeg.set(b,indeg.get(b)+1)}
+ const level=new Map(ids.map(id=>[id,0])),queue=ids.filter(id=>!indeg.get(id));
+ for(let q=0;q<queue.length;q++){const x=queue[q];for(const y of succ.get(x)){level.set(y,Math.max(level.get(y),level.get(x)+1));indeg.set(y,indeg.get(y)-1);if(!indeg.get(y))queue.push(y)}}
+ return {level,preds,idx};
+}
+// items:[{id,la,lc}]（沿流向长度、垂直方向宽度）→ Map id→{a,c} 相对坐标
+export function layered(items,edges,gapA,gapC){
+ const ids=items.map(i=>i.id),{level,preds,idx}=levelsOf(ids,edges),L=[];
+ for(const id of ids){const l=level.get(id);(L[l]||(L[l]=[])).push(id)}
+ const order=new Map();
+ L.forEach((lv,l)=>{if(!lv)return;if(l>0){const key=new Map(lv.map((id,i)=>{const ps=preds.get(id).filter(p=>order.has(p));return [id,ps.length?ps.reduce((s,p)=>s+order.get(p),0)/ps.length:i]}));lv.sort((x,y)=>key.get(x)-key.get(y)||idx.get(x)-idx.get(y))}lv.forEach((id,i)=>order.set(id,i))});
+ const out=new Map();let a=0;
+ for(const lv of L){if(!lv)continue;let c=0,m=0;for(const id of lv){const it=items[idx.get(id)];out.set(id,{a,c});c+=it.lc+gapC;m=Math.max(m,it.la)}a+=m+gapA}
+ return out;
+}
+// 展开分组时重新排布组内内容：直属任务与子分组按依赖层级排列，组的左上角位置不变
+export function layoutGroupInner(flow,g,TB){
+ const kids=flow.groups.filter(c=>c.parent===g.id),inKid=new Map();kids.forEach(k=>k.ids.forEach(id=>inKid.set(id,k.id)));
+ for(const k of kids)if(!k.collapsed)layoutGroupInner(flow,k,TB);
+ const before=groupBounds(flow,{...g,collapsed:false});if(!before)return;
+ const pos=new Map(flow.nodes.map(n=>[n.taskId,n])),unit=id=>inKid.get(id)??id;
+ const items=[];
+ for(const id of g.ids){if(!pos.has(id))continue;const u=unit(id);if(items.some(i=>i.id===u))continue;
+  if(u===id)items.push({id,la:TB?96:192,lc:TB?192:96});else{const k=kids.find(k=>k.id===u),b=groupBounds(flow,k);if(b)items.push({id:u,la:TB?b.h:b.w,lc:TB?b.w:b.h,b})}}
+ const edges=flow.edges.map(([a,b])=>[unit(a),unit(b)]);
+ const at=layered(items,edges,TB?50:60,TB?30:24),ox=before.x+18,oy=before.y+47;
+ for(const it of items){const o=at.get(it.id),x=ox+(TB?o.c:o.a),y=oy+(TB?o.a:o.c);
+  if(it.b){const dx=x-it.b.x,dy=y-it.b.y;for(const id of kids.find(k=>k.id===it.id).ids){const n=pos.get(id);if(n){n.x+=dx;n.y+=dy}}}
+  else{const n=pos.get(it.id);n.x=x;n.y=y}}
+}
+// 普通工作流的自动布局：展开的分组先排内部，再把顶层的任务与分组按依赖层级排列
+export function autoLayered(flow,TB){
+ const tops=flow.groups.filter(g=>!g.parent);for(const g of tops)if(!g.collapsed)layoutGroupInner(flow,g,TB);
+ const pos=new Map(flow.nodes.map(n=>[n.taskId,n])),topOf=new Map();tops.forEach(g=>g.ids.forEach(id=>topOf.set(id,g.id)));
+ const unit=id=>topOf.get(id)??id,items=[];
+ for(const n of flow.nodes){const u=unit(n.taskId);if(items.some(i=>i.id===u))continue;
+  if(u===n.taskId)items.push({id:u,la:TB?96:192,lc:TB?192:96});else{const g=tops.find(g=>g.id===u),b=groupBounds(flow,g);if(b)items.push({id:u,la:TB?b.h:b.w,lc:TB?b.w:b.h,b,g})}}
+ if(!items.length)return;
+ const at=layered(items,flow.edges.map(([a,b])=>[unit(a),unit(b)]),TB?70:90,TB?40:40),x0=80,y0=120;
+ for(const it of items){const o=at.get(it.id),x=x0+(TB?o.c:o.a),y=y0+(TB?o.a:o.c);
+  if(it.b){const dx=x-it.b.x,dy=y-it.b.y;for(const id of it.g.ids){const n=pos.get(id);if(n){n.x+=dx;n.y+=dy}}}else{const n=pos.get(it.id);n.x=x;n.y=y}}
+}
+
 // 泳道自动排布（flow.layout 由 PFT 项目种子写入，与 server/seed_pft.py 的 relayout 同一算法）
-// 网格：泳道（分层）沿流向排列，行=数据域；dir=LR 时流向从左到右、TB 时从上到下。
-// 分支（如 DIM）贴在锚定泳道一侧的网格外，按 cols 列排布。分组折叠/展开后重新计算，展开的分组不会与相邻分组重叠。
+// 网格：泳道（分层）沿流向排列，行=数据域；同一泳道里互相依赖的数据域按层级分成子列。dir=LR 从左到右、TB 从上到下。
+// 分支（如 DIM）贴在锚定泳道一侧的网格外，按依赖层级排布。分组折叠/展开后重新计算，展开的分组不会与相邻分组重叠。
 export function relayout(flow){
  const L=flow?.layout;if(!L||!L.lanes)return false;
  const TB=L.dir==='TB',pos=new Map(flow.nodes.map(n=>[n.taskId,n])),G=new Map(flow.groups.map(g=>[g.id,g]));
  const ext=gid=>{const g=G.get(gid),b=g&&groupBounds(flow,g);return b?{b,la:TB?b.h:b.w,lc:TB?b.w:b.h}:null};
  const put=(gid,a,c)=>{const e=ext(gid);if(!e)return;const x=TB?c:a,y=TB?a:c,dx=x-e.b.x,dy=y-e.b.y;for(const id of G.get(gid).ids){const n=pos.get(id);if(n){n.x+=dx;n.y+=dy}}};
- const laneGap=L.laneGap??150,rowGap=L.rowGap??40,A0=L.a0??380,C0=L.c0??160,base=L.rows||[],extra=[];
+ const laneGap=L.laneGap??150,rowGap=L.rowGap??40,subGap=L.subGap??60,A0=L.a0??380,C0=L.c0??160,base=L.rows||[],extra=[];
  for(const lane of L.lanes)for(const r of Object.keys(L.cells[lane]||{}))if(!base.includes(r)&&!extra.includes(r))extra.push(r);   // 不属于数据域的格子（如对账）排在数据域行之后
  const rows=[...base,...extra],ri=r=>Math.max(0,rows.indexOf(r));
- const laneSize=L.lanes.map(()=>0),rowSize=rows.length?rows.map(()=>0):[0];
+ // 格子之间的依赖（由任务连线归并）
+ const cellOf=new Map();for(const lane of L.lanes)for(const gid of Object.values(L.cells[lane]||{}))(G.get(gid)?.ids||[]).forEach(id=>cellOf.set(id,gid));
+ for(const gid of L.branch?.groups||[])(G.get(gid)?.ids||[]).forEach(id=>cellOf.set(id,gid));
+ const cellEdges=flow.edges.map(([a,b])=>[cellOf.get(a),cellOf.get(b)]).filter(([a,b])=>a&&b&&a!==b);
+ const laneSize=L.lanes.map(()=>0),rowSize=rows.length?rows.map(()=>0):[0],subs=[];
  const LG=L.laneGroups||{},folded=lane=>!!G.get(LG[lane])?.collapsed,inLane=(lane,gid)=>!!LG[lane]&&G.get(gid)?.parent===LG[lane];
  const pad=lane=>LG[lane]&&!folded(lane)?(TB?47:18):0,padSize=lane=>LG[lane]&&!folded(lane)?(TB?64:36):0;
- L.lanes.forEach((lane,i)=>{const f=folded(lane);if(f){const e=ext(LG[lane]);if(e){laneSize[i]=e.la;rowSize[0]=Math.max(rowSize[0],e.lc)}}
-  for(const [r,gid] of Object.entries(L.cells[lane]||{})){if(f&&inLane(lane,gid))continue;const e=ext(gid);if(!e)continue;laneSize[i]=Math.max(laneSize[i],e.la+padSize(lane));rowSize[ri(r)]=Math.max(rowSize[ri(r)],e.lc)}});
+ L.lanes.forEach((lane,i)=>{const f=folded(lane),cells=Object.entries(L.cells[lane]||{}).filter(([,gid])=>!(f&&inLane(lane,gid))&&ext(gid));
+  const lv=levelsOf(cells.map(([,g])=>g),cellEdges).level,sub=[];
+  for(const [r,gid] of cells){const e=ext(gid),k=lv.get(gid);sub[k]=Math.max(sub[k]||0,e.la);rowSize[ri(r)]=Math.max(rowSize[ri(r)],e.lc)}
+  const so=[];let acc=0;for(let k=0;k<sub.length;k++){so[k]=acc;if(sub[k])acc+=sub[k]+subGap}
+  subs[i]={lv,so};
+  let size=sub.length?acc-subGap:0;
+  if(f){const e=ext(LG[lane]);if(e){size=Math.max(size,e.la);rowSize[0]=Math.max(rowSize[0],e.lc)}}else if(size)size+=padSize(lane);
+  laneSize[i]=size});
  const lanePos=[];let a=A0;laneSize.forEach((s,i)=>{lanePos[i]=a;if(s)a+=s+laneGap});
  const rowPos=[];let c=C0;rowSize.forEach((s,i)=>{rowPos[i]=c;if(s)c+=s+rowGap});
- L.lanes.forEach((lane,i)=>{const f=folded(lane);if(f)put(LG[lane],lanePos[i],rowPos[0]);for(const [r,gid] of Object.entries(L.cells[lane]||{})){if(f&&inLane(lane,gid))continue;put(gid,lanePos[i]+pad(lane),rowPos[ri(r)])}});
- if(L.branch&&G.get(L.branch.group)?.collapsed){put(L.branch.group,lanePos[Math.max(0,L.lanes.indexOf(L.branch.anchor))],c-rowGap+(L.branch.gap??150))}
- else if(L.branch){const B=L.branch,cols=B.cols||2,ai=Math.max(0,L.lanes.indexOf(B.anchor)),es=B.groups.map(ext),sub=Array(cols).fill(0),brow=[];
-  es.forEach((e,i)=>{if(!e)return;sub[i%cols]=Math.max(sub[i%cols],e.la);const r=Math.floor(i/cols);brow[r]=Math.max(brow[r]||0,e.lc)});
-  const subPos=[];let sa=lanePos[ai];sub.forEach((s,k)=>{subPos[k]=sa;sa+=s+90});
-  const bPos=[];let bc=c-rowGap+(B.gap??150);brow.forEach((s,r)=>{bPos[r]=bc;bc+=s+rowGap});
-  B.groups.forEach((gid,i)=>put(gid,subPos[i%cols],bPos[Math.floor(i/cols)]))}
+ L.lanes.forEach((lane,i)=>{const f=folded(lane);if(f)put(LG[lane],lanePos[i],rowPos[0]);for(const [r,gid] of Object.entries(L.cells[lane]||{})){if(f&&inLane(lane,gid))continue;const k=subs[i].lv.get(gid)??0;put(gid,lanePos[i]+pad(lane)+(subs[i].so[k]||0),rowPos[ri(r)])}});
+ const ai=L.branch?Math.max(0,L.lanes.indexOf(L.branch.anchor)):0,bc=c-rowGap+(L.branch?.gap??150);
+ if(L.branch&&G.get(L.branch.group)?.collapsed)put(L.branch.group,lanePos[ai],bc);
+ else if(L.branch){const items=L.branch.groups.map(gid=>{const e=ext(gid);return e&&{id:gid,la:e.la,lc:e.lc}}).filter(Boolean);
+  const at=layered(items,cellEdges,90,rowGap);for(const it of items){const o=at.get(it.id);put(it.id,lanePos[ai]+o.a,bc+o.c)}}
  const node=(id,na,nc)=>{const n=pos.get(id);if(n){n.x=TB?nc:na;n.y=TB?na:nc}};
  if(L.start)node(L.start,A0-(TB?96:192)-laneGap,C0);
  if(L.end)node(L.end,a,C0);

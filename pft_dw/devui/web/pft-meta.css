@@ -93,3 +93,18 @@
 .commit-btn{position:relative}
 .commit-btn.has-changes{border-color:#3268ef;color:#3268ef}
 .commit-btn.has-changes:after{content:"";position:absolute;top:-3px;right:-3px;width:8px;height:8px;border-radius:50%;background:#f08a24;border:2px solid #fff}
+/* 依赖层级标记 */
+.level-badges{position:absolute;left:0;top:0;pointer-events:none}
+.level-badge{position:absolute;z-index:6;font:600 10px/16px Consolas,monospace;color:#5b6fa0;background:#eef2fb;border:1px solid #d4ddf0;border-radius:8px;padding:0 6px}
+/* 参数描述 */
+.parameter-row .parameter-desc{grid-column:1/-1;margin-top:-1px;font-size:11px;color:#6b7891;background:#f7f9fd;border:1px dashed #dfe6f2;border-radius:5px;padding:4px 7px}
+.parameter-row{padding-bottom:8px;border-bottom:1px dashed #edf1f7}
+/* 参数设置：收起时为窄条，鼠标悬停覆盖展开 */
+.dev-parameters{transition:width .16s ease,box-shadow .16s ease;z-index:20}
+.dev-parameters-tab{display:none}
+.dev-parameters-collapsed .dev-parameters-tab{display:block;writing-mode:vertical-rl;letter-spacing:3px;font-size:12px;color:#7d8ca2;margin:14px auto 0;cursor:default}
+.dev-parameters-collapsed .dev-parameters:hover,.dev-parameters-collapsed .dev-parameters:focus-within{width:350px;box-shadow:-10px 0 24px #22304a1f;transition-delay:.08s}
+.dev-parameters-collapsed .dev-parameters:hover .dev-parameters-tab,.dev-parameters-collapsed .dev-parameters:focus-within .dev-parameters-tab{display:none}
+.dev-parameters-collapsed .dev-parameters:hover header,.dev-parameters-collapsed .dev-parameters:focus-within header{padding:0 15px;justify-content:space-between}
+.dev-parameters-collapsed .dev-parameters:hover header strong,.dev-parameters-collapsed .dev-parameters:hover #devParameterBody,
+.dev-parameters-collapsed .dev-parameters:focus-within header strong,.dev-parameters-collapsed .dev-parameters:focus-within #devParameterBody{display:block}

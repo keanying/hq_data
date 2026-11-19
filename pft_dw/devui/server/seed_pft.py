@@ -25,7 +25,16 @@ LAYERS = ["ODS", "DIM", "DWD", "DWS", "ADS"]
 TASK_W, TASK_H = 192, 96
 PAIR_DX, PITCH_X, PITCH_Y = 222, 470, 128
 COL_GAP, ROW_GAP, BRANCH_GAP = 150, 40, 150
-LAYOUT_VERSION = 5   # 排布结构版本：变化时启动会升级已有 PFT 项目的工作流排布（不动任务代码）
+PARAM_DESC = {
+    "bizdate": "业务日期（YYYYMMDD），调度日前一天；分区 travel_date 取此值",
+    "bizdate_dash": "业务日期（yyyy-MM-dd），用于拉链表 start_date/end_date",
+    "bizdate_prev": "业务日期前一天（YYYYMMDD），读取前一日快照/拉链分区",
+    "bizdate_prev_dash": "业务日期前一天（yyyy-MM-dd），拉链闭链日期",
+    "bizdate_minus_7": "业务日期前 7 天（YYYYMMDD），质量规则的环比基线",
+    "bizdate_begin": "业务日期 00:00:00，增量抽取的起始时间（含）",
+    "bizdate_end": "调度日 00:00:00，增量抽取的截止时间（不含）",
+}
+LAYOUT_VERSION = 6   # 排布结构版本：变化时启动会升级已有 PFT 项目的工作流排布（不动任务代码）
 
 
 def load():
@@ -75,8 +84,108 @@ def bounds(flow, g):
     return (b[0], b[1], 240, 82) if g.get("collapsed") else b
 
 
+# ---------- 分层排布（按依赖层级，与 web/model.mjs 的 levelsOf / layered / layoutGroupInner 一致） ----------
+def levels_of(ids, edges):
+    idx = {x: i for i, x in enumerate(ids)}
+    succ, preds, indeg, seen = {x: [] for x in ids}, {x: [] for x in ids}, {x: 0 for x in ids}, set()
+    for a, b in edges:
+        if a not in idx or b not in idx or a == b or (a, b) in seen:
+            continue
+        seen.add((a, b))
+        succ[a].append(b)
+        preds[b].append(a)
+        indeg[b] += 1
+    level = {x: 0 for x in ids}
+    queue = [x for x in ids if not indeg[x]]
+    q = 0
+    while q < len(queue):
+        x = queue[q]
+        q += 1
+        for y in succ[x]:
+            level[y] = max(level[y], level[x] + 1)
+            indeg[y] -= 1
+            if not indeg[y]:
+                queue.append(y)
+    return level, preds, idx
+
+
+def layered(items, edges, gap_a, gap_c):
+    """items: [{id, la, lc}] -> {id: (a, c)}"""
+    ids = [i["id"] for i in items]
+    level, preds, idx = levels_of(ids, edges)
+    L = {}
+    for x in ids:
+        L.setdefault(level[x], []).append(x)
+    order = {}
+    for l in range(max(L) + 1 if L else 0):
+        lv = L.get(l)
+        if not lv:
+            continue
+        if l > 0:
+            key = {}
+            for i, x in enumerate(lv):
+                ps = [p for p in preds[x] if p in order]
+                key[x] = sum(order[p] for p in ps) / len(ps) if ps else i
+            lv.sort(key=lambda x: (key[x], idx[x]))
+        for i, x in enumerate(lv):
+            order[x] = i
+    out, a = {}, 0
+    for l in range(max(L) + 1 if L else 0):
+        lv = L.get(l)
+        if not lv:
+            continue
+        c, m = 0, 0
+        for x in lv:
+            it = items[idx[x]]
+            out[x] = (a, c)
+            c += it["lc"] + gap_c
+            m = max(m, it["la"])
+        a += m + gap_a
+    return out
+
+
+def layout_group_inner(flow, g, TB=False):
+    """组内内容（直属任务与子分组）按依赖层级排列，组的左上角位置不变"""
+    kids = [c for c in flow["groups"] if c.get("parent") == g["id"]]
+    in_kid = {i: k["id"] for k in kids for i in k["ids"]}
+    for k in kids:
+        if not k.get("collapsed"):
+            layout_group_inner(flow, k, TB)
+    before = bounds(flow, dict(g, collapsed=False))
+    if not before:
+        return
+    pos = {n["taskId"]: n for n in flow["nodes"]}
+    unit = lambda i: in_kid.get(i, i)
+    items, have = [], set()
+    for i in g["ids"]:
+        if i not in pos or unit(i) in have:
+            continue
+        u = unit(i)
+        have.add(u)
+        if u == i:
+            items.append({"id": i, "la": 96 if TB else 192, "lc": 192 if TB else 96})
+        else:
+            b = bounds(flow, next(k for k in kids if k["id"] == u))
+            if b:
+                items.append({"id": u, "la": b[3] if TB else b[2], "lc": b[2] if TB else b[3], "b": b})
+    at = layered(items, [[unit(a), unit(b)] for a, b in flow["edges"]], 50 if TB else 60, 30 if TB else 24)
+    ox, oy = before[0] + 18, before[1] + 47
+    for it in items:
+        oa, oc = at[it["id"]]
+        x, y = ox + (oc if TB else oa), oy + (oa if TB else oc)
+        if "b" in it:
+            dx, dy = x - it["b"][0], y - it["b"][1]
+            for i in next(k for k in kids if k["id"] == it["id"])["ids"]:
+                if i in pos:
+                    pos[i]["x"] += dx
+                    pos[i]["y"] += dy
+        else:
+            pos[it["id"]]["x"], pos[it["id"]]["y"] = x, y
+
+
 def relayout(flow):
-    """网格：泳道（分层）沿流向排列，行=数据域；dir=LR 从左到右，TB 从上到下；分支贴在锚定泳道一侧的网格外。"""
+    """网格：泳道（分层）沿流向排列，行=数据域，同一泳道里互相依赖的数据域按层级分子列；
+    dir=LR 从左到右，TB 从上到下；分支贴在锚定泳道一侧的网格外，按依赖层级排布。"""
     L = flow.get("layout")
     if not L or not L.get("lanes"):
         return False
@@ -102,7 +211,7 @@ def relayout(flow):
                 pos[i]["x"] += dx
                 pos[i]["y"] += dy
 
-    lane_gap, row_gap = L.get("laneGap", 150), L.get("rowGap", 40)
+    lane_gap, row_gap, sub_gap = L.get("laneGap", 150), L.get("rowGap", 40), L.get("subGap", 60)
     A0, C0, base = L.get("a0", 380), L.get("c0", 160), L.get("rows", [])
     extra = []        # 不属于数据域的格子（如对账）排在数据域行之后
     for lane in L["lanes"]:
@@ -111,6 +220,15 @@ def relayout(flow):
                 extra.append(r)
     rows = base + extra
     ri = lambda r: rows.index(r) if r in rows else 0
+    cell_of = {}
+    for lane in L["lanes"]:
+        for gid in L["cells"].get(lane, {}).values():
+            for i in G.get(gid, {}).get("ids", []):
+                cell_of[i] = gid
+    for gid in (L.get("branch") or {}).get("groups", []):
+        for i in G.get(gid, {}).get("ids", []):
+            cell_of[i] = gid
+    cell_edges = [[cell_of[a], cell_of[b]] for a, b in flow["edges"] if a in cell_of and b in cell_of and cell_of[a] != cell_of[b]]
     LG = L.get("laneGroups", {})
     folded = lambda lane: bool(G.get(LG.get(lane), {}).get("collapsed"))
     in_lane = lambda lane, gid: bool(LG.get(lane)) and G.get(gid, {}).get("parent") == LG[lane]
@@ -118,20 +236,31 @@ def relayout(flow):
     pad_size = lambda lane: (64 if TB else 36) if LG.get(lane) and not folded(lane) else 0
     lane_size = [0] * len(L["lanes"])
     row_size = [0] * max(1, len(rows))
+    subs = []
     for i, lane in enumerate(L["lanes"]):
         f = folded(lane)
+        cells = [(r, gid) for r, gid in L["cells"].get(lane, {}).items() if not (f and in_lane(lane, gid)) and ext(gid)]
+        lv = levels_of([gid for _, gid in cells], cell_edges)[0]
+        sub = {}
+        for r, gid in cells:
+            e = ext(gid)
+            sub[lv[gid]] = max(sub.get(lv[gid], 0), e[1])
+            row_size[ri(r)] = max(row_size[ri(r)], e[2])
+        so, acc = {}, 0
+        for k in range(max(sub) + 1 if sub else 0):
+            so[k] = acc
+            if sub.get(k):
+                acc += sub[k] + sub_gap
+        subs.append((lv, so))
+        size = acc - sub_gap if sub else 0
         if f:
             e = ext(LG[lane])
             if e:
-                lane_size[i] = e[1]
+                size = max(size, e[1])
                 row_size[0] = max(row_size[0], e[2])
-        for r, gid in L["cells"].get(lane, {}).items():
-            if f and in_lane(lane, gid):
-                continue
-            e = ext(gid)
-            if e:
-                lane_size[i] = max(lane_size[i], e[1] + pad_size(lane))
-                row_size[ri(r)] = max(row_size[ri(r)], e[2])
+        elif size:
+            size += pad_size(lane)
+        lane_size[i] = size
     lane_pos, a = [], A0
     for s in lane_size:
         lane_pos.append(a)
@@ -146,33 +275,26 @@ def relayout(flow):
         f = folded(lane)
         if f:
             put(LG[lane], lane_pos[i], row_pos[0])
+        lv, so = subs[i]
         for r, gid in L["cells"].get(lane, {}).items():
             if f and in_lane(lane, gid):
                 continue
-            put(gid, lane_pos[i] + pad(lane), row_pos[ri(r)])
+            put(gid, lane_pos[i] + pad(lane) + so.get(lv.get(gid, 0), 0), row_pos[ri(r)])
     B = L.get("branch")
+    ai = L["lanes"].index(B["anchor"]) if B and B.get("anchor") in L["lanes"] else 0
+    bc = c - row_gap + (B.get("gap", 150) if B else 150)
     if B and G.get(B.get("group"), {}).get("collapsed"):
-        ai = L["lanes"].index(B["anchor"]) if B.get("anchor") in L["lanes"] else 0
-        put(B["group"], lane_pos[ai], c - row_gap + B.get("gap", 150))
+        put(B["group"], lane_pos[ai], bc)
     elif B:
-        cols = B.get("cols", 2)
-        ai = L["lanes"].index(B["anchor"]) if B.get("anchor") in L["lanes"] else 0
-        es = [ext(g) for g in B["groups"]]
-        sub, brow = [0] * cols, {}
-        for i, e in enumerate(es):
+        items = []
+        for gid in B["groups"]:
+            e = ext(gid)
             if e:
-                sub[i % cols] = max(sub[i % cols], e[1])
-                brow[i // cols] = max(brow.get(i // cols, 0), e[2])
-        sub_pos, sa = [], lane_pos[ai]
-        for s in sub:
-            sub_pos.append(sa)
-            sa += s + 90
-        b_pos, bc = {}, c - row_gap + B.get("gap", 150)
-        for r in sorted(brow):
-            b_pos[r] = bc
-            bc += brow[r] + row_gap
-        for i, gid in enumerate(B["groups"]):
-            put(gid, sub_pos[i % cols], b_pos.get(i // cols, bc))
+                items.append({"id": gid, "la": e[1], "lc": e[2]})
+        at = layered(items, cell_edges, 90, row_gap)
+        for it in items:
+            oa, oc = at[it["id"]]
+            put(it["id"], lane_pos[ai] + oa, bc + oc)
 
     def node(i, na, nc):
         if i in pos:
@@ -273,13 +395,14 @@ def build():
     # ---------- 工作流 ----------
     flows = []
     fmeta = {f["id"]: f for f in W["flows"]}
-    params = [{"name": "bizdate", "type": "expression", "value": "$[yyyyMMdd-1]"},
-              {"name": "bizdate_dash", "type": "expression", "value": "$[yyyy-MM-dd-1]"},
-              {"name": "bizdate_prev", "type": "expression", "value": "$[yyyyMMdd-2]"},
-              {"name": "bizdate_prev_dash", "type": "expression", "value": "$[yyyy-MM-dd-2]"},
-              {"name": "bizdate_minus_7", "type": "expression", "value": "$[yyyyMMdd-8]"},
-              {"name": "bizdate_begin", "type": "expression", "value": "$[yyyy-MM-dd-1] 00:00:00"},
-              {"name": "bizdate_end", "type": "expression", "value": "$[yyyy-MM-dd] 00:00:00"}]
+    params = [dict(p, desc=PARAM_DESC[p["name"]]) for p in [
+        {"name": "bizdate", "type": "expression", "value": "$[yyyyMMdd-1]"},
+        {"name": "bizdate_dash", "type": "expression", "value": "$[yyyy-MM-dd-1]"},
+        {"name": "bizdate_prev", "type": "expression", "value": "$[yyyyMMdd-2]"},
+        {"name": "bizdate_prev_dash", "type": "expression", "value": "$[yyyy-MM-dd-2]"},
+        {"name": "bizdate_minus_7", "type": "expression", "value": "$[yyyyMMdd-8]"},
+        {"name": "bizdate_begin", "type": "expression", "value": "$[yyyy-MM-dd-1] 00:00:00"},
+        {"name": "bizdate_end", "type": "expression", "value": "$[yyyy-MM-dd] 00:00:00"}]]
 
     def edges_of(fnodes, ids):
         out, seen = [], set()
@@ -378,6 +501,10 @@ def build():
         flow["layout"] = layout
         ids = {n["taskId"] for n in flow["nodes"]}
         flow["edges"] = edges_of(fnodes, ids)
+        wrappers = set(layout.get("laneGroups", {}).values()) | ({layout["branch"]["group"]} if layout.get("branch") else set())
+        for g in flow["groups"]:            # 组内任务按依赖层级排好（展开时即为分层视图）
+            if g["id"] not in wrappers and not any(c.get("parent") == g["id"] for c in flow["groups"]):
+                layout_group_inner(flow, g)
         relayout(flow)
         flows.append(flow)
         return flow
@@ -508,6 +635,12 @@ def upgrade_layout(store, fresh):
         f["layout"] = dict(nf["layout"], dir=dir_)
         relayout(f)
         changed.append(f["name"])
+    for f in cur["flows"]:            # 补全参数描述（不覆盖用户填写的）
+        for prm in f.get("parameters") or []:
+            if not prm.get("desc") and prm.get("name") in PARAM_DESC:
+                prm["desc"] = PARAM_DESC[prm["name"]]
+                if f["name"] not in changed:
+                    changed.append(f["name"])
     if changed:
         store.save_draft(PID, cur)
         print("已升级工作流排布：" + "、".join(changed))

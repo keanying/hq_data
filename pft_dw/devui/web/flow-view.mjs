@@ -4,8 +4,9 @@
 //     同一来源的线共用一条主干（看起来像一棵树），到了目标卡片再按来向分开落点
 //  3. 连线一律从卡片的连接点画出、画入
 //  4. 方向：左右（LR）或上下（TB）；带泳道的工作流按泳道网格重排，普通工作流整体转置
-//  5. 传递冗余的连线（A→B→C 已成立时的 A→C）不画；选中节点时相关连线按流向流动，其余连线照常静态显示
-import {groupBounds, hiddenGroup, groupDepth} from './model.mjs';
+//  5. 依赖照实画；收起的分组把组内外的多条线收敛成一条；选中节点时相关连线按流向流动
+//  6. 依赖分层：每张卡片右上角标出它在所在容器（分组内或全局）里的依赖层级
+import {groupBounds, hiddenGroup, groupDepth, levelsOf} from './model.mjs';
 
 const TRACK = 12;       // 轨道最大间距
 
@@ -159,7 +160,8 @@ export function edgeView(flow, projected) {
   const box = b => TB ? {a: b.y, c: b.x, la: b.h, lc: b.w} : {a: b.x, c: b.y, la: b.w, lc: b.h};
   const map = (a, c) => TB ? [c, a] : [a, c];
   const lanes = !!flow?.layout?.lanes;
-  const red = lanes ? redundant(projected) : projected.map(() => false);
+  // 依赖照实画：E 直接依赖 A、B 就画 A→E、B→E（不再隐藏传递依赖）；收起分组后同一对卡片之间只留一条线
+  const red = projected.map(() => false);
   const g = lanes ? geometry(flow) : null;
   const plans = projected.map(({from: f, to: t}, i) => {
     const F = box(f), T = box(t), sa = F.a + F.la, ta = T.a;
@@ -233,4 +235,31 @@ export function highlight(svg, keys, root) {
   if (legend) { legend.hidden = !on; legend.innerHTML = `<span class="lg-in">上游流入 ${ins}</span><span class="lg-out">下游流出 ${outs}</span>`; }
   root.querySelectorAll('.node[data-id]').forEach(el => el.classList.toggle('hl-near', near.has('task:' + el.dataset.id)));
   root.querySelectorAll('[data-group-box]').forEach(el => el.classList.toggle('hl-near', near.has('group:' + el.dataset.groupBox)));
+}
+
+// 依赖分层标记：卡片在所在容器（展开的分组，或整个工作流）里的层级。没有上游的为第 1 层。
+// 泳道工作流的顶层（ODS/DWD/…）本身就是分层，不再标注。
+export function levelBadges(flow, items) {
+  const G = new Map(flow.groups.map(g => [g.id, g])), lanes = !!flow?.layout?.lanes;
+  const depth = new Map(flow.groups.map(g => [g.id, groupDepth(flow, g)]));
+  const inner = new Map();   // 任务 -> 最内层分组
+  flow.groups.forEach(g => g.ids.forEach(id => { const c = inner.get(id); if (!c || depth.get(g.id) > depth.get(c)) inner.set(id, g.id); }));
+  const containerOf = it => {
+    if (it.groupId) return G.get(it.groupId)?.parent || '';
+    return inner.get(it.ids[0]) || '';
+  };
+  const byC = new Map();
+  for (const it of items) { const c = containerOf(it); if (!byC.has(c)) byC.set(c, []); byC.get(c).push(it); }
+  const out = [];
+  for (const [c, list] of byC) {
+    if (!c && lanes) continue;
+    if (list.length < 2) continue;
+    const unitOf = new Map();
+    list.forEach(it => it.ids.forEach(id => unitOf.set(id, it.key)));
+    const edges = flow.edges.map(([a, b]) => [unitOf.get(a), unitOf.get(b)]).filter(([a, b]) => a && b);
+    if (!edges.some(([a, b]) => a !== b)) continue;
+    const {level} = levelsOf(list.map(it => it.key), edges);
+    list.forEach(it => out.push({it, level: level.get(it.key) + 1}));
+  }
+  return out;
 }
