@@ -2,14 +2,13 @@
 //  1. 连线两种画法：折线（ortho，走卡片之间的通道）与曲线（curve，贝塞尔）
 //  2. 折线按“通道 + 轨道”分配：同一通道里不同来源的竖线各占一条轨道，互不重叠；
 //     同一来源的线共用一条主干（看起来像一棵树），到了目标卡片再按来向分开落点
-//  3. 每张卡片的入口按来向上下（纵向布局为左右）错开，几条线不会挤在同一个点上
+//  3. 连线一律从卡片的连接点画出、画入
 //  4. 方向：左右（LR）或上下（TB）；带泳道的工作流按泳道网格重排，普通工作流整体转置
-//  5. 传递冗余的连线（A→B→C 已成立时的 A→C）不画；选中节点时相关连线按流向流动
+//  5. 传递冗余的连线（A→B→C 已成立时的 A→C）不画；选中节点时相关连线按流向流动，其余连线照常静态显示
 import {groupBounds, hiddenGroup, groupDepth} from './model.mjs';
 
 const CH = 45;          // 分支卡片旁的走线间距
 const TRACK = 12;       // 轨道最大间距
-const SIDE = 0.18;      // 卡片边缘留白比例（入口错开时不贴边）
 
 export const viewDir = flow => (flow?.layout?.lanes ? flow.layout.dir : flow?.view?.dir) === 'TB' ? 'TB' : 'LR';
 export const edgeStyle = flow => flow?.view?.edge === 'curve' ? 'curve' : 'ortho';
@@ -132,17 +131,6 @@ function tracks() {
   };
 }
 
-// 每张卡片的一侧按来向（或去向）排序后均匀错开落点
-function spread(groups, box) {
-  const at = new Map();
-  for (const [, list] of groups) {
-    list.sort((p, q) => p.order - q.order);
-    const b = box(list[0].item), k = list.length;
-    list.forEach((e, j) => at.set(e.i, k === 1 ? b.c + b.lc / 2 : b.c + b.lc * (SIDE + (1 - 2 * SIDE) * (j + .5) / k)));
-  }
-  return at;
-}
-
 export function edgeView(flow, projected) {
   const TB = viewDir(flow) === 'TB', style = edgeStyle(flow);
   const box = b => TB ? {a: b.y, c: b.x, la: b.h, lc: b.w} : {a: b.x, c: b.y, la: b.w, lc: b.h};
@@ -160,19 +148,10 @@ export function edgeView(flow, projected) {
       else if (lt > lf && g.gutter(lf)?.center === g.before(lt)?.center) kind = 'adj';
       else kind = 'skip';
     }
-    const approachIn = kind === 'adj' || kind === 'simple' ? F.c + F.lc / 2 : kind === 'skip' ? -1e9 : (lt === 'B' ? -1e9 : 1e9);
-    const approachOut = kind === 'adj' || kind === 'simple' ? T.c + T.lc / 2 : kind === 'skip' ? -1e9 : (lf === 'B' ? -1e9 : 1e9);
-    return {i, f, t, F, T, lf, lt, kind, approachIn, approachOut};
+    return {i, f, t, F, T, lf, lt, kind};
   });
-  // 落点错开：入口始终错开；出口在曲线模式下错开，折线模式共用主干从中点出发
-  const ins = new Map(), outs = new Map();
-  plans.forEach(p => {
-    if (!red[p.i]) {
-      (ins.get(p.t.key) || ins.set(p.t.key, []).get(p.t.key)).push({i: p.i, item: p.t, order: p.approachIn});
-      (outs.get(p.f.key) || outs.set(p.f.key, []).get(p.f.key)).push({i: p.i, item: p.f, order: p.approachOut});
-    }
-  });
-  const inAt = spread(ins, box), outAt = style === 'curve' ? spread(outs, box) : new Map();
+  // 连线一律从卡片的连接点（出口/入口圆点）画出、画入，不再错开落点
+  const inAt = new Map(), outAt = new Map();
   const tc = p => inAt.get(p.i) ?? p.T.c + p.T.lc / 2, sc = p => outAt.get(p.i) ?? p.F.c + p.F.lc / 2;
   // 开始/结束节点的线是调度控制（就绪检查、发布），不是数据流向，画得更淡
   const ctl = p => g && (p.lf === 0 || p.lt === g.endLane);
@@ -254,7 +233,7 @@ export function highlight(svg, keys, root) {
     el.classList.toggle('edge-in', inn && !out);       // 流入选中节点（上游）
     el.querySelector('.edge')?.setAttribute('marker-end', out ? 'url(#arrowOut)' : inn ? 'url(#arrowIn)' : 'url(#arrow)');
     if (out) outs++; if (inn && !out) ins++;
-    if (hit) { near.add(el.dataset.from); near.add(el.dataset.to); }
+    if (hit) { near.add(el.dataset.from); near.add(el.dataset.to); svg.append(el); }   // 移到最上层，流动的线不被静态线压住
   });
   keys.forEach(k => near.delete(k));
   const host = root.closest('.canvas');
