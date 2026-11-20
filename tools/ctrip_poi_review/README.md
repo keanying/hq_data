@@ -628,6 +628,10 @@ python data_fix.py all --tasks narr --enrich --workers 32 --rebalance-limits --r
 | `import_candidates.py` | 导入离线候选 CSV |
 | `import_ctrip_master.py` | 导入携程景区主档（用于显示地址/等级） |
 | `match.py` | 名称/地址比对与自动审核判定、坐标换算 |
+| `import_ref_data.py` | 参考资料入库：客服对话包 / 讲解包六表 / RedAttractionQA / RiSAWOZ+CrossWOZ 建表并写进 MySQL（`--dry-run` 先校验），见 docs/数据表与导出SQL.md 第四节 |
+| `schema_ref.sql` | 参考资料表的建表语句（`import_ref_data.py --print-ddl` 生成） |
+| `export_queries.sql` | 各种导出实际执行的 SQL（图片交付、客服对话、讲解评价 / 个性化讲解、核对结果、参考资料常用查询），改开头变量直接在库里跑 |
+| `docs/数据表与导出SQL.md` | 全部表清单、表之间的关联、每种导出读哪些表 / 什么条件 / 什么字段 |
 | `td_view.py` | 数据查看页：从 MySQL 分页列出已生成的训练数据、取单条完整 JSON（筛选条件和导出共用） |
 | `cs_synth.py` | 智能客服对话：用大模型改写原始客服问答，输出目标格式 + source，写 MySQL 两张表；工作台「客服数据」页 |
 | `cs_expand.py` | 智能客服对话：按景区表真实字段扩展（问法参考真实对话），百万级；工作台「客服数据」页「按景区真实数据扩展」 |
